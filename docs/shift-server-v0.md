@@ -1,6 +1,6 @@
 # Shift Server v0 technical specification and implementation plan
 
-Status: proposed for approval. Date: 2026-10-01. This document specifies future implementation; no implementation is authorized yet. Read alongside [Shift Client v0](shift-client-v0.md). The decisions marked **v0 proposal** resolve details left open during the interview and are included in the approval requested for these specifications.
+Status: proposed for approval. Date: 2026-10-02. This document specifies future implementation; no implementation is authorized yet. Read alongside [Shift Client v0](shift-client-v0.md). The decisions marked **v0 proposal** resolve details left open during the interview and are included in the approval requested for these specifications.
 
 ## 1. Product contract and scope
 
@@ -38,7 +38,7 @@ Defer parallel paths/forks/joins, subworkflow invocation, cross-project runs, di
 | Session reuse across runs | **v0 proposal:** reuse requires explicitly attaching a run to the session's existing workspace. Sessions cannot silently change working directory. |
 | Extension contracts | Version node executors, node definitions, graph documents, event payloads, and the wire protocol independently. |
 | Action authority | Approval grants broad task authority. Project permissions control available orchestration actions. Merge has no implicit review/CI gate. |
-| Client/server transport | HTTP commands and queries plus resumable SSE events. Commands are never inferred from stream messages. |
+| Client/server transport | HTTP commands and queries plus resumable SSE events. Durable receipts and replay are application contracts, independent of transport. Future bidirectional streams can add WebSockets without replacing these interfaces. |
 | Hosted dependency | The optional hostname service provides DNS only. Execution, pairing, and credentials belong to the user's server. Direct access always works. |
 
 ## 3. Modules and ownership
@@ -578,6 +578,10 @@ Server secrets use authenticated encryption with a versioned master key stored o
 
 Base `/api/v0`. Responses/errors use shared runtime schemas and request IDs. Mutation requests include a UUID command ID and, for edits, expected revision. Reusing a command ID with a different body returns `409`. Network timeout is an unknown acknowledgement, not success/failure. Capability/health endpoints advertise protocol range, server ID, event epoch, adapter/node versions, and readiness.
 
+HTTP + SSE is the v0 transport decision. Commands and queries are discrete request/response operations; agent activity and workflow updates stream from server to client. Sending another goal into a persistent session is an HTTP command, not a requirement for bidirectional streaming. There is no WebSocket RPC layer in v0. If interactive terminals or other bidirectional streams are added later, they can use a separate WebSocket endpoint while retaining HTTP commands and the durable event API. The engine and application command services depend on neither SSE connections nor future socket sessions.
+
+Hash the command's operation, parameters, and expected revision together for receipt identity. Provide an authenticated receipt lookup scoped to the requesting device, `GET /api/v0/commands/:commandId`, returning the stored application response. After a lost acknowledgement, explicitly query that receipt or resend the identical command ID/body; never replay all pending writes automatically. A successful local send does not prove commit. Client disconnect or HTTP abort does not cancel admitted work; cancellation requires an explicit command.
+
 For asynchronous commands, the receipt confirms durable admission and returns the run/invocation/operation ID, not external completion. Effects finish through their resource state/events. Define structured errors with code, message, field/resource diagnostics, retryability, and request ID; use `401` for invalid/revoked device, `409` for state/revision/command conflict, `410` for retired interaction, and `422` for invalid configuration/input.
 
 | Family | Initial endpoints / purpose |
@@ -591,7 +595,7 @@ For asynchronous commands, the receipt confirms durable admission and returns th
 | Workspace/Git inspection | Read-only file listing/content/diff/status scoped to registered workspaces. No arbitrary host path API. |
 | Artifacts | Metadata and authenticated byte download with media type/size/hash. |
 | Triggers | Configuration/status, signed webhook ingress, occurrence history, cron preview. |
-| Events | SSE stream plus paginated event history and consistent snapshot endpoints. |
+| Events/receipts | `GET /events/stream` for SSE, plus paginated event history, consistent snapshot endpoints, and `GET /commands/:commandId` for the caller's mutation receipt. Paths are relative to `/api/v0`. |
 
 API resource references are validated for project/workflow/version membership. Paired devices share authority; this validation maintains integrity rather than inventing role restrictions. On save, publish, and start, return structured diagnostics with node/field/connection IDs for client highlighting. Project registration accepts a host repository path and returns canonical validation; an arbitrary host-directory browsing API is deferred.
 
@@ -600,6 +604,12 @@ API resource references are validated for project/workflow/version membership. P
 Events have `epoch`, global `sequence`, `type`, payload version, server/project/run/node/session identifiers, timestamp, and small structured payload. Examples include `run.started`, `execution.started`, `execution.completed`, `execution.failed`, `interaction.requested`, `interaction.responded`, `session.invocation.started`, `artifact.created`, `effect.uncertain`, and `workflow.enabled.changed`.
 
 SQLite sequence is authoritative. Stream from `Last-Event-ID` or explicit cursor as `epoch:sequence`, then tail committed rows. Slow clients disconnect and replay; they never block workers. Capture state and an event high-water mark in the same short read transaction; replay events after that mark so snapshot/event races lose nothing. Keep all durable events in v0. An epoch mismatch or cursor beyond the restored database requires a new snapshot.
+
+Use one authenticated global event stream per client runtime; views share it through the client cache. Authenticate with the device bearer credential in the Authorization header, never a token in the URL. v0 Electron main uses a streaming HTTP client/SSE parser that supports headers and an application-controlled replay cursor. Native browser EventSource behavior does not determine Shift's persistence semantics. Every durable event carries its cursor in the SSE `id` field and a runtime-validated JSON payload. Replay and live delivery use one ordered read/tail loop with no handoff gap.
+
+Before opening a stream, a missing/invalid cursor or epoch mismatch returns a structured `409` response with code `RESYNC_REQUIRED`; the client obtains a consistent snapshot/high-water mark and reconnects after it. Advance the saved cursor only after applying the event and retain it with its matching cached projection. If that projection was not retained across app restart, resnapshot it rather than reuse a cursor that would skip needed data. Paginate large histories and cap inline responses; large artifact/file bytes use authenticated HTTP downloads. Query responses and events can arrive in either order, so client aggregate revisions/watermarks prevent stale overwrites.
+
+**v0 proposal:** send SSE keepalive comments every 15 seconds and reconnect after 45 seconds without stream activity, using capped backoff/jitter. Bound each stream's pending output to 8 MiB; close a slow stream and let it replay rather than block workers or silently drop durable events. Disable proxy buffering/caching for the event route, flush event records promptly, and test proxy idle-timeout compatibility. Device revocation closes its streams and rejects later requests. Event delivery is not evidence of transport-owned execution, and unmounting a view does not stop a run.
 
 Coalesce frequent transcript updates into persisted bounded entries/events; session inspection reconciles complete provider messages. No guarantee depends on observing every raw model token. Desktop notification state is derived from persisted attention requests. External notification actions are ordinary workflow nodes and cannot resolve/delete a human interaction by delivery success or failure.
 
@@ -653,6 +663,7 @@ Required scenarios:
 - Run-variable writes commit with outputs, remain absent after failed attempts, and preserve frozen binding values on retries. Blocked agents satisfy the fixed terminal envelope without fabricated success data.
 - Draft changes/publication/profile edits leave active run graphs/configs unchanged. Permission revocation affects subsequent actions.
 - Approval survives server crash, duplicated submission, and disconnect immediately after acceptance. A later decision cannot overwrite it.
+- HTTP disconnect after command commit yields the same receipt on retry/lookup. SSE replay/live transitions, keepalive failure, revoked devices, slow-client closure, invalid cursors, proxy buffering, and stale query responses preserve correct state without stopping runs.
 - A consumed event/callback cannot schedule two successors. Trigger duplicates cannot create duplicate runs.
 - Crash before intent, after intent, after external submission, after result, and after transition commit resolves correctly or reports uncertainty. Losing an event stream does not erase completion.
 - Unknown command/prompt/merge results do not replay blindly. A missing persisted session does not create a substitute.
@@ -689,7 +700,7 @@ Approval of both specifications precedes M01. These are integrated milestones fo
 | M04a | Explicit variables | Set/Get Variable and revision history, committed atomically with node outputs. A finite collection-processing loop works without implicit item execution. |
 | M04b | Failure/retry controls | Error paths, recorded attempts, finite budgets and cancellation with fake long-running work. Failure handling and limit extension are demonstrated from CLI. |
 | M04c | Human/timer waits | Persist forms/responses and deadlines, freeze resolved config, and wake after restart. CLI resolves a form; fake clock wakes a timer exactly once. |
-| M05 | Remote protocol | Pairing/revocation, command receipts, read/write API, attention responses, SSE replay/snapshot. HTTP approval remains committed after connection loss. |
+| M05 | Remote protocol | Pairing/revocation, HTTP commands/queries and receipt lookup, attention responses, authenticated SSE replay/snapshot, keepalive/backpressure and proxy checks. HTTP approval remains committed after connection loss. |
 | M06 | Connected Electron | Pair server, project/workflow/run/session views, attention forms, reports, settings shell. Offline/reconnect and duplicate mutation tests pass. |
 | M07 | Visual graph authoring | Add/connect/configure nodes, valid backward edges, diagnostics, draft CAS save and publication. A simple branch graph is authored and executed without JSON. |
 | M07a | Rich node forms | Reference/result-schema builders, session/variable forms, manual-input/limit configuration and draft recovery. Author a finite loop/human form without JSON. |

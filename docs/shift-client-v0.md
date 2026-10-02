@@ -1,6 +1,6 @@
 # Shift Client v0 technical specification and implementation plan
 
-Status: proposed for approval. Date: 2026-10-01. This document specifies future implementation; no implementation is authorized yet. Read alongside [Shift Server v0](shift-server-v0.md), which owns the domain model, SQLite schema, and execution contracts. Decisions marked **v0 proposal** resolve previously unspecified details for approval.
+Status: proposed for approval. Date: 2026-10-02. This document specifies future implementation; no implementation is authorized yet. Read alongside [Shift Server v0](shift-server-v0.md), which owns the domain model, SQLite schema, and execution contracts. Decisions marked **v0 proposal** resolve previously unspecified details for approval.
 
 ## 1. Client contract and release scope
 
@@ -29,6 +29,8 @@ flowchart TD
 **v0 proposal:** React, Vite, TypeScript, React Flow for canvas interaction, TanStack Query for renderer read caching, and schema-driven custom forms. A `client-core` module owns protocol validation, command correlation, event cursors, reconnect, and connection state through injected transport/storage interfaces. UI rendering and optimistic draft state live in `client-ui`. Initially these modules and Electron-specific credentials, desktop notifications, installers, and updates all live in the `apps/app/` workspace. Extraction into shared packages is deferred until needed.
 
 The main process owns authenticated HTTP/SSE connections and obtains credentials from OS-backed storage. Preload exposes a narrow request/subscription interface. Renderer code does not receive bearer secrets, unrestricted Node APIs, arbitrary fetch credentials, or filesystem access. All repo/file/diff content comes through scoped server APIs. A future web client implements its own transport/credential boundary instead of importing Electron modules.
+
+HTTP carries commands, queries, pairing, and artifact/file transfers. A streaming HTTP client/SSE parser in main supplies the bearer Authorization header and an application-controlled replay cursor. One event stream is shared by all views. No WebSocket RPC is needed in v0; a future interactive terminal can use a separate WebSocket channel without replacing these command/event contracts.
 
 One connection supervisor owns retries per server. Components subscribe to its state; individual React screens do not independently reconnect streams. UI cache is derived state, not orchestration persistence. The server's database and event log remain authoritative.
 
@@ -85,6 +87,10 @@ On reconnect:
 5. Mark data live only after reconciliation completes.
 
 Events are duplicate-tolerant by epoch/sequence. A new epoch, invalid cursor, or incompatible event version requires a fresh snapshot. One component cannot reorder an aggregate by applying an older query after a newer event; revisions and query watermarks guard cache updates.
+
+A saved cursor is reusable only with its matching cached projection. Full transcripts/files kept only in memory require a fresh resource query after app restart. Advance and persist the cursor only after applying the event/state, rather than relying on the SSE parser's last received ID. An event-route `RESYNC_REQUIRED` response triggers a consistent snapshot followed by replay after its high-water mark.
+
+HTTP reachability, stream connection, and data synchronization are separate states; only completed reconciliation makes a view live. One supervisor owns capped reconnect backoff/jitter and keepalive timeouts. Offline state and auth failure stop futile retries until connectivity or credentials change. Track connection/query generations so responses from a replaced connection cannot update the current cache. Closing the stream or aborting a client request does not cancel admitted server work.
 
 Every mutation receives a new UUID command ID once. While its acknowledgement is uncertain, retry only that same operation ID/body or query the receipt. Never automatically replay all mutations on reconnect. In particular, a lost approval acknowledgement is shown as “Checking whether your response was saved” until the server confirms it. Another device's accepted decision replaces the stale form.
 
@@ -232,6 +238,8 @@ interface DesktopBridge {
 
 Generic TypeScript examples are descriptive; runtime schemas still validate every IPC and server payload. Main validates the sender/frame, active connection, endpoint allowlist, input size, and protocol discriminant. A renderer cannot turn the bridge into arbitrary filesystem/network access. Subscription teardown and bounded message queues prevent stale views from retaining streams indefinitely.
 
+`ClientTransport` maps typed commands/queries to allowlisted HTTP endpoints, receipt lookup to the caller's command-receipt endpoint, and events to the shared authenticated SSE stream. A request ID identifies one HTTP exchange; the durable command ID survives acknowledgement loss. Cancelling an event consumer detaches that consumer rather than cancelling a run. Download operations use authenticated HTTP with scoped resource IDs and size limits; the renderer cannot supply arbitrary URLs or bearer credentials.
+
 ## 8. Security, compatibility, and packaging
 
 Electron runs bundled application UI through a controlled custom scheme. Enable `contextIsolation`, renderer sandboxing, CSP, and `webSecurity`; disable renderer Node integration. Preload uses `contextBridge` with narrow validated operations. Reject unexpected navigation/window creation, validate IPC senders, and validate external-link schemes. These boundaries follow [Electron security guidance](https://www.electronjs.org/docs/latest/tutorial/security). Remote reports and repo contents are untrusted display content even when the owner authorized the workflow.
@@ -246,7 +254,7 @@ The client does not silently update the server or harness. Server service/backup
 
 ## 9. Verification and release acceptance
 
-Test `client-core` with deterministic fake transport, duplicate/out-of-order delivery, epoch changes, connection loss after command commit, revoked credentials, delayed queries, and server revision conflicts. Test forms against catalog schemas and ensure normal workflows need no raw JSON. Test IPC validation and credential omission from renderer/logs.
+Test `client-core` with deterministic fake transport, duplicate/out-of-order delivery, epoch changes, HTTP connection loss after command commit, SSE replay/live transitions, keepalive failure, slow-stream closure, revoked credentials, delayed queries from replaced connections, and server revision conflicts. Test forms against catalog schemas and ensure normal workflows need no raw JSON. Test IPC validation and credential omission from renderer/logs.
 
 UI/component tests cover graph edge constraints, valid backward edges, reference pickers/history, visual result-schema authoring, form conflicts, immutable run graphs, loop execution selection, attention submission races, uncertain receipts, and report sanitization. Use a fake server fixture, then the integrated server. Packaged Electron smoke tests run on Windows/macOS/Linux. Browser-based component testing is implementation tooling, not a separately shipped web product.
 
@@ -280,7 +288,7 @@ Use the integrated milestone order in [the server roadmap](shift-server-v0.md#18
 | --- | --- |
 | M01 | Electron main/preload/renderer shell, package boundaries, security defaults, and three-platform build/smoke setup. No local server launch. |
 | M02-M04c | Protocol/catalog/form fixtures and client-core tests against definition, execution, variable, failure and wait contracts while the server develops. Avoid implementing a second engine in the client. |
-| M05 | Main-process transport, secure credential adapter, command correlation, event cursor/snapshot behavior, pairing fixtures. |
+| M05 | Main-process HTTP/SSE transport, secure credential adapter, command receipts, event cursor/snapshot behavior, keepalive/reconnect/backpressure and pairing fixtures. |
 | M06 | Connect/pair, project/workflow/run/session navigation, server-backed attention forms/reports, offline/revoked/incompatible states, settings shell. |
 | M07 | React Flow editor, basic forms, edges/diagnostics, server save conflicts, publish/version selection/manual start. A simple branch graph works without JSON. |
 | M07a | Reference/schema builders, variable/session configuration, local draft recovery and richer human/limit forms. Author loops/waits with fake dependencies. |
