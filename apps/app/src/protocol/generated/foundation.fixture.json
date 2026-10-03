@@ -1,0 +1,44 @@
+{
+  "fixtureVersion": 1,
+  "source": "deterministic fixture, no live connection",
+  "info": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000001",
+    "serverId": "00000000-0000-4000-8000-000000000002",
+    "eventEpoch": "00000000-0000-4000-8000-000000000003",
+    "serverVersion": "0.0.0",
+    "protocol": { "min": 0, "max": 0 },
+    "readiness": { "ready": true, "phase": "ready", "reason": "READY" },
+    "capabilities": {
+      "commands": false,
+      "events": false,
+      "pairing": false,
+      "nodeTypes": [],
+      "harnesses": []
+    },
+    "time": { "epochMs": 1790985600000, "iso": "2026-10-03T00:00:00.000Z" }
+  },
+  "health": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000004",
+    "serverId": "00000000-0000-4000-8000-000000000002",
+    "eventEpoch": "00000000-0000-4000-8000-000000000003",
+    "protocol": { "min": 0, "max": 0 },
+    "liveness": "alive",
+    "readiness": { "ready": false, "phase": "starting", "reason": "STARTING" },
+    "time": { "epochMs": 1790985600000, "iso": "2026-10-03T00:00:00.000Z" }
+  },
+  "error": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000005",
+    "code": "INVALID_CONFIGURATION",
+    "message": "Invalid configuration.",
+    "retryable": false,
+    "diagnostics": [{ "field": "/port", "message": "Invalid field." }]
+  },
+  "shutdown": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000006",
+    "accepted": true
+  }
+}

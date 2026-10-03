@@ -1,0 +1,4 @@
+pnpm-lock.yaml
+**/src/protocol/generated/
+# Applied migration files must retain their recorded hashes.
+**/src/persistence/migrations/

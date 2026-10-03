@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 0,
+  "payloadSchemaVersion": 1,
+  "sources": {
+    "foundation.schema.json": "23e36c2e99dbdab416bc27b139100d6ef22ff928a9882142914fec2dd4e32ec7",
+    "foundation.fixture.json": "860727d8c4f91791e565995ec8f1713d8da8fd966f9ed60e9df86b43949f6fb6"
+  },
+  "generators": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "json-schema-to-typescript": "16.0.0",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.9"
+  }
+}
