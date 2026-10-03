@@ -39,6 +39,8 @@ node apps/server/dist/cli.js stop --state-dir /tmp/shift-demo.REPLACE
 
 `info`, `health`, `ready` and `stop` connect to the administrative socket. They never open a second writable database. Stop acknowledges the shutdown request; the serving process then drains/closes listeners, closes SQLite, and releases the lock. SIGINT/SIGTERM perform the same shutdown. The default deadline is 5 seconds and can be set between 100 and 30,000 milliseconds. A crashed process releases the kernel lock automatically; the next owner removes only a verified crash-left socket, never a regular file or symlink.
 
+Cleanup attempts both listeners, SQLite and the instance lock even when an earlier close fails, then reports a sanitized error. `stop()` and `stopped` expose the same completion promise so shutdown has one failure outcome.
+
 ## Configuration and exposure
 
 | Option                    | Environment equivalent        | Default                                                   |
@@ -53,7 +55,9 @@ node apps/server/dist/cli.js stop --state-dir /tmp/shift-demo.REPLACE
 
 Flags override their environment equivalents. Hosts are literal IP addresses; DNS listener names are rejected. Administrative commands accept only `--state-dir`. Relative explicit state paths resolve against the current directory. `XDG_STATE_HOME`, when present, must be absolute. Configuration errors report field names and safe messages, not submitted values.
 
-The state directory must belong to the service account and have mode 0700. SQLite/WAL/SHM paths must be owned regular files without hard links. The administrative socket is `<state>/admin.sock`, mode 0600, and its path must fit Linux's Unix-socket limit. Shared network filesystems and separate network namespaces accessing one state directory are outside this singleton-lock contract. Do not delete, relocate or replace a live state directory.
+The state directory must belong to the service account and have mode 0700. SQLite/WAL/SHM paths must be owned regular files without hard links. The administrative socket is `<state>/admin.sock`, mode 0600, and its path must fit Linux's Unix-socket limit. Shared network filesystems are outside the supported storage contract. Do not delete, relocate or replace a live state directory.
+
+`<state>/instance.lock` is a persistent owned mode-0600 regular file without hard links. A Linux open-file-description lock, supplied by fs-native-extensions, excludes other descriptors/processes until its owning descriptor closes or the process dies. Filesystem permissions prevent unrelated accounts from opening or preclaiming it. The inode stays in place across shutdown and crashes; do not remove or replace it while a server is running. Unsafe files or an incompatible native lock binding fail startup before SQLite opens.
 
 TCP exposes only `GET /api/v0/info`, `GET /api/v0/health` and `GET /api/v0/ready`. Health returns HTTP 200 for liveness, with a separate readiness value. Ready returns 503 while starting/stopping or when persistence is unavailable. Info/health include a stable server ID, stable event epoch, wire range 0..0, payload schema version 1 and request ID. Readiness never implies that unfinished future capabilities exist.
 
@@ -65,12 +69,14 @@ Startup verifies SQLite >=3.51.3 and records the runtime source ID, JSON support
 
 Pure source contracts live under `src/protocol/schemas`; deterministic public fixtures live under `test/fixtures/protocol`. `pnpm protocol:generate` updates server and app generated copies. `pnpm protocol:check` detects drift without modifying them. The generated app code/types/JSON do not import server modules, SQLite, Electron or Node APIs, and execute under a CSP-style no-eval test. Changes to a schema, fixtures and generated output must be reviewed together. Prompt 01 owns root toolchain/lockfile/CI and these contracts; prompt 02 owns its app implementation and proposes protocol changes before consumption.
 
-Dependency scripts are explicitly allowed only for esbuild; better-sqlite3's automatic source build is disabled because the selected release ships x64/arm64 Linux prebuilds. A missing/incompatible prebuild fails clearly. Building a replacement native binding requires an operator/developer toolchain and the same patch/runtime checks. Workspace TypeScript stays strict; `skipLibCheck` avoids Drizzle's declarations for unused optional database drivers.
+Dependency scripts are explicitly allowed only for esbuild; better-sqlite3's automatic source build is disabled because the selected release ships x64/arm64 Linux prebuilds. fs-native-extensions 1.5.1 supplies Node-API Linux x64/arm64 prebuilds with no install script. A missing/incompatible prebuild fails clearly. Building a replacement native binding requires an operator/developer toolchain and the same patch/runtime checks. Workspace TypeScript stays strict; `skipLibCheck` avoids Drizzle's declarations for unused optional database drivers.
 
 ## Platform verification
 
 The [server CI workflow](../../.github/workflows/server.yml) uses matching native `ubuntu-22.04` x64 and `ubuntu-22.04-arm` ARM64 runners, the pinned toolchain, frozen install, protocol/type/build/subprocess checks and the compiled platform smoke. Ubuntu 22.04/glibc 2.35 is the initial CI baseline. Runner availability and passing CI results must be checked before distribution; this local task does not trigger or fabricate GitHub runs.
 
 The platform smoke accepts an expected architecture argument, for example `node apps/server/tools/platform-smoke.mjs arm64`. It verifies the actual Node/native SQLite runtime, required pragmas, HTTP schemas, private socket mode, instance exclusion and restart identity using temporary state. An emulated ARM64 result must be identified as emulated; it does not establish native kernel or packaged-release coverage.
+
+The cross-account regression test launches an owned subprocess as `nobody`. Root can set that child's UID directly; a non-root test runner needs passwordless `sudo -u nobody`, available on the selected GitHub runners. This does not change host accounts or files outside the test's temporary directories.
 
 See [implementation decisions](../../docs/implementation-decisions.md) and [progress](../../docs/implementation-progress.md) for exact local evidence and later gates.

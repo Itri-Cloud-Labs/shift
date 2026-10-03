@@ -72,32 +72,50 @@ export async function startServer(
   let store: Store | undefined;
   let tcp: Server | undefined;
   let admin: Server | undefined;
-  let shutdown: Promise<void> | undefined;
+  let stopping = false;
   let resolveStopped!: () => void;
   let rejectStopped!: (error: unknown) => void;
   const stopped = new Promise<void>((resolve, reject) => {
     resolveStopped = resolve;
     rejectStopped = reject;
   });
-  const stop = (): Promise<void> =>
-    (shutdown ??= (async () => {
-      readiness.stopping();
-      logger.info({ event: 'server.stopping' }, 'Stopping the server.');
-      try {
-        await Promise.all(
-          [tcp, admin]
-            .filter((server): server is Server => server !== undefined)
-            .map((server) => closeListener(server, config.shutdownTimeoutMs)),
-        );
-        store?.close();
-        await releaseLock();
+  const cleanup = async (): Promise<void> => {
+    const outcomes = await Promise.allSettled(
+      [tcp, admin]
+        .filter((server): server is Server => server !== undefined)
+        .map((server) => closeListener(server, config.shutdownTimeoutMs)),
+    );
+    const failures: unknown[] = outcomes.flatMap((outcome) =>
+      outcome.status === 'rejected' ? [outcome.reason] : [],
+    );
+    try {
+      store?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await releaseLock();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) throw publicError(failures[0]);
+  };
+  const stop = (): Promise<void> => {
+    if (!stopping) {
+      stopping = true;
+      void (async () => {
+        readiness.stopping();
+        try {
+          logger.info({ event: 'server.stopping' }, 'Stopping the server.');
+        } finally {
+          await cleanup();
+        }
         logger.info({ event: 'server.stopped' }, 'Server stopped.');
-        resolveStopped();
-      } catch (error) {
-        rejectStopped(publicError(error));
-        throw publicError(error);
-      }
-    })());
+      })().then(resolveStopped, (error: unknown) => rejectStopped(publicError(error)));
+    }
+    // One observable completion promise, including failure and repeated stop calls.
+    return stopped;
+  };
   const requestStop = () => {
     void stop().catch((error) =>
       logger.error({ code: publicError(error).code }, 'Shutdown failed.'),
@@ -154,13 +172,11 @@ export async function startServer(
     );
     return { identity: store.identity, url, adminSocket: state.adminSocket, stop, stopped };
   } catch (error) {
-    await Promise.all(
-      [tcp, admin]
-        .filter((server): server is Server => server !== undefined)
-        .map((server) => closeListener(server, config.shutdownTimeoutMs)),
-    );
-    store?.close();
-    await releaseLock();
+    try {
+      await cleanup();
+    } catch (cleanupError) {
+      logger.error({ code: publicError(cleanupError).code }, 'Startup cleanup failed.');
+    }
     throw publicError(error);
   }
 }
