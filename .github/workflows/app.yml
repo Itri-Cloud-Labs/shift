@@ -1,0 +1,50 @@
+name: Client foundation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop ${{ matrix.platform }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - runner: windows-2022
+            platform: win32
+            arch: x64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-15
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: node -e 'if (process.platform !== "${{ matrix.platform }}" || process.arch !== "${{ matrix.arch }}") process.exit(1)'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm protocol:check
+      - run: pnpm --filter @shift/app typecheck
+      - run: pnpm --filter @shift/app test
+      - run: pnpm --filter @shift/app package
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm --filter @shift/app smoke:packaged
+      - if: runner.os != 'Linux'
+        run: pnpm --filter @shift/app smoke:packaged

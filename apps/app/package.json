@@ -3,5 +3,66 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "type": "module"
+  "type": "module",
+  "main": "dist/main/index.js",
+  "description": "Shift desktop client",
+  "author": "Itri Cloud Labs",
+  "scripts": {
+    "dev": "pnpm build && electron .",
+    "preview:ui": "vite preview --config vite.preview.config.ts --host 0.0.0.0",
+    "build": "electron-vite build && node tools/check-bundle.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test test/boundaries.test.ts test/client-core.test.ts",
+    "package": "pnpm build && electron-builder --dir --publish never",
+    "smoke": "node tools/smoke.mjs",
+    "smoke:packaged": "node tools/smoke.mjs --packaged"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-vite": "5.0.0",
+    "electron-builder": "26.15.3",
+    "vite": "7.3.6",
+    "@vitejs/plugin-react": "5.2.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "@radix-ui/react-dialog": "1.1.23",
+    "lucide-react": "1.50.0",
+    "@fontsource-variable/dm-sans": "5.3.0",
+    "valibot": "1.5.0",
+    "acorn": "8.15.0",
+    "acorn-walk": "8.3.4"
+  },
+  "build": {
+    "appId": "labs.itri.shift",
+    "productName": "Shift",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "mac": {
+      "target": "dir",
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "executableName": "Shift"
+    },
+    "win": {
+      "target": "dir",
+      "signAndEditExecutable": false,
+      "executableName": "Shift"
+    },
+    "linux": {
+      "target": "dir",
+      "category": "Development",
+      "executableName": "shift"
+    }
+  }
 }

@@ -3,5 +3,6 @@ packages:
 allowBuilds:
   better-sqlite3: false
   esbuild: true
+  electron-winstaller: false
 minimumReleaseAgeExclude:
   - pino@10.4.0
