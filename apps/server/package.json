@@ -3,5 +3,34 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "bin": {
+    "shift": "dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts serve",
+    "build": "pnpm protocol:check && node tools/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm build && node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "protocol:generate": "node tools/protocol.mjs",
+    "protocol:check": "node tools/protocol.mjs --check"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "express": "5.2.1",
+    "fs-native-extensions": "1.5.1",
+    "pino": "10.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/express": "5.0.6",
+    "esbuild": "0.28.2",
+    "json-schema-to-typescript": "16.0.0"
+  }
 }

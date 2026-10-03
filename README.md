@@ -20,6 +20,15 @@ corepack enable
 pnpm install
 ```
 
-The workspaces currently contain package manifests only. Development and build commands will be added with the implementation.
+The server foundation is implemented. Build, verify and run an isolated headless smoke demonstration:
+
+```sh
+pnpm check
+node apps/server/tools/platform-smoke.mjs
+```
+
+Use `pnpm dev` to start the Linux server from source, or `pnpm build` followed by `node apps/server/dist/cli.js serve`. See [server setup and CLI administration](apps/server/README.md) for private state directories, configuration, health/readiness and shutdown. The Electron workspace currently consumes pure generated protocol artifacts; its application foundation is a separate prompt.
+
+Run `pnpm format` to format application source, tools, configuration and implementation docs. `pnpm check` includes `pnpm format:check`. Generated protocol artifacts are formatted by `pnpm protocol:generate`; applied migrations retain their recorded hashes.
 
 Read the [server specification](docs/shift-server-v0.md) and [client specification](docs/shift-client-v0.md) before implementing features. Both remain proposed for approval.

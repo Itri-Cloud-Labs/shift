@@ -1,2 +1,7 @@
 packages:
   - apps/*
+allowBuilds:
+  better-sqlite3: false
+  esbuild: true
+minimumReleaseAgeExclude:
+  - pino@10.4.0

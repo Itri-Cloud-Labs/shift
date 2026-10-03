@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:shift:foundation:1",
+  "title": "FoundationPayload",
+  "anyOf": [
+    { "$ref": "#/$defs/ServerInfo" },
+    { "$ref": "#/$defs/ServerHealth" },
+    { "$ref": "#/$defs/ProtocolError" },
+    { "$ref": "#/$defs/ShutdownAcknowledgement" },
+    { "$ref": "#/$defs/ServerIdentity" }
+  ],
+  "$defs": {
+    "Uuid": { "type": "string", "format": "uuid", "minLength": 36, "maxLength": 36 },
+    "Timestamp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["epochMs", "iso"],
+      "properties": {
+        "epochMs": { "type": "integer", "minimum": 0, "maximum": 8640000000000000 },
+        "iso": { "type": "string", "format": "date-time", "maxLength": 32 }
+      }
+    },
+    "ServerIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serverId", "eventEpoch"],
+      "properties": {
+        "serverId": { "$ref": "#/$defs/Uuid" },
+        "eventEpoch": { "$ref": "#/$defs/Uuid" }
+      }
+    },
+    "Readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "phase", "reason"],
+      "properties": {
+        "ready": { "type": "boolean" },
+        "phase": { "enum": ["starting", "ready", "stopping", "failed"] },
+        "reason": { "enum": ["STARTING", "READY", "STOPPING", "PERSISTENCE_UNAVAILABLE"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "ready": { "const": false },
+            "phase": { "const": "starting" },
+            "reason": { "const": "STARTING" }
+          }
+        },
+        {
+          "properties": {
+            "ready": { "const": true },
+            "phase": { "const": "ready" },
+            "reason": { "const": "READY" }
+          }
+        },
+        {
+          "properties": {
+            "ready": { "const": false },
+            "phase": { "const": "stopping" },
+            "reason": { "const": "STOPPING" }
+          }
+        },
+        {
+          "properties": {
+            "ready": { "const": false },
+            "phase": { "const": "failed" },
+            "reason": { "const": "PERSISTENCE_UNAVAILABLE" }
+          }
+        }
+      ]
+    },
+    "ProtocolRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min", "max"],
+      "properties": { "min": { "const": 0 }, "max": { "const": 0 } }
+    },
+    "ServerCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "events", "pairing", "nodeTypes", "harnesses"],
+      "properties": {
+        "commands": { "const": false },
+        "events": { "const": false },
+        "pairing": { "const": false },
+        "nodeTypes": { "type": "array", "items": { "type": "object" }, "maxItems": 0 },
+        "harnesses": { "type": "array", "items": { "type": "object" }, "maxItems": 0 }
+      }
+    },
+    "ServerInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "serverId",
+        "eventEpoch",
+        "serverVersion",
+        "protocol",
+        "readiness",
+        "capabilities",
+        "time"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/Uuid" },
+        "serverId": { "$ref": "#/$defs/Uuid" },
+        "eventEpoch": { "$ref": "#/$defs/Uuid" },
+        "serverVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "protocol": { "$ref": "#/$defs/ProtocolRange" },
+        "readiness": { "$ref": "#/$defs/Readiness" },
+        "capabilities": { "$ref": "#/$defs/ServerCapabilities" },
+        "time": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+    "ServerHealth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "serverId",
+        "eventEpoch",
+        "protocol",
+        "liveness",
+        "readiness",
+        "time"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/Uuid" },
+        "serverId": { "$ref": "#/$defs/Uuid" },
+        "eventEpoch": { "$ref": "#/$defs/Uuid" },
+        "protocol": { "$ref": "#/$defs/ProtocolRange" },
+        "liveness": { "const": "alive" },
+        "readiness": { "$ref": "#/$defs/Readiness" },
+        "time": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+    "Diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "message"],
+      "properties": {
+        "field": { "type": "string", "maxLength": 256 },
+        "message": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "ProtocolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "code", "message", "retryable", "diagnostics"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/Uuid" },
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+        "message": { "type": "string", "maxLength": 512 },
+        "retryable": { "type": "boolean" },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Diagnostic" },
+          "maxItems": 32
+        }
+      }
+    },
+    "ShutdownAcknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "accepted"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "requestId": { "$ref": "#/$defs/Uuid" },
+        "accepted": { "const": true }
+      }
+    }
+  }
+}
