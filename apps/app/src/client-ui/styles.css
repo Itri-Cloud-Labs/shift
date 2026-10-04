@@ -1,0 +1,18 @@
+body {
+  margin: 24px;
+  font-family: system-ui, sans-serif;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+button {
+  font: inherit;
+}
+button[aria-current='page'] {
+  font-weight: bold;
+}
+main {
+  margin-top: 24px;
+}

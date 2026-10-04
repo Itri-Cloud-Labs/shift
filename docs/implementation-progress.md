@@ -61,3 +61,54 @@ Handoff: prompt 02 can consume the generated foundation artifacts without import
 Formatting follow-up, 2026-10-03: formatted the foundation source, tests, tools, schemas, fixtures and implementation documentation with pinned Prettier 3.9.9. Added shared configuration, `pnpm format`/`format:check`, enforcement in `pnpm check`, and formatter integration in protocol generation. Applied migrations retain their original bytes. Moved a type-error assertion comment to its property so it survives line wrapping. The expanded `pnpm check` passed formatting, deterministic generation, strict types, build and all 15 tests with zero failures/skips. Frozen install and `git diff --check` also passed.
 
 PR #4 review follow-up, 2026-10-03: Greptile reported an abstract-socket preclaim attack, cleanup skipping later resources after a close error, and duplicate shutdown promise rejections. Regression subprocesses reproduced the failures before the fixes. Replaced the abstract lock with an owned mode-0600 persistent file and Linux OFD locking through pinned fs-native-extensions 1.5.1. Unified startup/shutdown cleanup so every listener, SQLite and lock release is attempted, preserving sanitized failures; `stop()` and `stopped` now share one promise. Added coverage for concurrent initial ownership, unsafe lock paths/permissions, a real `nobody` preclaim process, injected listener/database failures, lock release and unhandled rejections. The final `pnpm check` passed all 20 tests with zero skips/failures, frozen install passed, and the compiled x64 platform smoke passed. Native x64/ARM64 CI had passed on the original PR head; the new native dependency also requires those jobs on the updated head. Runtime protocols and migrations are unchanged. See [the PR](https://github.com/Itri-Cloud-Labs/shift/pull/4) and the updated server README/decision log for the ownership contract and dependency rationale.
+
+## 02 client foundation
+
+The original UI described below was removed on 2026-10-04 following the owner's scope correction. See the correction entry for the current minimal shell.
+
+Completed locally, 2026-10-03. Executed `docs/prompts/02-client-foundation.md` after reading COMMON, client sections 1-3/7-9, server section 15, the preflight choices, and the implemented protocol artifacts. The worktree was clean at the start. There are still exactly two workspaces.
+
+Implemented the Electron/React/Vite/TypeScript app under `apps/app`, with main, preload, client-core, client-ui, app-local IPC schemas, and the unchanged generated server protocol. Main serves build-listed bundled assets through `shift://app/index.html`. The sandboxed isolated preload exposes four validated methods. Main checks the owned sender/top frame/exact document, operation discriminants, closed payload shapes, and byte/depth limits. Renderer Node integration, arbitrary networking/filesystem access, permissions, downloads, unexpected navigation, and child windows are denied. Credentials stay behind an injected main/core interface; raw private exceptions and unknown protocol fields fail validation.
+
+The disconnected shell includes Projects, Workflows, Runs, Sessions, Attention, and Settings. Deterministic samples have a persistent visible label, can be hidden, and are separate from advertised server capabilities. Packaged builds default to no samples. Project selection, resource search, read-only dialogs, keyboard focus restoration, and the narrow desktop layout work. Create/start/respond controls are disabled. The composition does not create a server, harness, agent, or live connection. Pairing, authenticated HTTP/SSE, credential persistence, workflow editing, and execution remain assigned to later prompts.
+
+Changed root scripts to build/typecheck/test both workspaces while keeping `pnpm dev` as the server command and adding `app:dev`, `app:package`, and `app:smoke`. Added pinned dependencies, lockfile entries, graph/AST bundle checks, matching-OS CI, and app/root developer instructions. All app dependencies compile into the output; the ASAR contains the application manifest and `dist`, without runtime node_modules or native SQLite/backend modules. The bundled font retains its OFL license. Dependency versions, considered alternatives, sandbox preload and ESM entry choices are recorded in the decision log.
+
+Verified:
+
+- `pnpm install --frozen-lockfile` passed. A separate fresh temporary two-workspace install with the same manifests/lockfile passed, followed by Electron 44.5.1's first-launch binary download and executable lookup. Electron 44 has no postinstall download script. The temporary installation was removed.
+- `pnpm check` passed formatting, deterministic protocol drift checking, both strict TypeScript projects, all app build entries, bundle inspection, and 29 tests: 20 server regressions and 9 client boundary/core tests, with zero failures/skips. After the additional dialog-focus correction, app typecheck/build/tests and both native smoke modes passed again. Server sources, migrations, canonical contracts and generated copies were unchanged.
+- Client tests rejected malformed/coerced/extra-field IPC, invalid byte/depth/non-JSON values, foreign webContents/subframes/documents, unsafe assets/external links, unconfigured queries, private errors, secret-bearing server payloads, wrong server identity, and delayed responses after disconnect. Core ran against injected transport/credential fakes without Electron. Public generated files stayed byte-identical to the server copies.
+- `pnpm --filter @shift/app build` passed all main/preload/renderer builds and module-graph/Acorn bundle checks. The renderer has five allowlisted entry/script/style/font assets. The single CommonJS preload imports only Electron. Linux x64 unsigned unpacked packaging through electron-builder passed; inspection of `resources/app.asar` found no node_modules or native backend files.
+- `xvfb-run -a pnpm app:smoke` and `xvfb-run -a pnpm --filter @shift/app smoke:packaged` passed using real Electron 44.5.1 on Linux x64/glibc 2.39, running as the unprivileged `nobody` account with Chromium sandboxing enabled. The smoke verified Linux renderer `NoNewPrivs=1`/`Seccomp=2`, successful preload isolation checks, all six screens, sample toggling, empty packaged defaults, search, modal focus/Escape/restoration, disabled mutations, network/eval denial, blocked navigation/window creation, credential omission, and no horizontal overflow at 780px. An actual Electron capture was inspected. Temporary profiles and staged binaries were removed.
+- `git diff --check` passed. The separate T3 browser preview could not obtain a usable snapshot; it is not counted as UI evidence. Its owned tab and development server were closed. Native Electron capture and assertions established local UI behavior instead.
+
+The host initially lacked GTK desktop libraries; installed GTK/NSS/audio/GBM/Xss dependencies for the local smoke. The container has no desktop DBus service and Electron emitted DBus diagnostics. This milestone stores no credentials and makes no claim about a working OS secret service.
+
+Configured `.github/workflows/app.yml` for native Ubuntu 22.04 x64, Windows 2022 x64, macOS 15 Intel x64, and macOS 15 arm64. Each matching runner asserts its platform/architecture, installs the frozen lockfile, checks formatting/protocol/types/tests, builds an unsigned unpacked app, and executes packaged smoke. Runner labels match GitHub's catalog, but repository runner availability and CI results are unverified because no remote job was triggered. Windows/macOS are unavailable in this local Linux environment and remain untested. Signing/notarization, installers/distribution formats, minimum OS coverage, and real credential-service/restart behavior remain release prerequisites for prompt 31.
+
+Reproduction on a desktop:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm app:dev
+```
+
+For headless Linux verification after installing the desktop libraries and Xvfb:
+
+```sh
+pnpm check
+pnpm app:package
+xvfb-run -a pnpm app:smoke
+xvfb-run -a pnpm --filter @shift/app smoke:packaged
+```
+
+See [the app README](../apps/app/README.md) for code boundaries and root-container test staging. No commit, PR, release, or deployment was created by this prompt.
+
+### 02 scope correction, 2026-10-04
+
+The owner rejected the designed resource UI as beyond a simple shell. Removed its layout/theme, resource views, fabricated resource/catalog data, search, project selection, detail dialogs, icons, custom fonts, sample browsing controls, browser preview, and screenshot artifact. Removed Radix Dialog, Lucide React, and Fontsource from the manifest/lockfile. Replaced the renderer with disconnected status, plain navigation for the six named sections, and an empty placeholder. Development displays the deterministic fixture-mode flag. No product UI design has been implemented.
+
+Kept the Electron/main/preload/client-core boundaries, validated narrow IPC, controlled custom scheme, sandbox, CSP, bundle checks, injected transport/credentials, server-owned protocol fixtures, and platform CI. Simplified the app-local shell schema and fixture to connection status and fixture mode; it no longer invents resource contracts. Updated native smoke to exercise section selection and security while checking that product UI controls are absent. Updated the app README and current decisions to reflect the removal. The earlier UI description above is historical.
+
+Verification after removal: app typecheck, all 9 client boundary/core tests with zero failures/skips, bundle inspection, Linux x64 packaging, and both built/packaged sandboxed Electron smoke passed. The smoke exercised all six plain section placeholders and confirmed that resource rows, search inputs, dialogs, and sidebars are absent. Frozen install, formatting and `git diff --check` passed. Server code and generated public contracts were untouched; server tests were not rerun for this UI removal. Windows/macOS smoke was not run locally.

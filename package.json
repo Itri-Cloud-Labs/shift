@@ -10,14 +10,17 @@
   },
   "scripts": {
     "dev": "pnpm --filter @shift/server dev",
-    "build": "pnpm --filter @shift/server build",
-    "typecheck": "pnpm --filter @shift/server typecheck",
-    "test": "pnpm --filter @shift/server test",
-    "check": "pnpm format:check && pnpm protocol:check && pnpm typecheck && pnpm test",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "check": "pnpm format:check && pnpm protocol:check && pnpm typecheck && pnpm --filter @shift/app build && pnpm test",
     "format": "prettier --write apps .github \"*.json\" \"*.yaml\" README.md \"docs/implementation-*.md\"",
     "format:check": "prettier --check apps .github \"*.json\" \"*.yaml\" README.md \"docs/implementation-*.md\"",
     "protocol:generate": "pnpm --filter @shift/server protocol:generate",
-    "protocol:check": "pnpm --filter @shift/server protocol:check"
+    "protocol:check": "pnpm --filter @shift/server protocol:check",
+    "app:dev": "pnpm --filter @shift/app dev",
+    "app:package": "pnpm --filter @shift/app package",
+    "app:smoke": "pnpm --filter @shift/app smoke"
   },
   "devDependencies": {
     "@types/node": "24.19.1",
