@@ -3,8 +3,6 @@ import * as v from 'valibot';
 export const IPC_CHANNEL = 'shift:desktop:v1';
 export const REQUEST_LIMIT = 8 * 1024;
 export const RESPONSE_LIMIT = 256 * 1024;
-const text = v.pipe(v.string(), v.maxLength(500));
-const id = v.pipe(v.string(), v.minLength(1), v.maxLength(100));
 export const querySchema = v.picklist(['info', 'health', 'ready']);
 export type FoundationQuery = v.InferOutput<typeof querySchema>;
 export const requestSchema = v.variant('kind', [
@@ -14,52 +12,9 @@ export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('desktop.openDocumentation') }),
 ]);
 export type DesktopRequest = v.InferOutput<typeof requestSchema>;
-const projectSchema = v.strictObject({ id, name: text, repository: text, branch: text });
-const workflowSchema = v.strictObject({
-  id,
-  projectId: id,
-  name: text,
-  description: text,
-  version: text,
-  trigger: text,
-  updatedAt: text,
-  nodes: v.pipe(v.array(text), v.maxLength(30)),
-});
-const runSchema = v.strictObject({
-  id,
-  projectId: id,
-  workflowId: id,
-  name: text,
-  version: text,
-  status: v.picklist(['Waiting for approval', 'Completed', 'Failed']),
-  startedAt: text,
-  detail: text,
-});
-const sessionSchema = v.strictObject({
-  id,
-  projectId: id,
-  name: text,
-  status: v.picklist(['Idle', 'Archived']),
-  lifetime: text,
-  detail: text,
-});
-const attentionSchema = v.strictObject({
-  id,
-  projectId: id,
-  runId: id,
-  title: text,
-  detail: text,
-});
 export const shellSchema = v.strictObject({
   connection: v.literal('unconfigured'),
   samples: v.boolean(),
-  capturedAt: v.literal('2026-10-02T15:40:00.000Z'),
-  projects: v.pipe(v.array(projectSchema), v.maxLength(20)),
-  workflows: v.pipe(v.array(workflowSchema), v.maxLength(100)),
-  runs: v.pipe(v.array(runSchema), v.maxLength(100)),
-  sessions: v.pipe(v.array(sessionSchema), v.maxLength(100)),
-  attention: v.pipe(v.array(attentionSchema), v.maxLength(100)),
-  catalog: v.pipe(v.array(v.strictObject({ type: id, label: text })), v.maxLength(30)),
 });
 export type ShellState = v.InferOutput<typeof shellSchema>;
 export const errorSchema = v.strictObject({

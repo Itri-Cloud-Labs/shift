@@ -37,7 +37,6 @@ try {
   const state = join(temporaryRoot, 'state');
   await mkdir(state);
   const env = { ...process.env, SHIFT_SMOKE_STATE: state };
-  if (process.argv.includes('--screenshot')) env.SHIFT_SMOKE_CAPTURE = join(state, 'shell.png');
   delete env.ELECTRON_RUN_AS_NODE;
   // CI/desktop users run directly. This development container runs as root, so
   // stage only the app in an owned temporary directory and launch as nobody.
@@ -91,8 +90,6 @@ try {
   });
   if (code !== 0 || !output.includes('SHIFT_SMOKE_OK'))
     throw new Error(`Electron smoke failed: ${code}`);
-  if (env.SHIFT_SMOKE_CAPTURE)
-    await cp(env.SHIFT_SMOKE_CAPTURE, join(tmpdir(), 'shift-client-foundation.png'));
   console.log(
     `Verified ${packaged ? 'packaged' : 'built'} Electron on ${process.platform}/${process.arch}.`,
   );

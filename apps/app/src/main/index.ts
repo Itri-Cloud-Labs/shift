@@ -62,13 +62,13 @@ async function createWindow(): Promise<void> {
   });
   desktopSession.on('will-download', (event) => event.preventDefault());
   window = new BrowserWindow({
-    width: 1240,
-    height: 820,
-    minWidth: 760,
-    minHeight: 560,
+    width: 800,
+    height: 600,
+    minWidth: 600,
+    minHeight: 400,
     show: false,
     title: 'Shift',
-    backgroundColor: '#faf8f5',
+    backgroundColor: '#ffffff',
     webPreferences: { ...securePreferences, preload: join(root, 'preload/index.cjs') },
   });
   window.removeMenu();

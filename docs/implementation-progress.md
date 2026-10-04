@@ -64,6 +64,8 @@ PR #4 review follow-up, 2026-10-03: Greptile reported an abstract-socket preclai
 
 ## 02 client foundation
 
+The original UI described below was removed on 2026-10-04 following the owner's scope correction. See the correction entry for the current minimal shell.
+
 Completed locally, 2026-10-03. Executed `docs/prompts/02-client-foundation.md` after reading COMMON, client sections 1-3/7-9, server section 15, the preflight choices, and the implemented protocol artifacts. The worktree was clean at the start. There are still exactly two workspaces.
 
 Implemented the Electron/React/Vite/TypeScript app under `apps/app`, with main, preload, client-core, client-ui, app-local IPC schemas, and the unchanged generated server protocol. Main serves build-listed bundled assets through `shift://app/index.html`. The sandboxed isolated preload exposes four validated methods. Main checks the owned sender/top frame/exact document, operation discriminants, closed payload shapes, and byte/depth limits. Renderer Node integration, arbitrary networking/filesystem access, permissions, downloads, unexpected navigation, and child windows are denied. Credentials stay behind an injected main/core interface; raw private exceptions and unknown protocol fields fail validation.
@@ -102,3 +104,11 @@ xvfb-run -a pnpm --filter @shift/app smoke:packaged
 ```
 
 See [the app README](../apps/app/README.md) for code boundaries and root-container test staging. No commit, PR, release, or deployment was created by this prompt.
+
+### 02 scope correction, 2026-10-04
+
+The owner rejected the designed resource UI as beyond a simple shell. Removed its layout/theme, resource views, fabricated resource/catalog data, search, project selection, detail dialogs, icons, custom fonts, sample browsing controls, browser preview, and screenshot artifact. Removed Radix Dialog, Lucide React, and Fontsource from the manifest/lockfile. Replaced the renderer with disconnected status, plain navigation for the six named sections, and an empty placeholder. Development displays the deterministic fixture-mode flag. No product UI design has been implemented.
+
+Kept the Electron/main/preload/client-core boundaries, validated narrow IPC, controlled custom scheme, sandbox, CSP, bundle checks, injected transport/credentials, server-owned protocol fixtures, and platform CI. Simplified the app-local shell schema and fixture to connection status and fixture mode; it no longer invents resource contracts. Updated native smoke to exercise section selection and security while checking that product UI controls are absent. Updated the app README and current decisions to reflect the removal. The earlier UI description above is historical.
+
+Verification after removal: app typecheck, all 9 client boundary/core tests with zero failures/skips, bundle inspection, Linux x64 packaging, and both built/packaged sandboxed Electron smoke passed. The smoke exercised all six plain section placeholders and confirmed that resource rows, search inputs, dialogs, and sidebars are absent. Frozen install, formatting and `git diff --check` passed. Server code and generated public contracts were untouched; server tests were not rerun for this UI removal. Windows/macOS smoke was not run locally.

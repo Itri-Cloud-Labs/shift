@@ -9,7 +9,6 @@
   "author": "Itri Cloud Labs",
   "scripts": {
     "dev": "pnpm build && electron .",
-    "preview:ui": "vite preview --config vite.preview.config.ts --host 0.0.0.0",
     "build": "electron-vite build && node tools/check-bundle.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --import tsx --test test/boundaries.test.ts test/client-core.test.ts",
@@ -27,9 +26,6 @@
     "@types/react-dom": "19.3.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "@radix-ui/react-dialog": "1.1.23",
-    "lucide-react": "1.50.0",
-    "@fontsource-variable/dm-sans": "5.3.0",
     "valibot": "1.5.0",
     "acorn": "8.15.0",
     "acorn-walk": "8.3.4"

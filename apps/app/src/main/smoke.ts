@@ -1,5 +1,5 @@
 import { app, type BrowserWindow } from 'electron';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import type { ClientCore } from '../client-core/runtime.js';
 import { APP_URL } from './security.js';
 
@@ -29,33 +29,16 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const state = await window.shift.setSamples(true);
     assert(state.kind === 'shell' && state.state.connection === 'unconfigured', 'Bad fixture state');
     assert(!/bearer|credentialHandle|authorization|accessToken/.test(JSON.stringify(state)), 'Credential leaked');
-    // Update through the actual UI so all six view transitions exercise React state.
-    await wait(() => document.querySelector('h1'));
-    const navigation = (name) => [...document.querySelectorAll('nav button')].find(button => button.textContent.startsWith(name));
-    navigation('Settings').click();
-    await wait(() => document.querySelector('h1').textContent === 'Settings');
-    const sampleButton = () => [...document.querySelectorAll('main button')].find(button => /sample workspace/.test(button.textContent));
-    if (sampleButton().textContent.startsWith('Hide')) { sampleButton().click(); await wait(() => sampleButton().textContent.startsWith('Show')); }
-    sampleButton().click(); await wait(() => document.querySelector('[role="status"]'));
-    for (const page of ['Projects', 'Runs', 'Sessions', 'Attention', 'Workflows']) {
-      navigation(page).click(); await wait(() => document.querySelector('h1').textContent === page);
-      assert(document.querySelector('.resource-row'), 'Missing fixture for ' + page);
+    await wait(() => document.querySelector('h2'));
+    for (const section of ['Projects', 'Workflows', 'Runs', 'Sessions', 'Attention', 'Settings']) {
+      const button = [...document.querySelectorAll('nav button')].find(item => item.textContent === section);
+      assert(button, 'Missing shell section ' + section);
+      button.click();
+      await wait(() => document.querySelector('h2').textContent === section);
+      assert(button.getAttribute('aria-current') === 'page', 'Section selection failed');
+      assert(document.querySelector('main').textContent.includes('No server connected.'), 'Missing disconnected state');
     }
-    document.querySelector('.resource-row').click();
-    await wait(() => document.querySelector('[role="dialog"]'));
-    assert(document.querySelector('[role="dialog"]').contains(document.activeElement), 'Dialog focus escaped');
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-    await wait(() => !document.querySelector('[role="dialog"]'));
-    assert(document.activeElement.classList.contains('resource-row'), 'Dialog did not restore focus');
-    const input = document.querySelector('input');
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Dependency');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await wait(() => document.querySelectorAll('.resource-row').length === 1);
-    assert(document.querySelector('.resource-row').textContent.includes('Dependency audit'), 'Search failed');
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await wait(() => document.querySelectorAll('.resource-row').length === 3);
-    assert([...document.querySelectorAll('main .primary-button')].every(button => button.disabled), 'Mutation enabled');
+    assert(!document.querySelector('input, [role="dialog"], .resource-row, .sidebar'), 'Product UI remains');
     let blocked = false;
     try { await fetch('https://example.com'); } catch { blocked = true; }
     assert(blocked, 'Renderer network allowed');
@@ -75,9 +58,4 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
   if (overflow) throw new Error('Shell overflows at its minimum desktop width');
   window.setSize(1240, 820);
   console.log(JSON.stringify(report));
-  if (process.env.SHIFT_SMOKE_CAPTURE)
-    await writeFile(
-      process.env.SHIFT_SMOKE_CAPTURE,
-      (await window.webContents.capturePage()).toPNG(),
-    );
 }

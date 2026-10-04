@@ -1,15 +1,10 @@
-import { readdir, readFile, writeFile, mkdir, cp } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'acorn';
 import { simple } from 'acorn-walk';
 
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
-await mkdir(join(root, 'licenses'), { recursive: true });
-await cp(
-  new URL('../node_modules/@fontsource-variable/dm-sans/LICENSE', import.meta.url),
-  join(root, 'licenses/dm-sans.txt'),
-);
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   return (

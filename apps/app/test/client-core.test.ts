@@ -42,9 +42,9 @@ test('client-core validates fake transport independently of Electron and keeps c
   assert.deepEqual(calls, ['info', 'health', 'ready']);
   assert.ok(parseResponse({ kind: 'shell', state: client.shell() }));
   const shell = client.shell();
-  shell.projects[0]!.name = 'changed';
-  assert.equal(client.shell().projects[0]!.name, 'Shift');
-  assert.deepEqual(client.setSamples(false).projects, []);
+  shell.samples = false;
+  assert.equal(client.shell().samples, true);
+  assert.deepEqual(client.setSamples(false), { connection: 'unconfigured', samples: false });
 });
 
 test('invalid, oversized, secret-bearing and wrong-identity server responses are rejected', async () => {
