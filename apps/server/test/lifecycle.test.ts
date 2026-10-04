@@ -16,7 +16,6 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { once } from 'node:events';
 import { startServer } from '../src/server.js';
 import { prepareStateDirectory } from '../src/lifecycle/state-directory.js';
 import { acquireInstanceLock } from '../src/lifecycle/instance-lock.js';
@@ -71,6 +70,7 @@ test('persistent lock inode is reused and unsafe permissions, hard links and sym
 });
 
 test('another account cannot block ownership by preclaiming the stat-derived abstract socket', async (t) => {
+  const root = process.getuid!() === 0;
   const state = await temporaryState();
   const publicDirectory = await mkdtemp(join(tmpdir(), 'shift-lock-account-'));
   await chmod(publicDirectory, 0o755);
@@ -80,7 +80,6 @@ test('another account cannot block ownership by preclaiming the stat-derived abs
   await chmod(node, 0o755);
   await copyFile(join(workspace, 'test/fixtures/preclaim-lock.mjs'), fixture);
   await chmod(fixture, 0o644);
-  const root = process.getuid!() === 0;
   const child = spawn(
     root ? node : 'sudo',
     root ? [fixture, state.path] : ['-n', '-u', 'nobody', '--', node, fixture, state.path],
@@ -97,7 +96,11 @@ test('another account cannot block ownership by preclaiming the stat-derived abs
   child.stderr!.on('data', (chunk) => {
     errors += String(chunk);
   });
-  const exited = once(child, 'close');
+  let launchError: Error | undefined;
+  child.once('error', (error) => {
+    launchError = error;
+  });
+  const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   let running: Awaited<ReturnType<typeof startServer>> | undefined;
   t.after(async () => {
     await running?.stop();
@@ -107,7 +110,15 @@ test('another account cannot block ownership by preclaiming the stat-derived abs
     await rm(publicDirectory, { recursive: true, force: true });
   });
   await eventually(() => {
-    if (child.exitCode !== null) throw new Error(`Preclaim process failed: ${errors}`);
+    if (launchError || child.exitCode !== null || child.signalCode !== null) {
+      const prerequisite = root
+        ? ''
+        : 'Cross-account lock test requires passwordless sudo access to nobody for the temporary ' +
+          'Node executable and fixture, not just `id`. Ask the runner administrator to provide ' +
+          'the required access, or run the suite on a supported root runner. ' +
+          'See apps/server/README.md#platform-verification. ';
+      throw new Error(`${prerequisite}Preclaim process failed: ${launchError?.message ?? errors}`);
+    }
     return output.includes('PRECLAIMED') ? true : undefined;
   });
   running = await startServer(configFor(state.path));
