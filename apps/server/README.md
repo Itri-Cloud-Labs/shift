@@ -79,4 +79,6 @@ The platform smoke accepts an expected architecture argument, for example `node 
 
 The cross-account regression test launches an owned subprocess as `nobody`. Root can set that child's UID directly; a non-root test runner needs passwordless `sudo -u nobody`, available on the selected GitHub runners. This does not change host accounts or files outside the test's temporary directories.
 
+Before running the suite as a non-root user, verify `sudo -n -u nobody -- id -u` returns `65534`. If `sudo` is missing or access is denied, install it through your platform's package manager and ask the runner administrator to provide the required access, or use a supported root runner. The test fails with a prerequisite diagnostic; it is not skipped. Avoid granting broad passwordless sudo access just to run the suite.
+
 See [implementation decisions](../../docs/implementation-decisions.md) and [progress](../../docs/implementation-progress.md) for exact local evidence and later gates.

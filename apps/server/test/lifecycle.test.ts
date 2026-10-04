@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmod,
   copyFile,
@@ -71,6 +71,19 @@ test('persistent lock inode is reused and unsafe permissions, hard links and sym
 });
 
 test('another account cannot block ownership by preclaiming the stat-derived abstract socket', async (t) => {
+  const root = process.getuid!() === 0;
+  if (!root) {
+    const prerequisite = spawnSync('sudo', ['-n', '-u', 'nobody', '--', 'id', '-u'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    assert(
+      !prerequisite.error && prerequisite.status === 0 && prerequisite.stdout.trim() === '65534',
+      'Cross-account lock test requires passwordless sudo access to nobody. ' +
+        'Verify with `sudo -n -u nobody -- id -u` (expected: 65534), ' +
+        'or run the suite on a supported root runner. See apps/server/README.md#platform-verification.',
+    );
+  }
   const state = await temporaryState();
   const publicDirectory = await mkdtemp(join(tmpdir(), 'shift-lock-account-'));
   await chmod(publicDirectory, 0o755);
@@ -80,7 +93,6 @@ test('another account cannot block ownership by preclaiming the stat-derived abs
   await chmod(node, 0o755);
   await copyFile(join(workspace, 'test/fixtures/preclaim-lock.mjs'), fixture);
   await chmod(fixture, 0o644);
-  const root = process.getuid!() === 0;
   const child = spawn(
     root ? node : 'sudo',
     root ? [fixture, state.path] : ['-n', '-u', 'nobody', '--', node, fixture, state.path],
