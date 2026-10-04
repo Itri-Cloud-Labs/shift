@@ -76,14 +76,28 @@ try {
     env.XDG_RUNTIME_DIR = state;
     delete env.DBUS_SESSION_BUS_ADDRESS;
   }
-  const child = spawn(executable, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(executable, args, {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: process.platform !== 'win32',
+  });
   let output = '';
   child.stdout.on('data', (chunk) => {
     output += chunk;
     process.stdout.write(chunk);
   });
   child.stderr.on('data', (chunk) => process.stderr.write(chunk));
-  timeout = setTimeout(() => child.kill(), 45_000);
+  const terminate = () => {
+    if (typeof child.pid !== 'number') return;
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      return;
+    }
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch {}
+  };
+  timeout = setTimeout(terminate, 45_000);
   const code = await new Promise((resolve, reject) => {
     child.on('error', reject);
     child.on('close', resolve);
