@@ -15,6 +15,13 @@
       "when": 1792195200000,
       "tag": "0001_agent_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792281600000,
+      "tag": "0002_definitions",
+      "breakpoints": true
     }
   ]
 }

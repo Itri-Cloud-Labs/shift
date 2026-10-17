@@ -8,17 +8,20 @@ import type {
   HarnessAdapter,
   HarnessSessionHandle,
   InvocationObservation,
+  Json,
   ResultHandler,
 } from '../harness/types.js';
+import { envelope } from './bindings.js';
 import { checkEnvelope } from './envelope.js';
 import { continuationPrompt, correctionPrompt, goalPrompt, type AgentTask } from './prompts.js';
 import {
   StaleClaim,
   type Claim,
   type InvocationRow,
+  type AgentConfig,
+  type ExecutionError,
   type InvocationState,
   type RunRepository,
-  type RunSnapshot,
 } from './repository.js';
 
 export interface AgentServiceOptions {
@@ -50,8 +53,8 @@ export class AgentService {
   }
 
   readonly handleResult: ResultHandler = async (submission) =>
-    this.#options.repository.recordSubmission(submission, (snapshot, input) => {
-      const check = checkEnvelope(snapshot.agent.resultSchema, input);
+    this.#options.repository.recordSubmission(submission, (config, input) => {
+      const check = checkEnvelope(config.resultSchema, input);
       return check.valid
         ? { accepted: true, envelope: check.envelope }
         : { accepted: false, reason: check.reason };
@@ -79,7 +82,7 @@ export class AgentService {
             invocationId: last.id,
           });
         } else {
-          repository.finishAgent(claim, {
+          this.#finish(claim, {
             kind: 'failed',
             error: { code: safe.code, category: 'external', message: safe.message },
           });
@@ -92,23 +95,23 @@ export class AgentService {
 
   async #drive(claim: Claim, signal: AbortSignal): Promise<void> {
     const { repository, adapter } = this.#options;
-    const snapshot = repository.snapshot(claim.runId);
+    const config = repository.agentConfig(claim.executionId);
     const task: AgentTask = {
-      goal: snapshot.agent.goal,
-      cwd: snapshot.agent.cwd,
-      resultSchema: snapshot.agent.resultSchema,
-      readOnly: snapshot.agent.toolPolicy.mode === 'read_only',
+      goal: config.goal,
+      cwd: config.cwd,
+      resultSchema: config.resultSchema,
+      readOnly: config.toolPolicy.mode === 'read_only',
     };
-    const handle = await this.#session(claim, snapshot);
+    const handle = await this.#session(claim, config);
     for (;;) {
       if (signal.aborted) return;
       const invocations = repository.invocations(claim.attemptId);
       const last = invocations.at(-1);
       if (last && active.includes(last.state)) {
-        await this.#invoke(claim, handle, last, snapshot, signal);
+        await this.#invoke(claim, handle, last, config, signal);
         continue;
       }
-      const next = this.#decide(claim, snapshot, invocations);
+      const next = this.#decide(claim, config, invocations);
       if (!next) return;
       const id = randomUUID();
       const artifactDirectory = this.#artifactDirectory(claim, id);
@@ -129,14 +132,14 @@ export class AgentService {
     }
   }
 
-  async #session(claim: Claim, snapshot: RunSnapshot): Promise<HarnessSessionHandle> {
+  async #session(claim: Claim, config: AgentConfig): Promise<HarnessSessionHandle> {
     const { repository, adapter } = this.#options;
     const session =
       repository.session(claim.executionId) ??
       repository.bindSession(claim, {
         harnessId: adapter.id,
-        cwd: snapshot.agent.cwd,
-        config: { model: { ...snapshot.agent.model } },
+        cwd: config.cwd,
+        config: { model: { ...config.model } },
         storageNamespace: adapter.storageNamespace,
       });
     if (session.state === 'READY' && session.harnessSessionId) {
@@ -151,8 +154,8 @@ export class AgentService {
     const handle = await adapter.createSession({
       shiftSessionId: session.agentSessionId,
       operationId: claim.attemptId,
-      cwd: snapshot.agent.cwd,
-      model: snapshot.agent.model,
+      cwd: config.cwd,
+      model: config.model,
     });
     repository.markSessionReady(claim, handle);
     return handle;
@@ -161,11 +164,11 @@ export class AgentService {
   // What follows a finished invocation, or null once the attempt has been finished.
   #decide(
     claim: Claim,
-    snapshot: RunSnapshot,
+    config: AgentConfig,
     invocations: InvocationRow[],
   ): 'goal' | 'correction' | 'continuation' | null {
     const { repository } = this.#options;
-    const { limits } = snapshot.agent;
+    const { limits } = config;
     const last = invocations.at(-1);
     if (!last) return 'goal';
     const count = (kind: InvocationRow['kind']) =>
@@ -174,10 +177,10 @@ export class AgentService {
       case 'COMPLETED': {
         const envelope = last.result!;
         if (envelope.status === 'completed') {
-          repository.finishAgent(claim, { kind: 'completed', data: envelope.data });
+          this.#finish(claim, { kind: 'completed', data: envelope.data });
         } else {
           const problem = envelope.status === 'blocked' ? envelope.blocker : envelope.error;
-          repository.finishAgent(claim, {
+          this.#finish(claim, {
             kind: 'failed',
             error: { ...problem, category: envelope.status === 'blocked' ? 'blocked' : 'external' },
           });
@@ -186,14 +189,14 @@ export class AgentService {
       }
       case 'FAILED':
         if (last.error?.code === 'HARNESS_PROMPT') {
-          repository.finishAgent(claim, {
+          this.#finish(claim, {
             kind: 'failed',
             error: { ...last.error, category: 'blocked' },
           });
           return null;
         }
         if (count('correction') < limits.corrections) return 'correction';
-        repository.finishAgent(claim, {
+        this.#finish(claim, {
           kind: 'failed',
           error: {
             code: 'RESULT_MISSING',
@@ -229,7 +232,7 @@ export class AgentService {
     claim: Claim,
     handle: HarnessSessionHandle,
     invocation: InvocationRow,
-    snapshot: RunSnapshot,
+    config: AgentConfig,
     signal: AbortSignal,
   ): Promise<void> {
     const { repository, adapter } = this.#options;
@@ -275,7 +278,7 @@ export class AgentService {
         invocationId: invocation.id,
         goal: invocation.prompt,
         artifactDirectory: this.#artifactDirectory(claim, invocation.id),
-        toolPolicy: snapshot.agent.toolPolicy,
+        toolPolicy: config.toolPolicy,
       });
       submittedAt = Date.now();
       return receipt.kind;
@@ -323,7 +326,7 @@ export class AgentService {
         case 'running': {
           // The rejection limit ends the turn; the agent cannot keep submitting indefinitely.
           const counts = repository.submissionCounts(invocation.id);
-          if (!counts.accepted && counts.rejected >= snapshot.agent.limits.rejectedSubmissions) {
+          if (!counts.accepted && counts.rejected >= config.limits.rejectedSubmissions) {
             await stopped('FAILED', {
               code: 'RESULT_REJECTED',
               message: 'Shift rejected the result too many times.',
@@ -382,6 +385,29 @@ export class AgentService {
     } catch {
       // Startup inspection decides what happened.
     }
+  }
+
+  // The agent publishes new data with its session reference and keeps the incoming context.
+  #finish(
+    claim: Claim,
+    outcome: { kind: 'completed'; data: Json } | { kind: 'failed'; error: ExecutionError },
+  ): void {
+    const { repository } = this.#options;
+    if (outcome.kind === 'failed') {
+      repository.completeExecution(claim, outcome);
+      return;
+    }
+    const context = repository.execution(claim.executionId);
+    const output = envelope(outcome.data, context.input);
+    const session = repository.session(claim.executionId);
+    if (session && context.snapshot.project.id) {
+      output.references.agentSession = {
+        kind: 'agent_session',
+        id: session.agentSessionId,
+        projectId: context.snapshot.project.id,
+      };
+    }
+    repository.completeExecution(claim, { kind: 'completed', output, port: 'success' });
   }
 
   #artifactDirectory(claim: Claim, invocationId: string): string {

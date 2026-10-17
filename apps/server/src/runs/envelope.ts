@@ -113,3 +113,9 @@ export function checkEnvelope(
   }
   return { valid: true, envelope };
 }
+
+// Validates a value (for example trigger input) against an author's schema; null when valid.
+export function checkValue(schema: Json, value: unknown, name = 'input'): string | null {
+  const { ajv, validate } = businessValidator(schema);
+  return validate(value) ? null : ajv.errorsText(validate.errors, { dataVar: name }).slice(0, 1000);
+}

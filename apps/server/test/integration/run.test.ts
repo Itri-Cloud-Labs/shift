@@ -69,7 +69,12 @@ test(
     const repo = join(state.path, 'repo');
     await mkdir(repo);
     await writeFile(join(repo, 'notes.txt'), 'alpha beta gamma\ndelta\n');
-    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'],
+      { cwd: repo },
+    );
     const serve = () =>
       startChild(state.path, ['--opencode-model', model], { SHIFT_OPENCODE_API_KEY: key! });
     const shift = async (...args: string[]) => {
@@ -85,20 +90,64 @@ test(
         await delay(1_000);
       }
     };
+    // Publishes a start -> agent -> end workflow with this agent configuration, then starts it.
+    let projectId: string | undefined;
+    const startAgent = async (agent: Record<string, unknown>) => {
+      projectId ??= ((await shift('project', 'add', '--path', repo)) as unknown as { id: string })
+        .id;
+      const file = join(state.path, `workflow-${Date.now()}.json`);
+      await writeFile(
+        file,
+        JSON.stringify({
+          nodes: [
+            { id: 'start', type: 'manual_trigger' },
+            { id: 'agent', type: 'agent', config: agent },
+            { id: 'end', type: 'end' },
+          ],
+          connections: [
+            {
+              id: 'c1',
+              fromNodeId: 'start',
+              fromPort: 'success',
+              toNodeId: 'agent',
+              toPort: 'input',
+            },
+            {
+              id: 'c2',
+              fromNodeId: 'agent',
+              fromPort: 'success',
+              toNodeId: 'end',
+              toPort: 'input',
+            },
+          ],
+        }),
+      );
+      const workflow = (await shift(
+        'workflow',
+        'create',
+        '--project',
+        projectId,
+        '--name',
+        `run ${Date.now()}`,
+        '--file',
+        file,
+      )) as unknown as { id: string };
+      await shift('workflow', 'publish', workflow.id);
+      return shift('run', 'start', '--workflow', workflow.id);
+    };
     let server = await serve();
     try {
       await t.test('a read-only run completes with a schema-valid result', async () => {
-        const run = await shift(
-          'run',
-          'start',
-          '--repo',
-          repo,
-          '--read-only',
-          '--goal',
-          'Count the words in notes.txt.',
-          '--result-schema',
-          '{"type":"object","required":["words"],"properties":{"words":{"type":"integer"}},"additionalProperties":false}',
-        );
+        const run = await startAgent({
+          goal: 'Count the words in notes.txt.',
+          readOnly: true,
+          resultSchema: {
+            type: 'object',
+            required: ['words'],
+            properties: { words: { type: 'integer' } },
+            additionalProperties: false,
+          },
+        });
         const finished = await until(run.id);
         assert.equal(finished.state, 'COMPLETED', JSON.stringify(finished));
         assert.deepEqual(finished.outcome, { data: { words: 4 } });
@@ -107,14 +156,9 @@ test(
       await t.test(
         'killing Shift mid-tool kills the tool and reports an unknown outcome',
         async () => {
-          const run = await shift(
-            'run',
-            'start',
-            '--repo',
-            repo,
-            '--goal',
-            'Run the shell command `sleep 15 && echo done > crash-marker.txt` and wait for it. Then report {"done": true}.',
-          );
+          const run = await startAgent({
+            goal: 'Run the shell command `sleep 15 && echo done > crash-marker.txt` and wait for it. Then report {"done": true}.',
+          });
           const tool = await toolProcess(state.path);
           await server.terminate('SIGKILL');
           server = await serve();

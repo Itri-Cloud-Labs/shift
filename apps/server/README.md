@@ -71,21 +71,37 @@ Pure source contracts live under `src/protocol/schemas`; deterministic public fi
 
 Dependency scripts are explicitly allowed only for esbuild; better-sqlite3's automatic source build is disabled because the selected release ships x64/arm64 Linux prebuilds. fs-native-extensions 1.5.1 supplies Node-API Linux x64/arm64 prebuilds with no install script. A missing/incompatible prebuild fails clearly. Building a replacement native binding requires an operator/developer toolchain and the same patch/runtime checks. Workspace TypeScript stays strict; `skipLibCheck` avoids Drizzle's declarations for unused optional database drivers.
 
-## Agent runs
+## Workflows and runs
 
-The first vertical slice runs one fixed graph: a manual start, one agent node, and an end node. Start the server with a model, then start runs through the administrative socket:
+A project is an existing Git repository on this host. A workflow belongs to a project and has a mutable draft and immutable published versions. A run executes the active version it started with; editing or republishing the workflow never changes a started run.
 
 ```sh
 SHIFT_OPENCODE_API_KEY=… shift serve --opencode-model opencode-go/claude-haiku-5-5
-shift run start --repo /path/to/repo --goal "Count the words in notes.txt." \
-  --result-schema '{"type":"object","required":["words"],"properties":{"words":{"type":"integer"}}}' --wait
+shift project add --path /path/to/repo
+shift workflow create --project <project-id> --name count-words --file docs/examples/count-words.json
+shift workflow publish <workflow-id>
+shift run start --workflow <workflow-id> --input '{"file":"notes.txt"}' --wait
 shift run show <run-id>
-shift run list
 ```
 
-`SHIFT_OPENCODE_API_KEY` is needed once: it is stored in the private OpenCode namespace. `--read-only` denies repository writes and shell commands; artifact-directory writes stay allowed. `--result-schema` is the JSON Schema 2020-12 for the agent's business data (default: any object). `--model` overrides the server's model for one run.
+`SHIFT_OPENCODE_API_KEY` is needed once: it is stored in the private OpenCode namespace. `shift workflow save <id> --revision N --file …` replaces the draft only if it is still at revision `N`. Publishing validates the whole graph and numbers a new version; publishing an unchanged draft returns the current version. Every changing command carries a command ID (`--command-id`, or a generated one that the CLI reuses when it retries a lost response), so repeating a command returns its first result instead of acting twice.
 
-The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn. After three rejections Shift stops the turn; a turn that ends without an accepted result gets up to two correction prompts. Once Shift accepts a result it stands, even if the turn is then interrupted or its outcome cannot be established. A completed result completes the run with `outcome.data`; a blocker or failure fails it.
+The workflow document is `formatVersion: 1` from specification section 5; omitted defaults are filled when a draft is saved. [count-words.json](../../docs/examples/count-words.json) is a complete example. The node types are:
+
+| Type             | Config                                                                                                | Ports              |
+| ---------------- | ----------------------------------------------------------------------------------------------------- | ------------------ |
+| `manual_trigger` | Optional `inputSchema` (JSON Schema 2020-12) that `run start --input` must satisfy. One per workflow. | `success`          |
+| `transform`      | `data`: a JSON template where `{"$binding": "<name>"}` is replaced by that binding.                   | `success`, `error` |
+| `agent`          | `goal` (with `{{name}}` placeholders), optional `model`, `readOnly`, `resultSchema`, `limits`.        | `success`, `error` |
+| `end`            | Optional `outcome` (`COMPLETED` or `FAILED`) and `reason`.                                            | none               |
+
+Bindings take values from the incoming envelope (`input`), the trigger input (`trigger`), the project (`project`), a `literal`, or an earlier node on the current path (`node`, `latest` or `first` successful execution, with an explicit `fallback` when `optional`). They are resolved once when an execution starts and frozen with it. Each port has at most one connection; a port without one completes the run. A failure follows the node's `error` connection when there is one, carrying `{"error": {...}}`; otherwise the run fails. Loops are ordinary connections bounded by `limits.maxExecutionsPerRun` per node and `execution.limits.maxExecutions` per run; reaching either stops the run in `NEEDS_HUMAN`.
+
+Not yet supported, and rejected when publishing: run variables, retries (`retry.maxAttempts` above 1), overlap policies and existing workspaces. Runs work directly in the project's checkout until workspace allocation (M08).
+
+`readOnly` agents cannot write the repository or run shell commands; artifact-directory writes stay allowed. `resultSchema` defaults to any object.
+
+The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn. After three rejections Shift stops the turn; a turn that ends without an accepted result gets up to two correction prompts. Once Shift accepts a result it stands, even if the turn is then interrupted or its outcome cannot be established. A completed result is the node's `success` output; a blocker or failure is a node failure, routed through its `error` connection if it has one.
 
 Every run, execution, attempt, session, invocation and result submission is in SQLite, and every external step has a durable intent first. Stopping or killing either process is recovered as follows:
 
@@ -97,7 +113,7 @@ Every run, execution, attempt, session, invocation and result submission is in S
 | Shift or OpenCode killed while the agent's tools run                 | The runtime scope is killed, so the tools stop, and the run enters `NEEDS_HUMAN` with `HARNESS_OUTCOME_UNKNOWN`. Nothing is resubmitted.            |
 | OpenCode finishes the turn while Shift is down                       | The agent's result submission fails, so the turn ends without an accepted result and gets a correction prompt that says not to redo completed work. |
 
-A restart reaps the previous OpenCode runtime instead of reconnecting to it, so a turn running during a Shift crash is always interrupted. `NEEDS_HUMAN` runs wait for an owner; repair commands are not implemented yet. Runs have no projects, workflows or workspaces yet: the agent works directly in `--repo`.
+A restart reaps the previous OpenCode runtime instead of reconnecting to it, so a turn running during a Shift crash is always interrupted. `NEEDS_HUMAN` runs wait for an owner; repair commands are not implemented yet.
 
 ## OpenCode harness
 
