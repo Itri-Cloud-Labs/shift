@@ -177,6 +177,8 @@ test('a replaced provider key supersedes the stored one across restarts', { skip
   const state = await temporaryState();
   const first = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'old' }] });
   const second = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'new' }] });
+  // A stopped supervisor cannot restart; a new one stands in for the next Shift process.
+  const third = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'new' }] });
   try {
     await first.ensure();
     await first.stop();
@@ -184,14 +186,15 @@ test('a replaced provider key supersedes the stored one across restarts', { skip
     const keys = (await storedCredentials(second)).map(({ value }) => value.key);
     assert.deepEqual(keys, ['new']);
     await second.stop();
-    await second.ensure();
+    await third.ensure();
     assert.deepEqual(
-      (await storedCredentials(second)).map(({ value }) => value.key),
+      (await storedCredentials(third)).map(({ value }) => value.key),
       ['new'],
     );
   } finally {
     await first.stop();
     await second.stop();
+    await third.stop();
     await state.remove();
   }
 });
@@ -217,6 +220,97 @@ test('a runtime that dies during startup is never handed out', { skip }, async (
     await rm(control);
     const next = await runtime.ensure();
     assert.ok(alive(next.pid));
+  } finally {
+    await runtime.stop();
+    await state.remove();
+  }
+});
+
+test('startup reaping kills a stale runtime without starting a new one', { skip }, async () => {
+  const state = await temporaryState();
+  const abandoned = runtimeFor(state.path);
+  const successor = runtimeFor(state.path);
+  try {
+    const old = await abandoned.ensure();
+    const oldReport = await report(abandoned);
+    await successor.reapStale();
+    assert.equal(alive(oldReport.pid), false);
+    assert.equal(alive(oldReport.toolPid), false);
+    assert.deepEqual(await scopes.members(old.unit), []);
+    assert.equal(successor.current, null, 'reaping does not start a runtime');
+  } finally {
+    await successor.stop();
+    await state.remove();
+  }
+});
+
+test('a stopped runtime cannot be started again by a lingering task', { skip }, async () => {
+  const state = await temporaryState();
+  const runtime = runtimeFor(state.path);
+  try {
+    await runtime.ensure();
+    await runtime.stop();
+    await assert.rejects(runtime.ensure(), { code: 'HARNESS_STOPPED' });
+    assert.equal(runtime.current, null);
+    assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+  } finally {
+    await runtime.stop();
+    await state.remove();
+  }
+});
+
+test(
+  'stopping during a hung start kills the starting runtime within the budget',
+  { skip },
+  async () => {
+    const state = await temporaryState();
+    const runtime = runtimeFor(state.path);
+    await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(runtime.layout.root, 'fake-control.json'),
+      JSON.stringify({ hangStartup: true }),
+    );
+    try {
+      const starting = runtime.ensure();
+      starting.catch(() => undefined);
+      await eventually(() =>
+        existsSync(join(runtime.layout.root, 'fake-report.json')) ? true : undefined,
+      );
+      const hung = await report(runtime);
+      const started = Date.now();
+      await runtime.stop(500);
+      assert.ok(Date.now() - started < 2_000, 'stop kept its budget');
+      assert.equal(alive(hung.pid), false);
+      assert.equal(alive(hung.toolPid), false);
+      await assert.rejects(starting, { code: 'HARNESS_START_FAILED' });
+      assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+    } finally {
+      await runtime.stop();
+      await state.remove();
+    }
+  },
+);
+
+test('a start still preparing when the runtime stops never spawns OpenCode', { skip }, async () => {
+  const state = await temporaryState();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  // Holds the start in its preparation, before anything is spawned.
+  const gated = new (class extends SystemdScopes {
+    override async available(): Promise<boolean> {
+      await gate;
+      return super.available();
+    }
+  })('user');
+  const runtime = runtimeFor(state.path, { scopes: gated });
+  try {
+    const starting = runtime.ensure();
+    starting.catch(() => undefined);
+    await runtime.stop(100);
+    release();
+    await assert.rejects(starting, { code: 'HARNESS_STOPPED' });
+    assert.equal(existsSync(join(runtime.layout.root, 'fake-report.json')), false, 'never spawned');
+    assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
   } finally {
     await runtime.stop();
     await state.remove();

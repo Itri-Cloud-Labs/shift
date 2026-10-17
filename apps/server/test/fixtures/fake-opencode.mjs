@@ -61,17 +61,22 @@ const server = createServer((request, response) => {
   });
 });
 
-server.listen(0, '127.0.0.1', () => {
-  writeFileSync(
-    'fake-report.json',
-    JSON.stringify({
-      pid: process.pid,
-      toolPid: tool.pid,
-      args: process.argv.slice(2),
-      env: process.env,
-    }),
-  );
-  process.stdout.write(`server listening on http://127.0.0.1:${server.address().port}\n`);
-  process.stdout.write(`server password ${password}\n`);
-});
+// `hangStartup` never prints the startup lines, like a runtime stuck before it listens.
+if (control.hangStartup) {
+  writeFileSync('fake-report.json', JSON.stringify({ pid: process.pid, toolPid: tool.pid }));
+  setInterval(() => {}, 60_000);
+} else
+  server.listen(0, '127.0.0.1', () => {
+    writeFileSync(
+      'fake-report.json',
+      JSON.stringify({
+        pid: process.pid,
+        toolPid: tool.pid,
+        args: process.argv.slice(2),
+        env: process.env,
+      }),
+    );
+    process.stdout.write(`server listening on http://127.0.0.1:${server.address().port}\n`);
+    process.stdout.write(`server password ${password}\n`);
+  });
 process.on('SIGTERM', () => server.close(() => process.exit(0)));

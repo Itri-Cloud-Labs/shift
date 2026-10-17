@@ -96,17 +96,25 @@ export function ownedProcess(args: string[], env: NodeJS.ProcessEnv = {}): Owned
   };
 }
 
-export async function startChild(stateDirectory: string): Promise<OwnedProcess & { url: string }> {
-  const process = ownedProcess([
-    cli,
-    'serve',
-    '--state-dir',
-    stateDirectory,
-    '--port',
-    '0',
-    '--shutdown-timeout-ms',
-    '300',
-  ]);
+export async function startChild(
+  stateDirectory: string,
+  extraArgs: string[] = [],
+  env: NodeJS.ProcessEnv = {},
+): Promise<OwnedProcess & { url: string }> {
+  const process = ownedProcess(
+    [
+      cli,
+      'serve',
+      '--state-dir',
+      stateDirectory,
+      '--port',
+      '0',
+      '--shutdown-timeout-ms',
+      '300',
+      ...extraArgs,
+    ],
+    env,
+  );
   try {
     const url = await eventually(() => {
       if (process.child.exitCode !== null || process.child.signalCode !== null)

@@ -38,7 +38,22 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
   const tables = store.db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     .all();
-  assert.deepEqual(tables, [{ name: '__drizzle_migrations' }, { name: 'server_metadata' }]);
+  assert.deepEqual(
+    tables.map((table) => (table as { name: string }).name),
+    [
+      '__drizzle_migrations',
+      'agent_invocations',
+      'agent_result_submissions',
+      'agent_sessions',
+      'events',
+      'harness_sessions',
+      'node_attempts',
+      'node_executions',
+      'runs',
+      'server_metadata',
+      'sqlite_sequence',
+    ],
+  );
   assert.equal(
     (
       store.db.prepare("SELECT value_json FROM server_metadata WHERE key='createdAtMs'").get() as {

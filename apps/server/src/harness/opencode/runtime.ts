@@ -71,6 +71,9 @@ export class OpenCodeRuntime {
   #current: Running | null = null;
   #starting: Promise<Running> | null = null;
   #cleanup: Promise<void> = Promise.resolve();
+  #closed = false;
+  // The scope of a generation that has been spawned but not yet published.
+  #startingUnit: string | null = null;
   readonly #lostListeners: Array<(generation: number) => void> = [];
 
   constructor(options: OpenCodeRuntimeOptions) {
@@ -88,6 +91,10 @@ export class OpenCodeRuntime {
   }
 
   async ensure(): Promise<RuntimeGeneration> {
+    // After stop(), a task still finishing its cancellation must not start a new runtime.
+    if (this.#closed) {
+      throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
+    }
     if (this.#current) return this.#current;
     this.#starting ??= this.#start().finally(() => {
       this.#starting = null;
@@ -112,15 +119,42 @@ export class OpenCodeRuntime {
     return found;
   }
 
-  async stop(): Promise<void> {
-    await this.#starting?.catch(() => undefined);
+  // Kills scopes of this namespace left by an earlier Shift process. Does nothing without systemd;
+  // a later start reports that containment is unavailable.
+  async reapStale(): Promise<void> {
+    if (this.#current || this.#starting) return;
+    if (await this.#options.scopes.available()) await this.#reap();
+  }
+
+  // With no current runtime, every scope of this namespace is stale: left by a lost generation
+  // whose cleanup failed, or by a Shift process that died. The instance lock guarantees that no
+  // other live Shift process owns the namespace. A failed kill blocks the start.
+  async #reap(): Promise<void> {
+    for (const unit of await this.#options.scopes.list(this.#unitPrefix)) {
+      this.#options.logger.warn({ unit }, 'Killing a stale OpenCode runtime scope.');
+      await this.#options.scopes.kill(unit);
+    }
+  }
+
+  // Permanent: the runtime cannot be started again by this supervisor. `timeoutMs` bounds waiting
+  // for a pending start and for a graceful exit; killing the scope is the fallback either way.
+  async stop(timeoutMs = this.#options.stopTimeoutMs ?? 5_000): Promise<void> {
+    this.#closed = true;
+    const deadline = Date.now() + timeoutMs;
+    if (this.#starting) {
+      await withTimeout(
+        this.#starting.catch(() => undefined),
+        timeoutMs,
+      );
+      // A start still pending at the deadline is killed now; its startup then fails on the exit.
+      if (this.#startingUnit) await this.#options.scopes.kill(this.#startingUnit);
+    }
     const running = this.#current;
     if (running) {
       running.stopping = true;
       this.#current = null;
       running.child.kill('SIGTERM');
-      const timeoutMs = this.#options.stopTimeoutMs ?? 5_000;
-      await withTimeout(running.exited, timeoutMs);
+      await withTimeout(running.exited, Math.max(0, deadline - Date.now()));
       try {
         // Tool processes leave the server's process group, so only the scope accounts for them.
         await this.#options.scopes.kill(running.unit);
@@ -141,18 +175,18 @@ export class OpenCodeRuntime {
         503,
       );
     }
-    // With no current runtime, every scope of this namespace is stale: left by a lost generation
-    // whose cleanup failed, or by a Shift process that died. The instance lock guarantees that no
-    // other live Shift process owns the namespace. A failed kill blocks the start.
-    for (const unit of await scopes.list(this.#unitPrefix)) {
-      logger.warn({ unit }, 'Killing a stale OpenCode runtime scope.');
-      await scopes.kill(unit);
-    }
+    await this.#reap();
     const endpoint = await startResultEndpoint(this.#options.resultHandler);
     try {
       await prepareNamespace(this.layout, { url: endpoint.url, token: endpoint.token });
+      // The last await before spawning: a stop() that arrived during preparation aborts here, and
+      // one arriving later finds `#startingUnit`, which is set in the same synchronous step.
+      if (this.#closed) {
+        throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
+      }
       const generation = ++this.#generation;
       const unit = `${this.#unitPrefix}${Date.now().toString(36)}-${generation}`;
+      this.#startingUnit = unit;
       const child = scopes.spawn(
         unit,
         this.#options.executable ?? 'opencode',
@@ -189,6 +223,9 @@ export class OpenCodeRuntime {
             'The OpenCode runtime exited during startup.',
           );
         }
+        if (this.#closed) {
+          throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
+        }
       } catch (error) {
         if (running) running.stopping = true;
         child.kill('SIGKILL');
@@ -201,6 +238,8 @@ export class OpenCodeRuntime {
     } catch (error) {
       await endpoint.close();
       throw error;
+    } finally {
+      this.#startingUnit = null;
     }
   }
 

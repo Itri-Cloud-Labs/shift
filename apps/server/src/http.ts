@@ -17,6 +17,9 @@ import {
 } from './protocol/index.js';
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
+import type { RunEngine } from './runs/engine.js';
+
+const runsPath = '/api/v0/admin/runs';
 
 export function createHttpServer(options: {
   store: Store;
@@ -25,6 +28,7 @@ export function createHttpServer(options: {
   logger: Logger;
   administrative: boolean;
   stop: () => void;
+  engine?: RunEngine;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -38,10 +42,12 @@ export function createHttpServer(options: {
       'Cache-Control': 'no-store',
       'X-Content-Type-Options': 'nosniff',
     });
-    // Nothing in this foundation accepts arbitrary JSON bodies or caller request IDs.
+    // Only run creation on the administrative socket accepts a (bounded JSON) body.
+    const acceptsBody = options.administrative && req.method === 'POST' && req.path === runsPath;
     if (
-      req.headers['transfer-encoding'] !== undefined ||
-      (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0')
+      !acceptsBody &&
+      (req.headers['transfer-encoding'] !== undefined ||
+        (req.headers['content-length'] !== undefined && req.headers['content-length'] !== '0'))
     ) {
       next(new ShiftError('INVALID_REQUEST', 'This endpoint does not accept a request body.', 400));
       return;
@@ -97,6 +103,31 @@ export function createHttpServer(options: {
       throw new ShiftError('INTERNAL_ERROR', 'Invalid server info response.');
     res.json(payload);
   });
+  if (options.administrative && options.engine) {
+    const engine = options.engine;
+    const local = (req: express.Request) => {
+      if (req.headers.origin !== undefined)
+        throw new ShiftError(
+          'INVALID_REQUEST',
+          'Browser-origin administration is unavailable.',
+          403,
+        );
+    };
+    const reply = (res: Response, status: number, body: Record<string, unknown>) =>
+      res.status(status).json({ schemaVersion: 1, requestId: res.locals['requestId'], ...body });
+    app.post(runsPath, express.json({ limit: '64kb', strict: true }), async (req, res) => {
+      local(req);
+      reply(res, 201, { run: await engine.createRun(req.body) });
+    });
+    app.get(runsPath, (req, res) => {
+      local(req);
+      reply(res, 200, { runs: engine.repository.runs() });
+    });
+    app.get(`${runsPath}/:runId`, (req, res) => {
+      local(req);
+      reply(res, 200, { run: engine.repository.run(req.params['runId']!) });
+    });
+  }
   if (options.administrative) {
     app.post('/api/v0/admin/shutdown', (req, res) => {
       if (req.headers.origin !== undefined)
@@ -118,7 +149,13 @@ export function createHttpServer(options: {
   }
   app.use((_req, _res, next) => next(new ShiftError('NOT_FOUND', 'Endpoint not found.', 404)));
   const errorHandler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
-    const safe = publicError(error);
+    const bodyError = (error as { type?: unknown } | null)?.type;
+    const safe =
+      bodyError === 'entity.too.large'
+        ? new ShiftError('REQUEST_TOO_LARGE', 'The request body is too large.', 413)
+        : bodyError === 'entity.parse.failed'
+          ? new ShiftError('INVALID_REQUEST', 'The request body is not valid JSON.', 400)
+          : publicError(error);
     const requestId = res.locals['requestId'] as string;
     options.logger.warn({ code: safe.code, requestId }, 'Request rejected.');
     const payload: ProtocolError = {

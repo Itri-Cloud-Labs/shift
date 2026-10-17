@@ -269,3 +269,19 @@ Results use the plugin tool chosen in the probe decision, now with a bearer toke
 Tool policy is compiled per invocation by re-emitting the `build` agent's own rules with `ask` turned into `deny`, then appending Shift's rules. Re-emitting keeps OpenCode's last-match ordering, for example `*.env.example` readable after `*.env.*`. Appending only deny overrides would break that.
 
 No OpenCode SDK was added. The adapter uses about a dozen routes, and the generated v2 client would pin the experimental API's full surface into the server dependency graph. The supervisor and adapter use built-in `fetch`, `child_process` and `/proc`.
+
+## First durable agent run
+
+Reviewed 2026-10-17. This slice runs a fixed manual -> agent -> end graph before definitions (M02) and general linear execution (M03) exist, to put the execution store, recovery and the real harness in contact early.
+
+Migration 0001 adds `runs`, `node_executions`, `node_attempts`, `agent_sessions`, `harness_sessions`, `agent_invocations`, `agent_result_submissions` and `events` from specification section 10, with the full specified state enums in CHECK constraints and the partial unique indexes for one active execution per run, attempt per execution and invocation per session. Two deviations: agent sessions record a `cwd` until projects and workspaces exist, and `agent_result_submissions` is new. The specification requires Shift to persist each result submission before answering, which needs a table, and a partial unique index allows only one accepted result per invocation.
+
+No job queue was added. The preflight review left the choice of a transactional SQLite queue to a probe before jobs are implemented. In this slice the pending agent execution and the running attempt are the durable cursor, and the engine scans them. That keeps the queue decision open for M03 instead of building a stand-in for it now.
+
+Attempts are claimed with a fence and the worker generation. Startup resumes, not replays, attempts of an earlier generation under a new fence, and every worker transaction checks its fence. Invocation state is a compare-and-set sequence `PREPARING -> SUBMITTING -> RUNNING | UNCERTAIN -> terminal`; `SUBMITTING` is the durable intent recorded before the prompt is sent. Recovery inspects the harness first and resubmits only with the same message ID, and only when the prompt was never accepted or is stranded undelivered. A turn stopped before any assistant step, or cancelled with an accounted stop, gets a continuation in the same session. A turn that stopped without terminal evidence becomes `UNKNOWN` and the run waits in `NEEDS_HUMAN`.
+
+A Shift restart reaps the previous OpenCode runtime rather than reconnecting, because the runtime password is not persisted. Reconnecting would need it stored as a server credential (specification `harness_runtimes.reconnect_credential_id`). Until then a turn running during a Shift crash is interrupted, and graceful shutdown cancels turns through the harness so they can be continued.
+
+The result envelope validator is a separate Ajv instance with strict-mode lints off and `ajv-formats` loaded: author schemas are ordinary 2020-12 documents (union types, formats), and every schema is still checked against the meta-schema. Request validation keeps strict mode.
+
+End-to-end crash tests use a scripted OpenCode stand-in (`test/fixtures/fake-opencode-agent.mjs`) that implements the adapter's session routes, persists sessions across restarts, runs detached tool processes and calls Shift's real result endpoint. It lets CI kill real `shift serve` and harness processes without model calls; the opt-in `test:opencode` suite repeats the key cases against real OpenCode.
