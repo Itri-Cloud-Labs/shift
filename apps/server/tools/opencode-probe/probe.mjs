@@ -84,6 +84,9 @@ const sanitize = (value) =>
       .replaceAll(token, '<token>'),
   );
 
+// Raised when a case cannot reach the state it examines.
+class Inconclusive extends Error {}
+
 async function waitFor(what, predicate, timeoutMs = 90_000, intervalMs = 400) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -122,15 +125,32 @@ async function procInfo(pid) {
   }
 }
 
-// A process is ours only if its cwd is inside the probe tree and its command carries the marker.
-async function ownedProcesses(marker) {
+async function processes(predicate) {
   const found = [];
   for (const name of await readdir('/proc')) {
     if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
     const info = await procInfo(Number(name));
-    if (info?.cmd.includes(marker) && info.cwd.startsWith(root)) found.push(info);
+    if (info && predicate(info)) found.push(info);
   }
   return found;
+}
+
+// A case-specific process is ours only if its cwd is inside the probe tree and its command carries
+// the marker.
+const ownedProcesses = (marker) =>
+  processes((info) => info.cmd.includes(marker) && info.cwd.startsWith(root));
+
+// Everything the namespace started inherits its private XDG_DATA_HOME, including untagged tool
+// children such as `sleep`. Members of a marked tool's process group are included as well.
+async function namespaceProcesses() {
+  const inherited = `XDG_DATA_HOME=${env.XDG_DATA_HOME}`;
+  const marked = await ownedProcesses(token);
+  const groups = new Set(marked.map((info) => info.pgid));
+  return processes(
+    (info) =>
+      info.environ.split('\0').includes(inherited) ||
+      (groups.has(info.pgid) && info.cwd.startsWith(root)),
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -240,11 +260,14 @@ const harness = {
     if (survivors.length) process.kill(-pid, 'SIGKILL');
     return { ...exit, serverGroupSurvivors: survivors };
   },
-  async api(method, path, body) {
+  // The deadline also covers reading the body, so a stalled response cannot outlast a case timeout.
+  async api(method, path, body, timeoutMs = 30_000) {
+    const signal = AbortSignal.timeout(timeoutMs);
     const response = await fetch(`${this.url}${path}`, {
       method,
       headers: { ...this.auth, 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
     const text = await response.text();
     let json = null;
@@ -330,9 +353,10 @@ async function messages(sessionID) {
 
 const tools = (list) =>
   list.flatMap((message) => (message.content ?? []).filter((part) => part.type === 'tool'));
-const texts = (list) =>
+const replies = (list) =>
   list
-    .flatMap((message) => (message.content ?? []).filter((part) => part.type === 'text'))
+    .filter((message) => message.type === 'assistant')
+    .flatMap((message) => message.content.filter((part) => part.type === 'text'))
     .map((part) => part.text)
     .join('\n');
 const shape = (list) =>
@@ -395,7 +419,7 @@ probeCase('prompt-ack-and-transcript', true, async () => {
   const list = await messages(sessionID);
   const user = list.find((message) => message.id === id);
   assert.deepEqual(user.metadata, { shift: { invocationId: 'I-1' } });
-  assert.match(texts(list), new RegExp(`PONG-${token}`));
+  assert.match(replies(list), new RegExp(`PONG-${token}`));
   assert.equal(list.at(-1).type, 'idle');
   assert.equal(list.at(-1).outcome, 'succeeded');
   const durable = harness.stream.events.filter((event) => event.durable?.aggregateID === sessionID);
@@ -469,6 +493,9 @@ probeCase('structured-result-correction', true, async () => {
   assert.ok(contract.calls.length >= 2, 'model resubmitted after rejection within the same turn');
   assert.equal(contract.calls[0].verdict.accepted, false);
   assert.equal(contract.calls.at(-1).verdict.accepted, true);
+  const accepted = contract.calls.at(-1).input;
+  assert.equal(accepted.status, 'completed', 'a blocked or failed result is not a completion');
+  assert.ok(contract.validate(accepted.data), 'accepted data satisfies the business schema');
   assert.equal(
     submissions.length,
     contract.calls.length,
@@ -614,15 +641,18 @@ probeCase('question-form', true, async () => {
   const cancel = await harness.api('DELETE', `/api/session/${sessionID}/form/${form.id}`);
   await settle(sessionID, id);
   const list = await messages(sessionID);
+  const outcome = (await harness.api('GET', `/api/session/${sessionID}`)).json.data.outcome ?? null;
+  const assistant = list.findLast((message) => message.type === 'assistant');
+  assert.equal(cancel.status, 204);
+  assert.ok(!list.some((message) => message.type === 'idle'), 'dismissal writes no idle record');
+  assert.equal(outcome, null, 'dismissal leaves the session outcome unset');
+  assert.equal(assistant.finish, 'error');
+  assert.equal(assistant.error?.type, 'aborted');
   return {
-    form: {
-      kind: form.metadata.kind,
-      fields: form.fields.map((field) => field.type),
-      cancelStatus: cancel.status,
-    },
-    idleRecordWritten: list.some((message) => message.type === 'idle'),
-    sessionOutcome:
-      (await harness.api('GET', `/api/session/${sessionID}`)).json.data.outcome ?? null,
+    form: { kind: form.metadata.kind, fields: form.fields.map((field) => field.type) },
+    idleRecordWritten: false,
+    sessionOutcome: outcome,
+    assistant: { finish: assistant.finish, error: assistant.error.type },
     transcript: shape(list),
   };
 });
@@ -639,6 +669,10 @@ probeCase('interrupt-active-tool', true, async () => {
     const found = await ownedProcesses(marker);
     return found.length ? found : null;
   });
+  // Cleanup relies on untagged tool children being attributable to the namespace.
+  const child = await waitFor('untagged tool child', async () =>
+    (await namespaceProcesses()).find((info) => info.cmd === 'sleep 30'),
+  );
   const queued = await prompt(sessionID, 'interrupt2', 'After that, reply SECOND.');
   const interrupted = await harness.api('POST', `/api/session/${sessionID}/interrupt`);
   assert.deepEqual(interrupted.json, { interrupted: true });
@@ -664,6 +698,7 @@ probeCase('interrupt-active-tool', true, async () => {
   return {
     interruptResponse: interrupted.json,
     toolProcessGroupSeparateFromServer: shell.pgid !== harness.child.pid,
+    toolChildInheritsNamespaceEnvironment: child.environ.includes(env.XDG_DATA_HOME),
     queuedInputAfterInterrupt: 'retained in inbox until explicitly cancelled',
     inboxCancelStatus: cancel.status,
     transcript: shape(list),
@@ -671,22 +706,33 @@ probeCase('interrupt-active-tool', true, async () => {
 });
 
 probeCase('event-replay', false, async () => {
-  const last = harness.stream.events.findLast(
+  const cursor = harness.stream.events.findLast(
     (event) => event.id && event.type !== 'server.connected',
   );
-  assert.ok(last, 'requires earlier events on this server');
-  const replay = await harness.subscribe({ 'last-event-id': last.id });
+  assert.ok(cursor, 'requires earlier events on this server');
+  // Produce an event after the cursor so a replaying server would have something to resend.
+  const sessionID = await createSession('replay');
+  const newer = await waitFor(
+    'event after the cursor',
+    () =>
+      harness.stream.events.find(
+        (event) => event.type === 'session.created' && event.data?.sessionID === sessionID,
+      ),
+    10_000,
+    100,
+  );
+  const replay = await harness.subscribe({ 'last-event-id': cursor.id });
   await sleep(1500);
   replay.close();
-  const types = replay.events.map((event) => event.type);
-  assert.deepEqual(
-    types.filter((type) => type !== 'server.connected'),
-    [],
-    'no replay after Last-Event-ID',
+  assert.ok(
+    !replay.events.some((event) => event.id === newer.id),
+    'an event after Last-Event-ID is not replayed',
   );
+  assert.equal(harness.stream.lines.id, 0, 'the live stream sends no SSE id fields');
+  assert.equal(replay.lines.id, 0);
   return {
-    replayedEvents: 0,
-    sseIdFields: harness.stream.lines.id,
+    replayedEvents: replay.events.filter((event) => event.type !== 'server.connected').length,
+    sseIdFields: 0,
     durableEnvelope:
       'session events carry durable {aggregateID, seq}; the stream itself is live-only',
   };
@@ -705,33 +751,52 @@ probeCase('idle-shutdown-resume', true, async () => {
   );
   await settle(sessionID, id);
   const list = await messages(sessionID);
-  const reply = texts(list.slice(list.findIndex((message) => message.id === id)));
+  const reply = replies(list.slice(list.findIndex((message) => message.id === id)));
   assert.match(reply, new RegExp(`PONG-${token}`));
   return { exit, contextAfterRestart: 'preserved' };
 });
 
 probeCase('crash-after-ack', true, async () => {
-  const sessionID = await createSession('ack');
-  const { id } = await prompt(sessionID, 'ack', `Reply with exactly ACK-${token}.`);
-  const exit = await harness.signal('SIGKILL');
-  await harness.start();
-  const stranded = {
-    messageLookup: (await harness.api('GET', `/api/session/${sessionID}/message/${id}`)).status,
-    inInbox: (await inbox(sessionID)).some((item) => item.id === id),
-  };
+  // The kill races delivery. Retry with fresh sessions until it lands before delivery.
+  const attempts = [];
+  let sessionID, id, exit, stranded;
+  for (let attempt = 1; attempt <= 3 && !stranded; attempt++) {
+    sessionID = await createSession(`ack${attempt}`);
+    ({ id } = await prompt(sessionID, `ack${attempt}`, `Reply with exactly ACK-${token}.`));
+    exit = await harness.signal('SIGKILL');
+    await harness.start();
+    const lookup = (await harness.api('GET', `/api/session/${sessionID}/message/${id}`)).status;
+    attempts.push({ attempt, messageLookup: lookup });
+    if (lookup === 404) {
+      stranded = { inInbox: (await inbox(sessionID)).some((item) => item.id === id) };
+    }
+  }
+  if (!stranded) {
+    throw new Inconclusive(
+      `kill landed after delivery in all attempts: ${JSON.stringify(attempts)}`,
+    );
+  }
   await sleep(3000);
   stranded.activeAfterRestart = await isActive(sessionID);
-  // The kill can land after delivery; record that ordering instead of failing on a timing race.
-  if (stranded.messageLookup === 200) return { exit, stranded, note: 'kill landed after delivery' };
   assert.equal(stranded.inInbox, true, 'acknowledged prompt is durable');
   assert.equal(stranded.activeAfterRestart, false, 'restart does not deliver stranded inbox items');
-  await prompt(sessionID, 'ack', `Reply with exactly ACK-${token}.`);
+  const resubmit = await harness.api('POST', `/api/session/${sessionID}/prompt`, {
+    id,
+    text: `Reply with exactly ACK-${token}.`,
+  });
+  assert.equal(resubmit.status, 200);
   await settle(sessionID, id);
   const list = await messages(sessionID);
   assert.equal(list.filter((message) => message.type === 'user').length, 1);
   assert.equal(list.filter((message) => message.type === 'assistant').length, 1);
-  assert.match(texts(list), new RegExp(`ACK-${token}`));
-  return { exit, stranded, resubmitSameId: 'delivered exactly once', transcript: shape(list) };
+  assert.match(replies(list), new RegExp(`ACK-${token}`));
+  return {
+    exit,
+    attempts,
+    stranded,
+    resubmitSameId: 'delivered exactly once',
+    transcript: shape(list),
+  };
 });
 
 probeCase('crash-during-tool', true, async () => {
@@ -851,10 +916,11 @@ try {
         evidence: sanitize(evidence),
       });
     } catch (error) {
+      // An inconclusive case did not reach the state it examines; it is never reported as observed.
       exitCode = 1;
       report.cases.push({
         name,
-        result: 'failed',
+        result: error instanceof Inconclusive ? 'inconclusive' : 'failed',
         ms: Date.now() - started,
         error: sanitize(error.message),
       });
@@ -876,11 +942,31 @@ try {
     process.kill(-harness.child.pid, 'SIGKILL');
     await harness.child.exited;
   }
-  for (const orphan of await ownedProcesses(token)) process.kill(orphan.pid, 'SIGKILL');
+  // Kill every namespace process, including untagged tool children, and wait for them to exit.
+  let remaining = [];
+  try {
+    remaining = await waitFor(
+      'namespace processes to exit',
+      async () => {
+        const alive = await namespaceProcesses();
+        for (const info of alive) {
+          try {
+            process.kill(info.pid, 'SIGKILL');
+          } catch {}
+        }
+        return alive.length === 0 ? [] : null;
+      },
+      5_000,
+      200,
+    );
+  } catch {
+    remaining = await namespaceProcesses();
+    exitCode = 1;
+  }
   await new Promise((resolve) => validator.close(resolve));
   report.finishedAt = new Date().toISOString();
   report.cleanup = {
-    remainingProbeProcesses: (await ownedProcesses(token)).length,
+    remainingProbeProcesses: remaining.length,
     keptDirectory: args.keep,
   };
   if (args.keep) report.directory = root;

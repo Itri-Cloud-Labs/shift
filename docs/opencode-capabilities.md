@@ -9,7 +9,7 @@ node apps/server/tools/opencode-probe/probe.mjs --out /tmp/opencode-probe.json
 node apps/server/tools/opencode-probe/probe.mjs --only session-identity,event-replay   # no model calls
 ```
 
-The probe ([probe.mjs](../apps/server/tools/opencode-probe/probe.mjs)) creates a private temporary `HOME`, `XDG_*` and `TMPDIR` tree, a temporary Git repository and its own `opencode serve` process. It installs the probe [result plugin](../apps/server/tools/opencode-probe/plugin/index.mjs) and runs a Shift-side Ajv validator on loopback. It signals only processes whose environment points at its own data directory, kills orphaned tool processes only when their command carries the run's random marker and their cwd is inside the probe tree, and deletes the tree unless `--keep` is given. Both runs reported zero remaining probe processes and no temporary directory.
+The probe ([probe.mjs](../apps/server/tools/opencode-probe/probe.mjs)) creates a private temporary `HOME`, `XDG_*` and `TMPDIR` tree, a temporary Git repository and its own `opencode serve` process. It installs the probe [result plugin](../apps/server/tools/opencode-probe/plugin/index.mjs) and runs a Shift-side Ajv validator on loopback. It signals the server only after confirming that the process environment points at its own data directory. Cleanup kills every process that inherited that private `XDG_DATA_HOME`, which includes untagged tool children such as `sleep`, plus members of any marker-tagged tool process group whose cwd is inside the probe tree. It waits for them to exit before reporting the remaining count, then deletes the tree unless `--keep` is given. A case that cannot reach the state it examines reports `inconclusive`, never `observed`.
 
 Model cases need an API-key credential for the model's provider, from `SHIFT_PROBE_API_KEY` or the `--auth-file` entry (default `~/.local/share/opencode/auth.json`). OAuth entries are refused so the probe cannot rotate the owner's refresh token. Without a credential, model cases report `skipped`. Each case asserts the behavior recorded here, so a changed OpenCode version fails the case whose assumption it breaks. Rerun the probe before changing the pinned OpenCode version.
 
@@ -100,8 +100,8 @@ Evaluate in order. Inspection uses `GET …/message/{msgId}`, `GET …/inbox`, `
 | --- | --- | --- |
 | Not accepted | Message 404 and absent from the inbox | Safe to submit with the same ID. |
 | Accepted, not delivered | Present in the inbox | Re-submit the same ID to wake delivery, or delete the inbox item to cancel. |
-| Running | Session listed in `/api/session/active` | Observe. Check for pending permissions/forms. |
-| Waiting on a harness prompt | Pending `permission` or `form` for the session | Interrupt, account for the stop, report a structured blocker. |
+| Waiting on a harness prompt | Pending `permission` or `form` for the session (the session is also listed as active) | Interrupt, account for the stop, report a structured blocker. |
+| Running | Session listed in `/api/session/active` | Observe. |
 | Completed | Turn ended and Shift accepted a result-tool call for this invocation | Validate artifacts; node contract decides success. |
 | Completed without result | Turn ended (`idle: succeeded`), no accepted result call | Contract correction invocation, per section 6.5. |
 | Interrupted, accounted | `idle: interrupted`, or assistant `finish: error` with `aborted`, and no live runtime processes | Cancellation is complete. |
