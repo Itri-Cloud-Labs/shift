@@ -1,0 +1,45 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "config": {
+        "inputSchema": {
+          "type": "object",
+          "required": ["file"],
+          "properties": { "file": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "id": "count",
+      "type": "agent",
+      "config": {
+        "goal": "Count the words in {{file}}.",
+        "readOnly": true,
+        "resultSchema": {
+          "type": "object",
+          "required": ["words"],
+          "properties": { "words": { "type": "integer" } },
+          "additionalProperties": false
+        }
+      },
+      "bindings": { "file": { "kind": "trigger", "path": ["file"] } }
+    },
+    {
+      "id": "report",
+      "type": "transform",
+      "config": { "data": { "file": { "$binding": "file" }, "words": { "$binding": "words" } } },
+      "bindings": {
+        "file": { "kind": "trigger", "path": ["file"] },
+        "words": { "kind": "input", "path": ["data", "words"] }
+      }
+    },
+    { "id": "end", "type": "end" }
+  ],
+  "connections": [
+    { "id": "c1", "fromNodeId": "start", "fromPort": "success", "toNodeId": "count", "toPort": "input" },
+    { "id": "c2", "fromNodeId": "count", "fromPort": "success", "toNodeId": "report", "toPort": "input" },
+    { "id": "c3", "fromNodeId": "report", "fromPort": "success", "toNodeId": "end", "toPort": "input" }
+  ]
+}

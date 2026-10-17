@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
@@ -35,6 +36,12 @@ async function setup() {
   const state = await temporaryState();
   const repo = join(state.path, 'repo');
   await mkdir(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  execFileSync(
+    'git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'],
+    { cwd: repo },
+  );
   const serve = (extra: string[] = []) =>
     // A graceful stop needs time to cancel turns through the harness.
     startChild(state.path, [
@@ -51,8 +58,44 @@ async function setup() {
     if (result.code !== 0) throw new Error(`shift ${args.join(' ')} failed: ${result.errors}`);
     return JSON.parse(result.output);
   };
-  const start = async (goal: string) =>
-    (await shift('run', 'start', '--goal', goal, '--repo', repo)) as Run;
+  // Registers the repository once, then publishes a start -> agent -> end workflow per run.
+  let projectId: string | undefined;
+  const start = async (goal: string) => {
+    projectId ??= ((await shift('project', 'add', '--path', repo)) as { id: string }).id;
+    const file = join(state.path, `workflow-${Date.now()}.json`);
+    await writeFile(
+      file,
+      JSON.stringify({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          { id: 'agent', type: 'agent', config: { goal } },
+          { id: 'end', type: 'end' },
+        ],
+        connections: [
+          {
+            id: 'c1',
+            fromNodeId: 'start',
+            fromPort: 'success',
+            toNodeId: 'agent',
+            toPort: 'input',
+          },
+          { id: 'c2', fromNodeId: 'agent', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+        ],
+      }),
+    );
+    const workflow = (await shift(
+      'workflow',
+      'create',
+      '--project',
+      projectId,
+      '--name',
+      `run ${Date.now()}`,
+      '--file',
+      file,
+    )) as { id: string };
+    await shift('workflow', 'publish', workflow.id);
+    return (await shift('run', 'start', '--workflow', workflow.id)) as Run;
+  };
   const show = async (id: string) => (await shift('run', 'show', id)) as Run;
   const until = async (id: string, done: (run: Run) => boolean, timeoutMs = 60_000) => {
     const deadline = Date.now() + timeoutMs;

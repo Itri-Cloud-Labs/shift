@@ -17,9 +17,12 @@ import {
 } from './protocol/index.js';
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
+import type { CommandResponse } from './persistence/receipts.js';
 import type { RunEngine } from './runs/engine.js';
+import type { DefinitionRepository } from './workflows/repository.js';
+import type { DefinitionService } from './workflows/service.js';
 
-const runsPath = '/api/v0/admin/runs';
+const admin = '/api/v0/admin';
 
 export function createHttpServer(options: {
   store: Store;
@@ -29,6 +32,7 @@ export function createHttpServer(options: {
   administrative: boolean;
   stop: () => void;
   engine?: RunEngine;
+  definitions?: { service: DefinitionService; repository: DefinitionRepository };
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -43,7 +47,12 @@ export function createHttpServer(options: {
       'X-Content-Type-Options': 'nosniff',
     });
     // Only run creation on the administrative socket accepts a (bounded JSON) body.
-    const acceptsBody = options.administrative && req.method === 'POST' && req.path === runsPath;
+    // Administrative commands on the private socket accept a bounded JSON body; shutdown does not.
+    const acceptsBody =
+      options.administrative &&
+      (req.method === 'POST' || req.method === 'PUT') &&
+      req.path.startsWith(`${admin}/`) &&
+      req.path !== `${admin}/shutdown`;
     if (
       !acceptsBody &&
       (req.headers['transfer-encoding'] !== undefined ||
@@ -103,8 +112,9 @@ export function createHttpServer(options: {
       throw new ShiftError('INTERNAL_ERROR', 'Invalid server info response.');
     res.json(payload);
   });
-  if (options.administrative && options.engine) {
+  if (options.administrative && options.engine && options.definitions) {
     const engine = options.engine;
+    const { service, repository } = options.definitions;
     const local = (req: express.Request) => {
       if (req.headers.origin !== undefined)
         throw new ShiftError(
@@ -115,17 +125,52 @@ export function createHttpServer(options: {
     };
     const reply = (res: Response, status: number, body: Record<string, unknown>) =>
       res.status(status).json({ schemaVersion: 1, requestId: res.locals['requestId'], ...body });
-    app.post(runsPath, express.json({ limit: '64kb', strict: true }), async (req, res) => {
+    // A replayed command answers with the status and body stored in its receipt.
+    const command = (res: Response, response: CommandResponse) =>
+      reply(res, response.status, response.body as Record<string, unknown>);
+    const json = express.json({ limit: '2mb', strict: true });
+    const id = (req: express.Request) => String(req.params['id']);
+    app.post(`${admin}/projects`, json, async (req, res) => {
       local(req);
-      reply(res, 201, { run: await engine.createRun(req.body) });
+      command(res, await service.addProject(req.body));
     });
-    app.get(runsPath, (req, res) => {
+    app.get(`${admin}/projects`, (req, res) => {
+      local(req);
+      reply(res, 200, { projects: repository.projects() });
+    });
+    app.post(`${admin}/workflows`, json, (req, res) => {
+      local(req);
+      command(res, service.createWorkflow(req.body));
+    });
+    app.get(`${admin}/workflows`, (req, res) => {
+      local(req);
+      const project =
+        typeof req.query['projectId'] === 'string' ? req.query['projectId'] : undefined;
+      reply(res, 200, { workflows: repository.workflows(project) });
+    });
+    app.get(`${admin}/workflows/:id`, (req, res) => {
+      local(req);
+      reply(res, 200, { workflow: repository.workflow(id(req)) });
+    });
+    app.put(`${admin}/workflows/:id/draft`, json, (req, res) => {
+      local(req);
+      command(res, service.saveDraft(id(req), req.body));
+    });
+    app.post(`${admin}/workflows/:id/publish`, json, (req, res) => {
+      local(req);
+      command(res, service.publish(id(req), req.body ?? {}));
+    });
+    app.post(`${admin}/runs`, json, (req, res) => {
+      local(req);
+      command(res, engine.startRun(req.body));
+    });
+    app.get(`${admin}/runs`, (req, res) => {
       local(req);
       reply(res, 200, { runs: engine.repository.runs() });
     });
-    app.get(`${runsPath}/:runId`, (req, res) => {
+    app.get(`${admin}/runs/:id`, (req, res) => {
       local(req);
-      reply(res, 200, { run: engine.repository.run(req.params['runId']!) });
+      reply(res, 200, { run: engine.repository.run(id(req)) });
     });
   }
   if (options.administrative) {

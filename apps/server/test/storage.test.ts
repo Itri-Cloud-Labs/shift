@@ -45,13 +45,17 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
       'agent_invocations',
       'agent_result_submissions',
       'agent_sessions',
+      'command_receipts',
       'events',
       'harness_sessions',
       'node_attempts',
       'node_executions',
+      'projects',
       'runs',
       'server_metadata',
       'sqlite_sequence',
+      'workflow_versions',
+      'workflows',
     ],
   );
   assert.equal(

@@ -16,7 +16,10 @@ import { SystemdScopes } from './harness/containment.js';
 import { OpenCodeAdapter } from './harness/opencode/adapter.js';
 import { OpenCodeRuntime } from './harness/opencode/runtime.js';
 import type { ResultHandler } from './harness/types.js';
+import { CommandReceipts } from './persistence/receipts.js';
 import { RunEngine } from './runs/engine.js';
+import { DefinitionRepository } from './workflows/repository.js';
+import { DefinitionService } from './workflows/service.js';
 import type { ServerIdentity } from './protocol/index.js';
 
 async function listen(
@@ -178,7 +181,12 @@ export async function startServer(
     await runtime.reapStale();
     const artifactRoot = join(state.path, 'artifacts');
     await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+    const receipts = new CommandReceipts(store.db, clock);
+    const definitions = new DefinitionRepository(store.db, clock);
+    const definitionService = new DefinitionService(definitions, receipts);
     engine = new RunEngine({
+      definitions,
+      receipts,
       store,
       clock,
       logger,
@@ -197,6 +205,7 @@ export async function startServer(
       administrative: true,
       stop: requestStop,
       engine,
+      definitions: { service: definitionService, repository: definitions },
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);

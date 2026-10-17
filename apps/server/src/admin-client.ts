@@ -22,7 +22,7 @@ export async function administrativeRequest(
 // status, so callers can report the server's own protocol error.
 export async function administrativeCall(
   stateDirectory: string,
-  call: { method: 'GET' | 'POST'; path: string; body?: unknown },
+  call: { method: 'GET' | 'POST' | 'PUT'; path: string; body?: unknown },
 ): Promise<{ status: number; payload: unknown }> {
   const directory = await realpath(stateDirectory);
   const metadata = await stat(directory);

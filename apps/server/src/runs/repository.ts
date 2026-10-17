@@ -3,21 +3,31 @@ import { randomUUID } from 'node:crypto';
 import type { Clock } from '../domain/clock.js';
 import { ShiftError } from '../domain/errors.js';
 import type { HarnessSessionHandle, Json, ModelRef, ToolPolicy } from '../harness/types.js';
+import { nodeType } from '../workflows/nodes.js';
+import type { NodeDefinition, WorkflowDocument } from '../workflows/document.js';
+import { envelope, type ChainEntry, type OutputEnvelope } from './bindings.js';
 import type { ResultEnvelope } from './envelope.js';
 
+// A run freezes its published document, the project it runs in and the defaults it resolved
+// (specification 6.1). Editing the workflow or the project later never changes it.
 export interface RunSnapshot {
-  graph: {
-    nodes: Array<{ id: string; type: 'manual_trigger' | 'agent' | 'end' }>;
-    connections: Array<{ from: string; to: string }>;
-  };
-  agent: {
-    goal: string;
-    cwd: string;
-    model: ModelRef;
-    toolPolicy: ToolPolicy;
-    resultSchema: Json;
-    limits: { rejectedSubmissions: number; corrections: number; continuations: number };
-  };
+  formatVersion: 2;
+  workflowId: string | null;
+  versionId: string | null;
+  versionNumber: number | null;
+  document: WorkflowDocument;
+  project: { id: string | null; name: string; repositoryPath: string; baseRef: string };
+  defaults: { model?: string };
+}
+
+// The agent node's configuration after bindings were applied, frozen per execution.
+export interface AgentConfig {
+  goal: string;
+  cwd: string;
+  model: ModelRef;
+  toolPolicy: ToolPolicy;
+  resultSchema: Json;
+  limits: { rejectedSubmissions: number; corrections: number; continuations: number };
 }
 
 export type InvocationKind = 'goal' | 'correction' | 'continuation';
@@ -57,9 +67,28 @@ export interface SessionRow {
   state: 'CREATING' | 'READY';
 }
 
-export type AgentOutcome =
-  | { kind: 'completed'; data: Json }
-  | { kind: 'failed'; error: { code: string; category: string; message: string; details?: Json } };
+export interface ExecutionError {
+  code: string;
+  category: 'input' | 'contract' | 'blocked' | 'permission' | 'external' | 'internal';
+  message: string;
+  details?: Json;
+}
+
+export type ExecutionOutcome =
+  | { kind: 'completed'; output: OutputEnvelope; port: string }
+  | { kind: 'failed'; error: ExecutionError };
+
+export interface ExecutionContext {
+  runId: string;
+  executionId: string;
+  node: NodeDefinition;
+  input: OutputEnvelope;
+  snapshot: RunSnapshot;
+  config: Json | null;
+  bindings: Record<string, Json> | null;
+  // Successful executions on this execution's predecessor chain, nearest first.
+  chain: ChainEntry[];
+}
 
 export interface Attention {
   code: string;
@@ -72,6 +101,66 @@ export class StaleClaim extends Error {}
 const parse = <T>(text: string | null): T | null =>
   text === null ? null : (JSON.parse(text) as T);
 const activeInvocationStates = "('PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN')";
+
+// Runs created before definitions existed froze a fixed manual -> agent -> end graph. They are
+// read as the equivalent document so they keep running after an upgrade.
+interface LegacySnapshot {
+  agent: {
+    goal: string;
+    cwd: string;
+    model: ModelRef;
+    toolPolicy: ToolPolicy;
+    resultSchema: Json;
+    limits: AgentConfig['limits'];
+  };
+}
+
+function upgradeSnapshot(stored: RunSnapshot | LegacySnapshot): RunSnapshot {
+  if ('document' in stored) return stored;
+  const { agent } = stored;
+  const node = (id: string, type: string, config: Json): NodeDefinition => ({
+    id,
+    type,
+    typeVersion: 1,
+    config,
+    bindings: {},
+    retry: { maxAttempts: 1, initialDelayMs: 1000, maxDelayMs: 60000 },
+    limits: { maxExecutionsPerRun: 50 },
+    position: { x: 0, y: 0 },
+  });
+  return {
+    formatVersion: 2,
+    workflowId: null,
+    versionId: null,
+    versionNumber: null,
+    document: {
+      formatVersion: 1,
+      execution: {
+        workspace: { kind: 'new' },
+        overlap: 'allow',
+        limits: { maxExecutions: 1000, maxActiveMs: 14_400_000 },
+      },
+      nodes: [
+        node('start', 'manual_trigger', {}),
+        node('agent', 'agent', {
+          goal: agent.goal,
+          model: `${agent.model.providerID}/${agent.model.id}`,
+          readOnly: agent.toolPolicy.mode === 'read_only',
+          resultSchema: agent.resultSchema,
+          limits: agent.limits,
+        }),
+        node('end', 'end', {}),
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'agent', toPort: 'input' },
+        { id: 'c2', fromNodeId: 'agent', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+      ],
+      presentation: {},
+    },
+    project: { id: null, name: 'legacy', repositoryPath: agent.cwd, baseRef: 'HEAD' },
+    defaults: {},
+  };
+}
 
 // Synchronous repository over short transactions. Every state change made by a worker checks its
 // attempt fence in the same transaction, so a stale task can never advance a run.
@@ -107,44 +196,128 @@ export class RunRepository {
     if (row?.fence !== claim.fence) throw new StaleClaim();
   }
 
-  // The manual trigger completes immediately, carrying the trigger input, and the agent node
-  // becomes the run's single pending activation.
-  createRun(snapshot: RunSnapshot): string {
+  // The entry trigger completes immediately with the trigger input, and its successor becomes the
+  // run's single pending activation, in one transaction.
+  createRun(snapshot: RunSnapshot, triggerInput: Json): string {
     const runId = randomUUID();
     const now = this.clock.now();
+    const entry = snapshot.document.nodes.find(
+      (node) => nodeType(node.type, node.typeVersion)?.entry,
+    );
+    if (!entry) throw new ShiftError('INVALID_WORKFLOW', 'The workflow has no entry node.', 422);
     this.db
       .transaction(() => {
         this.db
           .prepare(
-            "INSERT INTO runs (id, snapshot_json, state, revision, created_at) VALUES (?, ?, 'RUNNING', 0, ?)",
+            "INSERT INTO runs (id, snapshot_json, state, revision, created_at, project_id, workflow_id, workflow_version_id, trigger_input_json) VALUES (?, ?, 'RUNNING', 0, ?, ?, ?, ?, ?)",
           )
-          .run(runId, JSON.stringify(snapshot), now);
-        const trigger = randomUUID();
-        const input = JSON.stringify({ data: { goal: snapshot.agent.goal } });
+          .run(
+            runId,
+            JSON.stringify(snapshot),
+            now,
+            snapshot.project.id,
+            snapshot.workflowId,
+            snapshot.versionId,
+            JSON.stringify(triggerInput),
+          );
+        const triggerId = randomUUID();
+        const output = envelope(triggerInput);
         this.db
           .prepare(
-            "INSERT INTO node_executions (id, run_id, node_id, sequence, input_json, state, output_json, started_at, finished_at, revision) VALUES (?, ?, 'start', 1, ?, 'COMPLETED', ?, ?, ?, 0)",
+            "INSERT INTO node_executions (id, run_id, node_id, node_type, sequence, input_json, state, output_json, selected_port, started_at, finished_at, revision) VALUES (?, ?, ?, ?, 1, ?, 'COMPLETED', ?, 'success', ?, ?, 0)",
           )
-          .run(trigger, runId, input, input, now, now);
-        this.db
-          .prepare(
-            "INSERT INTO node_executions (id, run_id, node_id, sequence, predecessor_execution_id, input_json, state, revision) VALUES (?, ?, 'agent', 2, ?, ?, 'PENDING', 0)",
-          )
-          .run(randomUUID(), runId, trigger, input);
-        this.#event('run.created', { runId }, { goal: snapshot.agent.goal });
+          .run(
+            triggerId,
+            runId,
+            entry.id,
+            entry.type,
+            JSON.stringify(output),
+            JSON.stringify(output),
+            now,
+            now,
+          );
+        this.#event('run.created', { runId }, { versionId: snapshot.versionId });
+        this.#schedule(runId, snapshot, { id: triggerId, nodeId: entry.id }, 'success', output);
       })
       .immediate();
     return runId;
   }
 
-  pendingAgentExecutions(): string[] {
+  // Follows the selected port's single connection: a successor activation, a leaf completion, or
+  // an owner decision when an execution limit is reached. Called inside the completing transaction.
+  #schedule(
+    runId: string,
+    snapshot: RunSnapshot,
+    from: { id: string; nodeId: string },
+    port: string,
+    output: OutputEnvelope,
+  ): void {
+    const now = this.clock.now();
+    const connection = snapshot.document.connections.find(
+      (candidate) => candidate.fromNodeId === from.nodeId && candidate.fromPort === port,
+    );
+    if (!connection) {
+      // A selected port without an edge is a successful leaf.
+      this.#finishRun(runId, 'COMPLETED', { data: output.data });
+      return;
+    }
+    const target = snapshot.document.nodes.find((node) => node.id === connection.toNodeId)!;
+    const counts = this.db
+      .prepare(
+        'SELECT COUNT(*) AS total, SUM(node_id = ?) AS node, MAX(sequence) AS sequence FROM node_executions WHERE run_id = ?',
+      )
+      .get(target.id, runId) as { total: number; node: number | null; sequence: number };
+    const limit =
+      counts.total >= snapshot.document.execution.limits.maxExecutions
+        ? `The run reached its limit of ${snapshot.document.execution.limits.maxExecutions} executions.`
+        : (counts.node ?? 0) >= target.limits.maxExecutionsPerRun
+          ? `Node ${target.id} reached its limit of ${target.limits.maxExecutionsPerRun} executions.`
+          : null;
+    if (limit) {
+      // Exhaustion enters NEEDS_HUMAN before another activation (specification 6.7).
+      this.db
+        .prepare(
+          "UPDATE runs SET state = 'NEEDS_HUMAN', attention_json = ?, revision = revision + 1 WHERE id = ?",
+        )
+        .run(JSON.stringify({ code: 'EXECUTION_LIMIT', explanation: limit }), runId);
+      this.#event('run.needs_human', { runId, executionId: from.id }, { code: 'EXECUTION_LIMIT' });
+      return;
+    }
+    const id = randomUUID();
+    this.db
+      .prepare(
+        "INSERT INTO node_executions (id, run_id, node_id, node_type, sequence, predecessor_execution_id, incoming_connection_id, input_json, state, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', 0)",
+      )
+      .run(
+        id,
+        runId,
+        target.id,
+        target.type,
+        counts.sequence + 1,
+        from.id,
+        connection.id,
+        JSON.stringify(output),
+      );
+    this.#event('execution.scheduled', { runId, executionId: id }, { nodeId: target.id, at: now });
+  }
+
+  #finishRun(runId: string, state: 'COMPLETED' | 'FAILED', outcome: Json): void {
+    this.db
+      .prepare(
+        'UPDATE runs SET state = ?, outcome_json = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
+      )
+      .run(state, JSON.stringify(outcome), this.clock.now(), runId);
+    this.#event(state === 'COMPLETED' ? 'run.completed' : 'run.failed', { runId }, outcome);
+  }
+
+  pendingExecutions(): Array<{ id: string; nodeType: string }> {
     return (
       this.db
         .prepare(
-          "SELECT e.id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.state = 'PENDING' AND e.node_id = 'agent' AND r.state = 'RUNNING' ORDER BY r.created_at",
+          "SELECT e.id, e.node_type, e.node_id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.state = 'PENDING' AND r.state = 'RUNNING' ORDER BY r.created_at, e.sequence",
         )
-        .all() as Array<{ id: string }>
-    ).map((row) => row.id);
+        .all() as Array<{ id: string; node_type: string | null; node_id: string }>
+    ).map((row) => ({ id: row.id, nodeType: row.node_type ?? row.node_id }));
   }
 
   claimAttempt(executionId: string, workerGeneration: string): Claim | null {
@@ -211,7 +384,86 @@ export class RunRepository {
     const row = this.db.prepare('SELECT snapshot_json FROM runs WHERE id = ?').get(runId) as
       { snapshot_json: string } | undefined;
     if (!row) throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
-    return JSON.parse(row.snapshot_json) as RunSnapshot;
+    return upgradeSnapshot(JSON.parse(row.snapshot_json) as RunSnapshot | LegacySnapshot);
+  }
+
+  execution(executionId: string): ExecutionContext {
+    const row = this.db
+      .prepare(
+        'SELECT e.run_id, e.node_id, e.input_json, e.config_json, e.bindings_json, e.predecessor_execution_id FROM node_executions e WHERE e.id = ?',
+      )
+      .get(executionId) as
+      | {
+          run_id: string;
+          node_id: string;
+          input_json: string;
+          config_json: string | null;
+          bindings_json: string | null;
+          predecessor_execution_id: string | null;
+        }
+      | undefined;
+    if (!row) throw new ShiftError('NOT_FOUND', 'Execution not found.', 404);
+    const snapshot = this.snapshot(row.run_id);
+    const node = snapshot.document.nodes.find((candidate) => candidate.id === row.node_id);
+    if (!node) throw new ShiftError('INTERNAL_ERROR', 'The execution names an unknown node.');
+    const chain: ChainEntry[] = [];
+    const previous = this.db.prepare(
+      'SELECT id, node_id, sequence, state, output_json, predecessor_execution_id FROM node_executions WHERE id = ?',
+    );
+    let cursor = row.predecessor_execution_id;
+    while (cursor) {
+      const entry = previous.get(cursor) as {
+        node_id: string;
+        sequence: number;
+        state: string;
+        output_json: string | null;
+        predecessor_execution_id: string | null;
+      };
+      // Failed results stay in history but never become `latest` successful output.
+      if (entry.state === 'COMPLETED' && entry.output_json) {
+        chain.push({
+          nodeId: entry.node_id,
+          sequence: entry.sequence,
+          output: JSON.parse(entry.output_json) as OutputEnvelope,
+        });
+      }
+      cursor = entry.predecessor_execution_id;
+    }
+    return {
+      runId: row.run_id,
+      executionId,
+      node,
+      input: JSON.parse(row.input_json) as OutputEnvelope,
+      snapshot,
+      config: parse<Json>(row.config_json),
+      bindings: parse<Record<string, Json>>(row.bindings_json),
+      chain,
+    };
+  }
+
+  // Bindings and resolved configuration are frozen once; recovery reuses them instead of resolving
+  // newer data again (specification 6.3).
+  prepareExecution(claim: Claim, prepared: { config: Json; bindings: Record<string, Json> }): void {
+    this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        this.db
+          .prepare(
+            'UPDATE node_executions SET config_json = ?, bindings_json = ?, revision = revision + 1 WHERE id = ? AND config_json IS NULL',
+          )
+          .run(
+            JSON.stringify(prepared.config),
+            JSON.stringify(prepared.bindings),
+            claim.executionId,
+          );
+      })
+      .immediate();
+  }
+
+  agentConfig(executionId: string): AgentConfig {
+    const config = this.execution(executionId).config;
+    if (!config) throw new ShiftError('INTERNAL_ERROR', 'The agent execution was not prepared.');
+    return config as unknown as AgentConfig;
   }
 
   session(executionId: string): SessionRow | null {
@@ -441,7 +693,7 @@ export class RunRepository {
       input: unknown;
     },
     judge: (
-      snapshot: RunSnapshot,
+      config: AgentConfig,
       input: unknown,
     ) => { accepted: true; envelope: ResultEnvelope } | { accepted: false; reason: string },
   ): { accepted: true } | { accepted: false; reason: string } {
@@ -472,15 +724,15 @@ export class RunRepository {
             'SELECT SUM(accepted) AS accepted, SUM(1 - accepted) AS rejected FROM agent_result_submissions WHERE invocation_id = ?',
           )
           .get(active.id) as { accepted: number | null; rejected: number | null };
-        const snapshot = this.snapshot(active.run_id);
+        const config = this.agentConfig(active.execution_id);
         let verdict:
           { accepted: true; envelope: ResultEnvelope } | { accepted: false; reason: string };
         if (counts.accepted) {
           verdict = { accepted: false, reason: 'a result was already accepted; end your turn' };
-        } else if ((counts.rejected ?? 0) >= snapshot.agent.limits.rejectedSubmissions) {
+        } else if ((counts.rejected ?? 0) >= config.limits.rejectedSubmissions) {
           verdict = { accepted: false, reason: 'too many rejected results; end your turn' };
         } else {
-          verdict = judge(snapshot, submission.input);
+          verdict = judge(config, submission.input);
         }
         this.db
           .prepare(
@@ -513,48 +765,81 @@ export class RunRepository {
       .immediate();
   }
 
-  // Completion and the successor commit together: a completed agent node advances to the end node
-  // and completes the run in the same transaction.
-  finishAgent(claim: Claim, outcome: AgentOutcome): void {
+  // Completion and scheduling the successor are one transaction (specification 4.2). An End node
+  // finishes the run with its declared outcome. A failure follows the node's `error` connection
+  // when there is one, carrying a machine-readable error envelope; otherwise the run fails.
+  completeExecution(claim: Claim, outcome: ExecutionOutcome): void {
     this.db
       .transaction(() => {
         this.#fenced(claim);
         const now = this.clock.now();
+        const context = this.execution(claim.executionId);
+        const { node, snapshot } = context;
         const completed = outcome.kind === 'completed';
-        const output = completed ? JSON.stringify({ data: outcome.data }) : null;
-        const error = completed ? null : JSON.stringify(outcome.error);
+        const output = completed ? outcome.output : null;
+        const error = completed ? null : outcome.error;
         this.db
           .prepare(
             'UPDATE node_attempts SET state = ?, finished_at = ?, error_json = ? WHERE id = ?',
           )
-          .run(completed ? 'COMPLETED' : 'FAILED', now, error, claim.attemptId);
+          .run(
+            completed ? 'COMPLETED' : 'FAILED',
+            now,
+            error && JSON.stringify(error),
+            claim.attemptId,
+          );
         this.db
           .prepare(
-            'UPDATE node_executions SET state = ?, output_json = ?, error_json = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
+            'UPDATE node_executions SET state = ?, output_json = ?, error_json = ?, selected_port = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
           )
-          .run(completed ? 'COMPLETED' : 'FAILED', output, error, now, claim.executionId);
+          .run(
+            completed ? 'COMPLETED' : 'FAILED',
+            output && JSON.stringify(output),
+            error && JSON.stringify(error),
+            completed ? outcome.port : null,
+            now,
+            claim.executionId,
+          );
         this.db
           .prepare(
-            "UPDATE agent_sessions SET state = 'ARCHIVED', archived_at = ?, revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?)",
+            "UPDATE agent_sessions SET state = 'ARCHIVED', archived_at = ?, revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?) AND lifetime = 'ephemeral'",
           )
           .run(now, claim.executionId);
-        if (completed) {
-          this.db
-            .prepare(
-              "INSERT INTO node_executions (id, run_id, node_id, sequence, predecessor_execution_id, input_json, state, output_json, started_at, finished_at, revision) VALUES (?, ?, 'end', 3, ?, ?, 'COMPLETED', ?, ?, ?, 0)",
-            )
-            .run(randomUUID(), claim.runId, claim.executionId, output, output, now, now);
-        }
-        this.db
-          .prepare(
-            'UPDATE runs SET state = ?, outcome_json = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
-          )
-          .run(completed ? 'COMPLETED' : 'FAILED', completed ? output : error, now, claim.runId);
         this.#event(
-          completed ? 'run.completed' : 'run.failed',
+          completed ? 'execution.completed' : 'execution.failed',
           { runId: claim.runId, executionId: claim.executionId },
-          completed ? {} : (outcome.error as Json),
+          completed ? { port: outcome.port } : (error as unknown as Json),
         );
+        const from = { id: claim.executionId, nodeId: node.id };
+        if (completed) {
+          if (node.type === 'end') {
+            const config = (node.config ?? {}) as {
+              outcome?: 'COMPLETED' | 'FAILED';
+              reason?: string;
+            };
+            this.#finishRun(claim.runId, config.outcome ?? 'COMPLETED', {
+              data: outcome.output.data,
+              ...(config.reason === undefined ? {} : { reason: config.reason }),
+            });
+          } else {
+            this.#schedule(claim.runId, snapshot, from, outcome.port, outcome.output);
+          }
+          return;
+        }
+        const handled = snapshot.document.connections.some(
+          (connection) => connection.fromNodeId === node.id && connection.fromPort === 'error',
+        );
+        if (handled) {
+          this.#schedule(
+            claim.runId,
+            snapshot,
+            from,
+            'error',
+            envelope({ error: { ...outcome.error } as Json }, context.input),
+          );
+        } else {
+          this.#finishRun(claim.runId, 'FAILED', outcome.error as unknown as Json);
+        }
       })
       .immediate();
   }
@@ -606,13 +891,15 @@ export class RunRepository {
     if (!run) throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
     const executions = this.db
       .prepare(
-        'SELECT id, node_id, sequence, state, output_json, error_json FROM node_executions WHERE run_id = ? ORDER BY sequence',
+        'SELECT id, node_id, node_type, sequence, state, selected_port, output_json, error_json FROM node_executions WHERE run_id = ? ORDER BY sequence',
       )
       .all(runId) as Array<{
       id: string;
       node_id: string;
+      node_type: string | null;
       sequence: number;
       state: string;
+      selected_port: string | null;
       output_json: string | null;
       error_json: string | null;
     }>;
@@ -628,12 +915,14 @@ export class RunRepository {
       submissions: number;
       accepted: number;
     }>;
-    const snapshot = JSON.parse(run.snapshot_json) as RunSnapshot;
+    const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,
       state: run.state,
-      goal: snapshot.agent.goal,
-      cwd: snapshot.agent.cwd,
+      workflowId: snapshot.workflowId,
+      versionId: snapshot.versionId,
+      versionNumber: snapshot.versionNumber,
+      repository: snapshot.project.repositoryPath,
       attention: parse<Json>(run.attention_json),
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,
@@ -641,8 +930,10 @@ export class RunRepository {
       executions: executions.map((execution) => ({
         id: execution.id,
         node: execution.node_id,
+        type: execution.node_type ?? execution.node_id,
         sequence: execution.sequence,
         state: execution.state,
+        port: execution.selected_port,
         output: parse<Json>(execution.output_json),
         error: parse<Json>(execution.error_json),
       })),
@@ -661,17 +952,19 @@ export class RunRepository {
     return (
       this.db
         .prepare(
-          'SELECT id, state, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT 100',
+          'SELECT id, state, workflow_id, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT 100',
         )
         .all() as Array<{
         id: string;
         state: string;
+        workflow_id: string | null;
         created_at: number;
         finished_at: number | null;
       }>
     ).map((run) => ({
       id: run.id,
       state: run.state,
+      workflowId: run.workflow_id,
       createdAt: run.created_at,
       finishedAt: run.finished_at,
     }));

@@ -20,7 +20,7 @@ corepack enable
 pnpm install
 ```
 
-The server foundation, a disconnected Electron shell, and a first end-to-end agent run (manual start → OpenCode agent → end, durable across crashes of either process) are implemented. See [agent runs](apps/server/README.md#agent-runs). Verify both workspaces and run an isolated headless server smoke demonstration:
+The server foundation, a disconnected Electron shell, projects, versioned workflow definitions, and a durable executor for trigger, transform, OpenCode agent and end nodes (surviving crashes of either process) are implemented. See [workflows and runs](apps/server/README.md#workflows-and-runs). Verify both workspaces and run an isolated headless server smoke demonstration:
 
 ```sh
 pnpm check

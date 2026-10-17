@@ -285,3 +285,24 @@ A Shift restart reaps the previous OpenCode runtime rather than reconnecting, be
 The result envelope validator is a separate Ajv instance with strict-mode lints off and `ajv-formats` loaded: author schemas are ordinary 2020-12 documents (union types, formats), and every schema is still checked against the meta-schema. Request validation keeps strict mode.
 
 End-to-end crash tests use a scripted OpenCode stand-in (`test/fixtures/fake-opencode-agent.mjs`) that implements the adapter's session routes, persists sessions across restarts, runs detached tool processes and calls Shift's real result endpoint. It lets CI kill real `shift serve` and harness processes without model calls; the opt-in `test:opencode` suite repeats the key cases against real OpenCode.
+
+## Job queue adoption probe
+
+Reviewed 2026-10-17 against Queuert 0.16.0 and `@queuert/sqlite` 0.16.0 (published 2026-10-05), the strongest candidate the preflight review named, using its own better-sqlite3 example as the provider. The rerunnable probe is [`apps/server/tools/queue-probe/queuert-probe.mjs`](../apps/server/tools/queue-probe/queuert-probe.mjs). Results against the preflight gate:
+
+1. Domain state and a job commit and roll back together: **passes**.
+2. Every Queuert mutation must run inside its asynchronous `withTransaction`, with all database access behind a process-wide `AsyncRwLock`. An ordinary synchronous Shift transaction that ran while a Queuert transaction was open raised no error: better-sqlite3 nested it as a savepoint, and its committed-looking row was lost when the unrelated outer transaction rolled back. Adoption would require converting every Shift repository transaction to the asynchronous locked form, which specification section 10 rules out (synchronous transactions, nothing awaited inside them). **Fails.**
+3. After a worker was killed during a staged attempt, a restarted worker with a 1-second attempt timeout did not reclaim the job within 20 seconds, so Shift's fenced attempts and harness reconciliation would still be required. Jobs have backoff but no attempt limit. **Not satisfied.**
+4. The SQLite adapter is labelled experimental, with API changes possible between minor versions.
+
+Decision: keep Shift's own synchronous store. Pending executions and running attempts remain the durable cursor, claimed with fences on the same connection as state, events and receipts. A `durable_jobs` table for deadlines and backoff arrives with the first delayed work (retries in M04b, timers in M04c). BoringNode queue was not probed: its documented Knex/Kysely adapters are asynchronous as well, so it meets the same transaction obstacle.
+
+## Definitions and the general executor
+
+Reviewed 2026-10-17. Migration 0002 adds `projects`, `workflows`, `workflow_versions` and `command_receipts`, plus run and execution columns for the version, trigger input, node type, incoming connection, frozen configuration, bindings and selected port. Database triggers reject updates and deletes of published versions, so immutability does not depend on repository discipline. The `workflow_nodes` and `workflow_connections` projections of specification section 10 are deferred: the document is authoritative, nothing queries the projection yet, and adding it later is a data migration of immutable documents.
+
+Validation uses Ajv for structure and node configuration, then semantic checks: registered type versions, exactly one manual trigger, one connection per port, no connections into the entry node, declared bindings for every template placeholder, existing node references, explicit fallbacks for optional references, and the 1 MiB and depth-32 limits. Features of later milestones (run variables, retries, overlap policies, existing workspaces) are rejected when publishing instead of being stored and ignored. Drafts may be invalid; only publishing validates. Hashes use canonical JSON, so key order does not create new versions.
+
+Transform templates use `{"$binding": "<name>"}` objects and agent goals `{{name}}` placeholders; neither evaluates expressions. The specification's bounded arithmetic and array operations for Transform are deferred until a workflow needs them. Bindings resolve once per execution against the predecessor chain and are stored with it; recovery reuses them. Agent configuration is resolved at the same point (rendered goal, model from the node or the server default, project checkout as the working directory) and is what result validation and limits read.
+
+Command receipts commit with their mutation. A replay returns the stored status and body; the same command ID with a different request is a 409; a failed command stores nothing. The CLI generates a command ID per invocation and retries a transport failure once with it. `execution.limits.maxActiveMs` is validated but not yet enforced; active-time accounting arrives with M04b.

@@ -17,7 +17,11 @@ import type {
 } from '../src/harness/types.js';
 import { createLogger } from '../src/logging.js';
 import { openStore, type Store } from '../src/persistence/store.js';
+import type { Json } from '../src/harness/types.js';
+import { CommandReceipts } from '../src/persistence/receipts.js';
 import { RunEngine } from '../src/runs/engine.js';
+import { normalizeDocument } from '../src/workflows/document.js';
+import { DefinitionRepository } from '../src/workflows/repository.js';
 import { StaleClaim } from '../src/runs/repository.js';
 import { FakeClock, eventually, temporaryState } from './helpers.js';
 
@@ -168,6 +172,7 @@ const complete =
 interface Harnessed {
   store: Store;
   engine: RunEngine;
+  definitions: DefinitionRepository;
   fake: FakeHarness;
   repository: string;
   state: string;
@@ -184,8 +189,11 @@ async function engineFor(
   const store = await openStore({ stateDirectory: state, clock: new FakeClock() });
   const fake = existing?.fake ?? new FakeHarness(behave);
   fake.behave = behave;
+  const definitions = new DefinitionRepository(store.db, new FakeClock());
   const engine = new RunEngine({
     store,
+    definitions,
+    receipts: new CommandReceipts(store.db, new FakeClock()),
     clock: new FakeClock(),
     logger: createLogger('silent'),
     adapter: fake,
@@ -198,6 +206,7 @@ async function engineFor(
   return {
     store,
     engine,
+    definitions,
     fake,
     repository,
     state,
@@ -238,19 +247,58 @@ async function settled(harnessed: Harnessed, id: string): Promise<RunView> {
   });
 }
 
-async function start(harnessed: Harnessed, extra: Record<string, unknown> = {}): Promise<string> {
-  const run = (await harnessed.engine.createRun({
-    goal: 'Count the words.',
-    repository: harnessed.repository,
-    resultSchema: {
-      type: 'object',
-      required: ['count'],
-      properties: { count: { type: 'integer' } },
-      additionalProperties: false,
-    },
-    ...extra,
-  })) as { id: string };
-  return run.id;
+// Publishes a start -> agent -> end workflow, then starts it.
+async function publish(
+  harnessed: Pick<Harnessed, 'definitions' | 'repository'>,
+  document: Json,
+): Promise<string> {
+  const projects = harnessed.definitions.projects();
+  const project =
+    projects[0] ??
+    harnessed.definitions.addProject({
+      name: 'repo',
+      repositoryPath: harnessed.repository,
+      baseRef: 'main',
+    });
+  const workflow = harnessed.definitions.createWorkflow({
+    projectId: project.id,
+    name: `workflow-${Math.random().toString(36).slice(2)}`,
+    draft: normalizeDocument(document) as Json,
+  }) as { id: string };
+  harnessed.definitions.publish(workflow.id);
+  return workflow.id;
+}
+
+const agentWorkflow = (agent: Record<string, unknown> = {}): Json =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      {
+        id: 'agent',
+        type: 'agent',
+        config: {
+          goal: 'Count the words.',
+          resultSchema: {
+            type: 'object',
+            required: ['count'],
+            properties: { count: { type: 'integer' } },
+            additionalProperties: false,
+          },
+          ...agent,
+        },
+      },
+      { id: 'end', type: 'end' },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'agent', toPort: 'input' },
+      { id: 'c2', fromNodeId: 'agent', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+    ],
+  }) as Json;
+
+async function start(harnessed: Harnessed, agent: Record<string, unknown> = {}): Promise<string> {
+  const workflowId = await publish(harnessed, agentWorkflow(agent));
+  const response = harnessed.engine.startRun({ workflowId });
+  return (response.body as { run: { id: string } }).run.id;
 }
 
 test('a completed result advances to the end node in the same commit', async () => {
@@ -267,7 +315,12 @@ test('a completed result advances to the end node in the same commit', async () 
         ['end', 'COMPLETED'],
       ],
     );
-    assert.deepEqual(run.executions[2]!.output, { data: { count: 3 } });
+    const output = run.executions[2]!.output as {
+      data: unknown;
+      references: { agentSession?: { kind: string } };
+    };
+    assert.deepEqual(output.data, { count: 3 });
+    assert.equal(output.references.agentSession?.kind, 'agent_session');
     assert.deepEqual(
       run.invocations.map((invocation) => [invocation.kind, invocation.state]),
       [['goal', 'COMPLETED']],
@@ -586,7 +639,12 @@ test('a stale claim cannot advance the run after recovery reclaims its attempt',
     const [fresh] = repository.reclaimOrphanedAttempts('another-generation');
     assert.equal(fresh!.fence, stale!.fence + 1);
     assert.throws(
-      () => repository.finishAgent(stale!, { kind: 'completed', data: {} }),
+      () =>
+        repository.completeExecution(stale!, {
+          kind: 'completed',
+          output: { data: {}, references: { artifacts: [] }, context: { handoffs: [] } },
+          port: 'success',
+        }),
       StaleClaim,
     );
     assert.equal(view(harnessed, runId).state, 'RUNNING');
@@ -598,18 +656,22 @@ test('a stale claim cannot advance the run after recovery reclaims its attempt',
 test('run requests are validated before anything is stored', async () => {
   const harnessed = await engineFor(() => {});
   try {
-    await assert.rejects(harnessed.engine.createRun({ goal: '' }), { code: 'INVALID_REQUEST' });
-    await assert.rejects(harnessed.engine.createRun({ goal: 'x', repository: 'relative/path' }), {
-      code: 'INVALID_REQUEST',
+    assert.throws(() => harnessed.engine.startRun({}), { code: 'INVALID_REQUEST' });
+    assert.throws(() => harnessed.engine.startRun({ workflowId: 'missing' }), {
+      code: 'NOT_FOUND',
     });
-    await assert.rejects(
-      harnessed.engine.createRun({
-        goal: 'x',
-        repository: harnessed.repository,
-        resultSchema: { type: 'nonsense' },
-      }),
-      { code: 'INVALID_RESULT_SCHEMA' },
-    );
+    const draftOnly = harnessed.definitions.createWorkflow({
+      projectId: harnessed.definitions.addProject({
+        name: 'repo',
+        repositoryPath: harnessed.repository,
+        baseRef: 'main',
+      }).id,
+      name: 'draft only',
+      draft: normalizeDocument(agentWorkflow()) as Json,
+    }) as { id: string };
+    assert.throws(() => harnessed.engine.startRun({ workflowId: draftOnly.id }), {
+      code: 'WORKFLOW_UNPUBLISHED',
+    });
     assert.deepEqual(harnessed.engine.repository.runs(), []);
   } finally {
     await harnessed.close();
@@ -685,6 +747,361 @@ test('result schemas with local references validate at their own root', async ()
     );
     assert.equal(run.state, 'COMPLETED');
     assert.deepEqual(run.outcome, { data: 3 });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+const connect = (id: string, from: string, to: string, port = 'success') => ({
+  id,
+  fromNodeId: from,
+  fromPort: port,
+  toNodeId: to,
+  toPort: 'input',
+});
+
+// The start response is the stored creation receipt; inline nodes have run by the time it returns.
+const startNow = (harnessed: Harnessed, workflowId: string, extra: Record<string, unknown> = {}) =>
+  view(
+    harnessed,
+    (harnessed.engine.startRun({ workflowId, ...extra }).body as { run: RunView }).run.id,
+  );
+
+test('transform nodes publish data built from every binding source', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'greet',
+          type: 'transform',
+          config: {
+            data: {
+              message: { $binding: 'name' },
+              first: { $binding: 'first' },
+              repo: { $binding: 'repo' },
+              constant: { $binding: 'constant' },
+            },
+          },
+          bindings: {
+            name: { kind: 'trigger', path: ['name'] },
+            first: { kind: 'input', path: ['data', 'items', '0'] },
+            repo: { kind: 'project', path: ['repositoryPath'] },
+            constant: { kind: 'literal', value: 7 },
+          },
+        },
+        {
+          id: 'echo',
+          type: 'transform',
+          config: { data: { echo: { $binding: 'earlier' } } },
+          bindings: {
+            earlier: {
+              kind: 'node',
+              nodeId: 'greet',
+              execution: 'latest',
+              path: ['data', 'message'],
+            },
+          },
+        },
+        { id: 'end', type: 'end' },
+      ],
+      connections: [
+        connect('c1', 'start', 'greet'),
+        connect('c2', 'greet', 'echo'),
+        connect('c3', 'echo', 'end'),
+      ],
+    } as Json);
+    const run = startNow(harnessed, workflowId, { input: { name: 'Ada', items: [42] } });
+    assert.equal(run.state, 'COMPLETED', 'inline nodes finish before the start command returns');
+    assert.deepEqual(run.outcome, { data: { echo: 'Ada' } });
+    assert.deepEqual((run.executions[1]!.output as { data: unknown }).data, {
+      message: 'Ada',
+      first: 42,
+      repo: harnessed.repository,
+      constant: 7,
+    });
+    assert.deepEqual(
+      run.executions.map((execution) => [execution.node, execution.state]),
+      [
+        ['start', 'COMPLETED'],
+        ['greet', 'COMPLETED'],
+        ['echo', 'COMPLETED'],
+        ['end', 'COMPLETED'],
+      ],
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a selected port without a connection completes the run as a leaf', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'only', type: 'transform', config: { data: { done: true } } },
+      ],
+      connections: [connect('c1', 'start', 'only')],
+    } as Json);
+    const run = startNow(harnessed, workflowId);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { done: true } });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an End node can declare a failed outcome with a reason', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'end', type: 'end', config: { outcome: 'FAILED', reason: 'Nothing to do.' } },
+      ],
+      connections: [connect('c1', 'start', 'end')],
+    } as Json);
+    const run = startNow(harnessed, workflowId, { input: { x: 1 } });
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(run.outcome, { data: { x: 1 }, reason: 'Nothing to do.' });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a missing binding fails the node, and an error connection routes the failure', async () => {
+  const harnessed = await engineFor(() => {});
+  const document = (handled: boolean) =>
+    ({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'pick',
+          type: 'transform',
+          config: { data: { $binding: 'missing' } },
+          bindings: { missing: { kind: 'trigger', path: ['absent'] } },
+        },
+        {
+          id: 'recover',
+          type: 'transform',
+          config: { data: { recovered: { $binding: 'code' } } },
+          bindings: { code: { kind: 'input', path: ['data', 'error', 'code'] } },
+        },
+      ],
+      connections: [
+        connect('c1', 'start', 'pick'),
+        ...(handled ? [connect('c2', 'pick', 'recover', 'error')] : []),
+      ],
+    }) as Json;
+  try {
+    const unhandled = startNow(harnessed, await publish(harnessed, document(false)));
+    assert.equal(unhandled.state, 'FAILED');
+    assert.equal((unhandled.outcome as { code: string }).code, 'BINDING_MISSING');
+    const handled = startNow(harnessed, await publish(harnessed, document(true)));
+    assert.equal(handled.state, 'COMPLETED');
+    assert.deepEqual(handled.outcome, { data: { recovered: 'BINDING_MISSING' } });
+    assert.equal(handled.executions[1]!.state, 'FAILED', 'the failed execution stays in history');
+    assert.equal(handled.executions[1]!.error?.category, 'input');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an agent blocker can be routed through its error connection', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    await fake.submitResult(turn, {
+      status: 'blocked',
+      blocker: { code: 'MISSING_INPUT', message: 'No spec.' },
+    });
+    turn.status = 'ended';
+  });
+  try {
+    const document = agentWorkflow() as { nodes: Json[]; connections: Json[] };
+    document.nodes.push({
+      id: 'triage',
+      type: 'transform',
+      config: { data: { blocked: { $binding: 'code' } } },
+      bindings: { code: { kind: 'input', path: ['data', 'error', 'code'] } },
+    } as Json);
+    document.connections.push(connect('c3', 'agent', 'triage', 'error') as Json);
+    const workflowId = await publish(harnessed, document as unknown as Json);
+    const run = await settled(harnessed, startNow(harnessed, workflowId).id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { blocked: 'MISSING_INPUT' } });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a loop stops for an owner decision at its execution limit', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'again',
+          type: 'transform',
+          limits: { maxExecutionsPerRun: 3 },
+          config: { data: { previous: { $binding: 'previous' } } },
+          bindings: {
+            previous: {
+              kind: 'node',
+              nodeId: 'again',
+              execution: 'latest',
+              path: ['data'],
+              optional: true,
+              fallback: 'none',
+            },
+          },
+        },
+      ],
+      connections: [connect('c1', 'start', 'again'), connect('c2', 'again', 'again')],
+    } as Json);
+    const run = startNow(harnessed, workflowId);
+    assert.equal(run.state, 'NEEDS_HUMAN');
+    assert.equal(run.attention?.code, 'EXECUTION_LIMIT');
+    const passes = run.executions.filter((execution) => execution.node === 'again');
+    assert.deepEqual(
+      passes.map((execution) => (execution.output as { data: unknown }).data),
+      [
+        { previous: 'none' },
+        { previous: { previous: 'none' } },
+        { previous: { previous: { previous: 'none' } } },
+      ],
+      '`latest` reads the previous pass; the first pass uses the fallback',
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a repeated start command returns the same run', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [{ id: 'start', type: 'manual_trigger' }],
+      connections: [],
+    } as Json);
+    const first = startNow(harnessed, workflowId, {
+      commandId: 'start-command-1',
+      input: { a: 1 },
+    });
+    const again = startNow(harnessed, workflowId, {
+      commandId: 'start-command-1',
+      input: { a: 1 },
+    });
+    assert.equal(again.id, first.id);
+    assert.equal((harnessed.engine.repository.runs() as unknown[]).length, 1);
+    assert.throws(
+      () =>
+        harnessed.engine.startRun({ workflowId, commandId: 'start-command-1', input: { a: 2 } }),
+      { code: 'COMMAND_CONFLICT' },
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('runs keep the version they started with after a new version is published', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const document = (value: string) =>
+      ({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          { id: 'value', type: 'transform', config: { data: value } },
+        ],
+        connections: [connect('c1', 'start', 'value')],
+      }) as Json;
+    const workflowId = await publish(harnessed, document('v1'));
+    const first = startNow(harnessed, workflowId);
+    const workflow = harnessed.definitions.workflow(workflowId) as { draftRevision: number };
+    harnessed.definitions.saveDraft(
+      workflowId,
+      workflow.draftRevision,
+      normalizeDocument(document('v2')) as Json,
+    );
+    harnessed.definitions.publish(workflowId);
+    const second = startNow(harnessed, workflowId);
+    const stored = view(harnessed, first.id) as RunView & { versionNumber: number };
+    assert.equal(stored.versionNumber, 1);
+    assert.deepEqual(stored.outcome, { data: 'v1' });
+    assert.equal((second as RunView & { versionNumber: number }).versionNumber, 2);
+    assert.deepEqual(second.outcome, { data: 'v2' });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('trigger input is validated against the trigger schema and rendered into the goal', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const document = agentWorkflow({
+      goal: 'Count the words in {{file}}.',
+    }) as { nodes: Array<Record<string, unknown>> };
+    document.nodes[0] = {
+      id: 'start',
+      type: 'manual_trigger',
+      config: {
+        inputSchema: {
+          type: 'object',
+          required: ['file'],
+          properties: { file: { type: 'string' } },
+        },
+      },
+    };
+    document.nodes[1]!['bindings'] = { file: { kind: 'trigger', path: ['file'] } };
+    const workflowId = await publish(harnessed, document as unknown as Json);
+    assert.throws(() => harnessed.engine.startRun({ workflowId, input: { file: 3 } }), {
+      code: 'INVALID_INPUT',
+    });
+    const run = await settled(
+      harnessed,
+      startNow(harnessed, workflowId, { input: { file: 'notes.txt' } }).id,
+    );
+    assert.equal(run.state, 'COMPLETED');
+    assert.match([...harnessed.fake.turns.values()][0]!.prompt, /Count the words in notes\.txt\./);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a run stored by the fixed-graph slice still finishes after the upgrade', async () => {
+  const harnessed = await engineFor(complete({ count: 5 }));
+  try {
+    // The exact rows the previous release wrote: a legacy snapshot and a pending agent execution.
+    const db = harnessed.store.db;
+    const input = JSON.stringify({ data: { goal: 'Count the words.' } });
+    db.prepare(
+      "INSERT INTO runs (id, snapshot_json, state, revision, created_at) VALUES ('legacy', ?, 'RUNNING', 0, 1)",
+    ).run(
+      JSON.stringify({
+        graph: { nodes: [], connections: [] },
+        agent: {
+          goal: 'Count the words.',
+          cwd: harnessed.repository,
+          model: { providerID: 'fake', id: 'model' },
+          toolPolicy: { mode: 'read_only' },
+          resultSchema: { type: 'object' },
+          limits: { rejectedSubmissions: 3, corrections: 2, continuations: 2 },
+        },
+      }),
+    );
+    db.prepare(
+      "INSERT INTO node_executions (id, run_id, node_id, sequence, input_json, state, output_json, revision) VALUES ('legacy-start', 'legacy', 'start', 1, ?, 'COMPLETED', ?, 0)",
+    ).run(input, input);
+    db.prepare(
+      "INSERT INTO node_executions (id, run_id, node_id, sequence, predecessor_execution_id, input_json, state, revision) VALUES ('legacy-agent', 'legacy', 'agent', 2, 'legacy-start', ?, 'PENDING', 0)",
+    ).run(input);
+    const run = await eventually(() => {
+      const current = view(harnessed, 'legacy');
+      return current.state === 'RUNNING' ? undefined : current;
+    }, 15_000);
+    assert.equal(run.state, 'COMPLETED', JSON.stringify(run.outcome));
+    assert.deepEqual(run.outcome, { data: { count: 5 } });
   } finally {
     await harnessed.close();
   }
