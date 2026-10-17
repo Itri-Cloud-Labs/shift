@@ -1,0 +1,6 @@
+{
+  "name": "shift-opencode-probe-plugin",
+  "private": true,
+  "type": "module",
+  "exports": "./index.mjs"
+}
