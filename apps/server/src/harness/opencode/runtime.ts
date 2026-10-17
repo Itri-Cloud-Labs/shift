@@ -71,6 +71,7 @@ export class OpenCodeRuntime {
   #current: Running | null = null;
   #starting: Promise<Running> | null = null;
   #cleanup: Promise<void> = Promise.resolve();
+  #closed = false;
   readonly #lostListeners: Array<(generation: number) => void> = [];
 
   constructor(options: OpenCodeRuntimeOptions) {
@@ -88,6 +89,10 @@ export class OpenCodeRuntime {
   }
 
   async ensure(): Promise<RuntimeGeneration> {
+    // After stop(), a task still finishing its cancellation must not start a new runtime.
+    if (this.#closed) {
+      throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
+    }
     if (this.#current) return this.#current;
     this.#starting ??= this.#start().finally(() => {
       this.#starting = null;
@@ -129,7 +134,9 @@ export class OpenCodeRuntime {
     }
   }
 
+  // Permanent: the runtime cannot be started again by this supervisor.
   async stop(): Promise<void> {
+    this.#closed = true;
     await this.#starting?.catch(() => undefined);
     const running = this.#current;
     if (running) {

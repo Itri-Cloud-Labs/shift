@@ -177,6 +177,8 @@ test('a replaced provider key supersedes the stored one across restarts', { skip
   const state = await temporaryState();
   const first = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'old' }] });
   const second = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'new' }] });
+  // A stopped supervisor cannot restart; a new one stands in for the next Shift process.
+  const third = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'new' }] });
   try {
     await first.ensure();
     await first.stop();
@@ -184,14 +186,15 @@ test('a replaced provider key supersedes the stored one across restarts', { skip
     const keys = (await storedCredentials(second)).map(({ value }) => value.key);
     assert.deepEqual(keys, ['new']);
     await second.stop();
-    await second.ensure();
+    await third.ensure();
     assert.deepEqual(
-      (await storedCredentials(second)).map(({ value }) => value.key),
+      (await storedCredentials(third)).map(({ value }) => value.key),
       ['new'],
     );
   } finally {
     await first.stop();
     await second.stop();
+    await third.stop();
     await state.remove();
   }
 });
@@ -237,6 +240,21 @@ test('startup reaping kills a stale runtime without starting a new one', { skip 
     assert.equal(successor.current, null, 'reaping does not start a runtime');
   } finally {
     await successor.stop();
+    await state.remove();
+  }
+});
+
+test('a stopped runtime cannot be started again by a lingering task', { skip }, async () => {
+  const state = await temporaryState();
+  const runtime = runtimeFor(state.path);
+  try {
+    await runtime.ensure();
+    await runtime.stop();
+    await assert.rejects(runtime.ensure(), { code: 'HARNESS_STOPPED' });
+    assert.equal(runtime.current, null);
+    assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+  } finally {
+    await runtime.stop();
     await state.remove();
   }
 });
