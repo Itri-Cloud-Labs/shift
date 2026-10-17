@@ -7,7 +7,7 @@ import { ShiftError } from '../domain/errors.js';
 import type { HarnessAdapter, Json, ModelRef } from '../harness/types.js';
 import type { Store } from '../persistence/store.js';
 import { AgentService } from './agent-service.js';
-import { envelopeValidator } from './envelope.js';
+import { assertResultSchema } from './envelope.js';
 import { RunRepository, type Claim, type RunSnapshot } from './repository.js';
 
 export interface StartRunInput {
@@ -114,7 +114,7 @@ export class RunEngine {
       );
     }
     const resultSchema = request.resultSchema ?? defaultResultSchema;
-    envelopeValidator(resultSchema);
+    assertResultSchema(resultSchema);
     const snapshot: RunSnapshot = {
       graph: {
         nodes: [
@@ -165,12 +165,19 @@ export class RunEngine {
     this.#tasks.set(claim.attemptId, { controller, done });
   }
 
-  // Active turns are cancelled through the harness so the next start can continue them.
-  async stop(): Promise<void> {
+  // Active turns are cancelled through the harness so the next start can continue them. The
+  // deadline bounds a stalled cancellation; the caller then kills the runtime, and startup
+  // inspection reconciles whatever was left.
+  async stop(timeoutMs: number): Promise<void> {
     this.#stopping = true;
     clearInterval(this.#timer);
     const tasks = [...this.#tasks.values()];
     for (const task of tasks) task.controller.abort();
-    await Promise.all(tasks.map((task) => task.done));
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.all(tasks.map((task) => task.done)),
+      new Promise((resolve) => (timer = setTimeout(resolve, timeoutMs))),
+    ]);
+    clearTimeout(timer);
   }
 }

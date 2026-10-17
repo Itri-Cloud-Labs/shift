@@ -35,7 +35,15 @@ async function setup() {
   const repo = join(state.path, 'repo');
   await mkdir(repo);
   const serve = () =>
-    startChild(state.path, ['--opencode-model', 'fake/model', '--opencode-executable', fakeAgent]);
+    // A graceful stop needs time to cancel turns through the harness.
+    startChild(state.path, [
+      '--opencode-model',
+      'fake/model',
+      '--opencode-executable',
+      fakeAgent,
+      '--shutdown-timeout-ms',
+      '10000',
+    ]);
   const shift = async (...args: string[]): Promise<unknown> => {
     const result = await runCli([...args, '--state-dir', state.path]);
     if (result.code !== 0) throw new Error(`shift ${args.join(' ')} failed: ${result.errors}`);

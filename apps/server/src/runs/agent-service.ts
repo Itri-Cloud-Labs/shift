@@ -246,6 +246,23 @@ export class AgentService {
         to,
         error === undefined ? {} : { error },
       );
+    // A result Shift already accepted is authoritative once the turn is no longer running
+    // (docs/opencode-capabilities.md section 5), however the turn itself ended.
+    const settle = (to: InvocationState, error: { code: string; message: string }) =>
+      repository.submissionCounts(invocation.id).accepted
+        ? transition(['RUNNING'], 'COMPLETED')
+        : transition(['RUNNING'], to, error);
+    // An unconfirmed stop keeps ownership: tools may still run, so nothing proceeds without a human.
+    const stopped = async (to: InvocationState, error: { code: string; message: string }) => {
+      const cancelled = await adapter.cancel(handle, correlation);
+      if (cancelled.kind === 'stopped') settle(to, error);
+      else {
+        transition(['RUNNING'], 'UNKNOWN', {
+          code: 'HARNESS_STOP_UNCONFIRMED',
+          message: `Shift could not confirm that the turn stopped: ${cancelled.explanation}`,
+        });
+      }
+    };
     let state = invocation.state;
     if (state === 'PREPARING') {
       transition(['PREPARING'], 'SUBMITTING');
@@ -295,7 +312,7 @@ export class AgentService {
       }
       switch (observation.kind) {
         case 'not_accepted':
-          transition(['RUNNING'], 'UNKNOWN', {
+          settle('UNKNOWN', {
             code: 'HARNESS_LOST_PROMPT',
             message: 'The harness no longer holds a prompt it had accepted.',
           });
@@ -303,41 +320,36 @@ export class AgentService {
         case 'queued':
           if (Date.now() - submittedAt >= this.#options.queuedResubmitMs) await submit();
           break;
-        case 'running':
+        case 'running': {
+          // The rejection limit ends the turn; the agent cannot keep submitting indefinitely.
+          const counts = repository.submissionCounts(invocation.id);
+          if (!counts.accepted && counts.rejected >= snapshot.agent.limits.rejectedSubmissions) {
+            await stopped('FAILED', {
+              code: 'RESULT_REJECTED',
+              message: 'Shift rejected the result too many times.',
+            });
+            return;
+          }
           break;
-        case 'awaiting_harness_prompt': {
-          await adapter.cancel(handle, correlation);
-          transition(['RUNNING'], 'FAILED', {
+        }
+        case 'awaiting_harness_prompt':
+          await stopped('FAILED', {
             code: 'HARNESS_PROMPT',
             message:
               'The agent asked for a permission or an answer, which unattended runs cannot give.',
           });
           return;
-        }
-        case 'ended': {
-          const accepted = repository
-            .invocations(claim.attemptId)
-            .find((row) => row.id === invocation.id)?.result;
-          if (accepted) transition(['RUNNING'], 'COMPLETED');
-          else {
-            transition(['RUNNING'], 'FAILED', {
-              code: 'RESULT_MISSING',
-              message: 'The turn ended without a result Shift accepted.',
-            });
-          }
-          return;
-        }
-        case 'interrupted':
-          transition(['RUNNING'], 'INTERRUPTED', {
-            code: 'INTERRUPTED',
-            message: observation.explanation,
+        case 'ended':
+          settle('FAILED', {
+            code: 'RESULT_MISSING',
+            message: 'The turn ended without a result Shift accepted.',
           });
+          return;
+        case 'interrupted':
+          settle('INTERRUPTED', { code: 'INTERRUPTED', message: observation.explanation });
           return;
         case 'unknown':
-          transition(['RUNNING'], 'UNKNOWN', {
-            code: 'HARNESS_OUTCOME_UNKNOWN',
-            message: observation.explanation,
-          });
+          settle('UNKNOWN', { code: 'HARNESS_OUTCOME_UNKNOWN', message: observation.explanation });
           return;
       }
       await this.#sleep(signal);
@@ -358,16 +370,14 @@ export class AgentService {
         handle,
         this.#options.adapter.correlate(invocation.id),
       );
-      if (cancelled.kind === 'stopped' && cancelled.observation.kind === 'interrupted') {
-        this.#options.repository.transitionInvocation(
-          claim,
-          invocation.id,
-          ['RUNNING'],
-          'INTERRUPTED',
-          {
-            error: { code: 'SHIFT_STOPPED', message: 'Shift stopped while the turn was running.' },
-          },
-        );
+      const { repository } = this.#options;
+      if (cancelled.kind !== 'stopped') return;
+      if (repository.submissionCounts(invocation.id).accepted) {
+        repository.transitionInvocation(claim, invocation.id, ['RUNNING'], 'COMPLETED');
+      } else if (cancelled.observation.kind === 'interrupted') {
+        repository.transitionInvocation(claim, invocation.id, ['RUNNING'], 'INTERRUPTED', {
+          error: { code: 'SHIFT_STOPPED', message: 'Shift stopped while the turn was running.' },
+        });
       }
     } catch {
       // Startup inspection decides what happened.

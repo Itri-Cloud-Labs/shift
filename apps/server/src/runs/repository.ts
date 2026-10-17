@@ -411,6 +411,26 @@ export class RunRepository {
       .immediate();
   }
 
+  submissionCounts(invocationId: string): {
+    accepted: boolean;
+    rejected: number;
+    result: ResultEnvelope | null;
+  } {
+    const counts = this.db
+      .prepare(
+        'SELECT COALESCE(SUM(accepted), 0) AS accepted, COALESCE(SUM(1 - accepted), 0) AS rejected FROM agent_result_submissions WHERE invocation_id = ?',
+      )
+      .get(invocationId) as { accepted: number; rejected: number };
+    const row = this.db
+      .prepare('SELECT result_json FROM agent_invocations WHERE id = ?')
+      .get(invocationId) as { result_json: string | null } | undefined;
+    return {
+      accepted: counts.accepted > 0,
+      rejected: counts.rejected,
+      result: parse<ResultEnvelope>(row?.result_json ?? null),
+    };
+  }
+
   // Persists a result-tool call and its verdict in one transaction before the agent hears it.
   // The same tool call delivered twice gets the stored verdict.
   recordSubmission(

@@ -90,7 +90,7 @@ export async function startServer(
   const cleanup = async (): Promise<void> => {
     const failures: unknown[] = [];
     // The engine cancels active turns through the harness while the store is still open.
-    for (const step of [() => engine?.stop(), () => runtime?.stop()]) {
+    for (const step of [() => engine?.stop(config.shutdownTimeoutMs), () => runtime?.stop()]) {
       try {
         await step();
       } catch (error) {
@@ -155,6 +155,7 @@ export async function startServer(
       scopes: new SystemdScopes(harness.systemdManager ?? 'user'),
       logger,
       resultHandler: (submission) => handleResult(submission),
+      stopTimeoutMs: config.shutdownTimeoutMs,
       ...(harness.opencodeExecutable === undefined
         ? {}
         : { executable: harness.opencodeExecutable }),
@@ -169,6 +170,8 @@ export async function startServer(
           }
         : {}),
     });
+    // A runtime left by an earlier Shift process is killed now, even if no run needs a harness.
+    await runtime.reapStale();
     const artifactRoot = join(state.path, 'artifacts');
     await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
     engine = new RunEngine({

@@ -112,6 +112,23 @@ export class OpenCodeRuntime {
     return found;
   }
 
+  // Kills scopes of this namespace left by an earlier Shift process. Does nothing without systemd;
+  // a later start reports that containment is unavailable.
+  async reapStale(): Promise<void> {
+    if (this.#current || this.#starting) return;
+    if (await this.#options.scopes.available()) await this.#reap();
+  }
+
+  // With no current runtime, every scope of this namespace is stale: left by a lost generation
+  // whose cleanup failed, or by a Shift process that died. The instance lock guarantees that no
+  // other live Shift process owns the namespace. A failed kill blocks the start.
+  async #reap(): Promise<void> {
+    for (const unit of await this.#options.scopes.list(this.#unitPrefix)) {
+      this.#options.logger.warn({ unit }, 'Killing a stale OpenCode runtime scope.');
+      await this.#options.scopes.kill(unit);
+    }
+  }
+
   async stop(): Promise<void> {
     await this.#starting?.catch(() => undefined);
     const running = this.#current;
@@ -141,13 +158,7 @@ export class OpenCodeRuntime {
         503,
       );
     }
-    // With no current runtime, every scope of this namespace is stale: left by a lost generation
-    // whose cleanup failed, or by a Shift process that died. The instance lock guarantees that no
-    // other live Shift process owns the namespace. A failed kill blocks the start.
-    for (const unit of await scopes.list(this.#unitPrefix)) {
-      logger.warn({ unit }, 'Killing a stale OpenCode runtime scope.');
-      await scopes.kill(unit);
-    }
+    await this.#reap();
     const endpoint = await startResultEndpoint(this.#options.resultHandler);
     try {
       await prepareNamespace(this.layout, { url: endpoint.url, token: endpoint.token });

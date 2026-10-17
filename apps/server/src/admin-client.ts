@@ -64,7 +64,8 @@ export async function administrativeCall(
         let length = 0;
         res.on('data', (chunk: Buffer) => {
           length += chunk.length;
-          if (length > 1024 * 1024)
+          // A run view repeats its result (outcome, agent output, end output); results are <= 1 MiB.
+          if (length > 16 * 1024 * 1024)
             req.destroy(
               new ShiftError(
                 'ADMIN_INVALID_RESPONSE',

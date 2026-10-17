@@ -85,7 +85,7 @@ shift run list
 
 `SHIFT_OPENCODE_API_KEY` is needed once: it is stored in the private OpenCode namespace. `--read-only` denies repository writes and shell commands; artifact-directory writes stay allowed. `--result-schema` is the JSON Schema 2020-12 for the agent's business data (default: any object). `--model` overrides the server's model for one run.
 
-The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn; up to three rejections are corrected in place. A turn that ends without an accepted result gets up to two correction prompts. A completed result completes the run with `outcome.data`; a blocker or failure fails it.
+The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn. After three rejections Shift stops the turn; a turn that ends without an accepted result gets up to two correction prompts. Once Shift accepts a result it stands, even if the turn is then interrupted or its outcome cannot be established. A completed result completes the run with `outcome.data`; a blocker or failure fails it.
 
 Every run, execution, attempt, session, invocation and result submission is in SQLite, and every external step has a durable intent first. Stopping or killing either process is recovered as follows:
 

@@ -40,6 +40,7 @@ class FakeHarness implements HarnessAdapter {
   readonly submits: string[] = [];
   cancels = 0;
   creates = 0;
+  confirmCancel = true;
   handler!: ResultHandler;
   #calls = 0;
 
@@ -132,6 +133,13 @@ class FakeHarness implements HarnessAdapter {
     correlation: InvocationCorrelation,
   ): Promise<CancellationObservation> {
     this.cancels++;
+    if (!this.confirmCancel) {
+      return {
+        kind: 'unconfirmed',
+        explanation: 'Tool processes of the session are still running.',
+        observation: await this.inspectInvocation(handle, correlation),
+      };
+    }
     const turn = this.turns.get(correlation.providerMessageId);
     if (turn && (turn.status === 'running' || turn.status === 'prompt'))
       turn.status = 'interrupted';
@@ -194,7 +202,7 @@ async function engineFor(
     repository,
     state,
     async close() {
-      await engine.stop();
+      await engine.stop(5_000);
       store.close();
     },
   };
@@ -469,7 +477,7 @@ async function strandedIntent(): Promise<{ state: string; runId: string; correla
   );
   harnessed.fake.submit = original;
   // Simulate the crash: stop scheduling without waiting for the stuck task, then close the store.
-  void harnessed.engine.stop();
+  void harnessed.engine.stop(5_000);
   harnessed.store.close();
   return { state: harnessed.state, runId, correlation: run.invocations[0]!.correlationId };
 }
@@ -518,7 +526,7 @@ test('after a restart, a turn that ended with an accepted result completes witho
   const fake = new FakeHarness(() => {});
   for (const [id, turn] of first.fake.turns) fake.turns.set(id, { ...turn, status: 'ended' });
   // Crash before the engine observed the end of the turn.
-  void first.engine.stop();
+  void first.engine.stop(5_000);
   first.store.close();
   const restarted = await engineFor(() => {}, { state: first.state, fake });
   try {
@@ -603,6 +611,80 @@ test('run requests are validated before anything is stored', async () => {
       { code: 'INVALID_RESULT_SCHEMA' },
     );
     assert.deepEqual(harnessed.engine.repository.runs(), []);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('reaching the rejection limit stops the turn, and a correction follows', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (/ended without a result/.test(turn.prompt)) return complete({ count: 3 })(turn, fake);
+    // Keeps submitting invalid results and never ends the turn by itself.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await fake.submitResult(turn, { status: 'completed', data: { count: 'many' } });
+    }
+  });
+  try {
+    const run = await settled(harnessed, await start(harnessed));
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(
+      run.invocations.map((invocation) => [invocation.kind, invocation.state]),
+      [
+        ['goal', 'FAILED'],
+        ['correction', 'COMPLETED'],
+      ],
+    );
+    assert.equal(run.invocations[0]!.acceptedSubmissions, 0);
+    assert.ok(harnessed.fake.cancels >= 1, 'the turn was cancelled at the limit');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an accepted result completes the node even if the turn then ends without evidence', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    await fake.submitResult(turn, { status: 'completed', data: { count: 3 } });
+    turn.status = 'unknown';
+  });
+  try {
+    const run = await settled(harnessed, await start(harnessed));
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { count: 3 } });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a stop that cannot be confirmed keeps the run for a human', async () => {
+  const harnessed = await engineFor((turn) => {
+    turn.status = 'prompt';
+  });
+  harnessed.fake.confirmCancel = false;
+  try {
+    const run = await settled(harnessed, await start(harnessed));
+    assert.equal(run.state, 'NEEDS_HUMAN');
+    assert.equal(run.attention?.code, 'HARNESS_OUTCOME_UNKNOWN');
+    assert.deepEqual(
+      run.invocations.map((invocation) => invocation.state),
+      ['UNKNOWN'],
+    );
+    assert.equal(run.executions[1]!.state, 'WAITING', 'the session is not released');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('result schemas with local references validate at their own root', async () => {
+  const harnessed = await engineFor(complete(3));
+  try {
+    const run = await settled(
+      harnessed,
+      await start(harnessed, {
+        resultSchema: { $defs: { count: { type: 'integer' } }, $ref: '#/$defs/count' },
+      }),
+    );
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: 3 });
   } finally {
     await harnessed.close();
   }

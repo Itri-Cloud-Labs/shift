@@ -222,3 +222,21 @@ test('a runtime that dies during startup is never handed out', { skip }, async (
     await state.remove();
   }
 });
+
+test('startup reaping kills a stale runtime without starting a new one', { skip }, async () => {
+  const state = await temporaryState();
+  const abandoned = runtimeFor(state.path);
+  const successor = runtimeFor(state.path);
+  try {
+    const old = await abandoned.ensure();
+    const oldReport = await report(abandoned);
+    await successor.reapStale();
+    assert.equal(alive(oldReport.pid), false);
+    assert.equal(alive(oldReport.toolPid), false);
+    assert.deepEqual(await scopes.members(old.unit), []);
+    assert.equal(successor.current, null, 'reaping does not start a runtime');
+  } finally {
+    await successor.stop();
+    await state.remove();
+  }
+});
