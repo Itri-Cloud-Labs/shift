@@ -32,6 +32,9 @@ Model cases need an API-key credential for the model's provider, from `SHIFT_PRO
 | v2 ignores `auth.json`. Credentials are registered with `POST /api/credential {integrationID, value: {type: "key", key}, activate: true}` and stored in the namespace database. | All model cases | Credential provisioning is an explicit adapter operation. Backups of the harness store contain provider keys. |
 | Plugins listed in `opencode.jsonc` must be directories. They load lazily after the first location boots and reload when their files change. | `structured-result-correction` | The adapter waits for `GET /api/plugin` to report the Shift plugin `active` before the first invocation. |
 | SIGTERM on an idle server exits cleanly with code 130. | `idle-shutdown-resume` | Treat 130 as a clean stop. |
+| `--port 0` binds a free port and prints it in the `server listening on` line. | Supervisor, 2026-10-17 | No port pre-allocation race. |
+| **Tool shells inherit the server's environment** plus `OPENCODE_SESSION_ID=<session>`, `OPENCODE=1` and `AI_AGENT=opencode`. `OPENCODE_SERVER_PASSWORD` is honored, but a password supplied that way is then visible to every tool shell. A password the server generates itself is not passed to tools. | Supervisor, 2026-10-17 | Shift never supplies the password through the environment, so an agent cannot call the OpenCode API to loosen its own permissions. `OPENCODE_SESSION_ID` attributes tool processes in the runtime scope to a session. |
+| Agents and plugins load lazily for each location. On the first request for a directory, `GET /api/agent` lists nothing and `GET /api/agent/build` returns `AgentNotFoundError` (404). Both appear after a second or two. A directory that does not exist returns `LocationNotFoundError`. Requests select the location with `?location[directory]=<path>`. | Supervisor, 2026-10-17 | The adapter waits until both the `build` agent and the Shift plugin are listed for a session's directory before creating sessions or submitting. |
 | **Tool shell commands run in their own process group.** After SIGKILL of the server, the running `sleep … && echo done > file` kept running, was re-parented, and wrote its file. | `crash-during-tool` | Signalling the server or its process group cannot contain agent effects. The supervisor needs cgroup containment, for example a systemd scope or a cgroup v2 directory per runtime, and must kill the whole cgroup when a runtime is lost. |
 
 ### Sessions and submission
@@ -120,7 +123,7 @@ A result accepted by Shift's callback is authoritative even if a crash prevents 
 
 ## 7. Proposed specification changes
 
-These follow from the evidence. They need owner approval before the specification is edited.
+The owner approved these on 2026-10-17, with one namespace per Shift server. They are applied to the specification.
 
 1. **Section 6.5:** replace "The harness validates a fixed Shift terminal envelope" with "Shift validates the envelope". The OpenCode adapter supplies a result-submission tool, and in-turn rejections let the agent correct a result without a new invocation. Bound in-turn rejections per invocation (proposal: 3) and keep the existing correction invocations for turns that end without an accepted result.
 2. **Section 11.2:** replace "OpenCode v0 starts a managed local server per Shift session" with one supervised OpenCode runtime per storage namespace, hosting many sessions addressed by ID. Each namespace has a private `HOME`, XDG tree and `TMPDIR`, runs only `opencode serve`, and runs inside its own cgroup. Whether a namespace is per Shift server or per project remains a choice; per project isolates harness credentials and plugins but costs one process per project.
@@ -128,9 +131,11 @@ These follow from the evidence. They need owner approval before the specificatio
 4. **Section 6.4 cancellation:** add that accounting for a stop includes deleting leftover inbox items and confirming the runtime cgroup has no remaining tool processes.
 5. **Section 6.5 harness prompts:** unattended profiles compile every `ask` to `deny` and deny `question`. The adapter still treats any `permission.asked` or `form.created` as a blocker trigger.
 
-## 8. Concrete adapter work for prompts 16-19
+## 8. Adapter work
 
-- Supervisor: create the namespace tree, provision credentials over `/api/credential`, start `opencode serve` on loopback inside a cgroup, capture the password, record pid, start time and generation, verify ownership before signalling, and kill the cgroup on loss.
+The supervisor, adapter and policy compiler are implemented in [`apps/server/src/harness`](../apps/server/src/harness/). Session binding, durable invocation records, the in-turn rejection limit and artifact collection belong to AgentService and remain open.
+
+- Supervisor: create the namespace tree, provision credentials over `/api/credential`, start `opencode serve` on loopback inside a systemd scope, capture the generated password, record pid, scope and generation, signal only the process it spawned, kill the scope on loss, and reap stale scopes of the namespace before every start.
 - Install the Shift result plugin (directory form, `codemode: false`) into the namespace config, pointing at an authenticated Shift loopback endpoint. Wait for it to be `active`.
 - `createSession`: `ses_<uuid>` plus Shift metadata, then compare returned fields with intent.
 - `submit`: `msg_<invocation uuid>` with Shift metadata. A lost acknowledgement leads to the section 5 inspection, then the same-ID resubmit.
