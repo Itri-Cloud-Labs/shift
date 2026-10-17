@@ -255,3 +255,17 @@ Structured results use a Shift-owned OpenCode plugin tool rather than native str
 The probe is plain Node ESM with built-in `fetch`, `http` and `/proc` inspection. No OpenCode SDK was added. The adapter in prompt 17 should reevaluate the generated v2 client against the pinned version before writing its own transport.
 
 The supervisor needs a private `HOME` as well as XDG directories, because skills load from `~/.agents/skills` otherwise. It must run only `opencode serve`, because other subcommands start a persistent background service. It needs cgroup containment, because tool shells run in their own process group and survive the server.
+
+## OpenCode runtime supervisor and adapter
+
+Reviewed 2026-10-17 against OpenCode v2.0.26 and systemd 255. The owner approved the five specification changes from the probe, with one OpenCode namespace per Shift server.
+
+Containment uses transient systemd scopes through `systemd-run --scope` and `systemctl kill`. A local check confirmed that a `setsid` child stays in the scope's cgroup after the scope's main process is SIGKILLed, and that killing the unit removes it. Alternatives: signalling OpenCode's process group misses tool shells, which run in their own groups; tracking descendants through `/proc` races with forks and re-parenting; writing to cgroupfs directly needs a delegated subtree that Shift does not own until it runs as a systemd service with `Delegate=yes`. The scope wrapper starts the command through `env -i`, because systemd-run needs the caller's bus environment while OpenCode must receive only its namespace variables. M14's system service can select the system manager or switch to direct delegated cgroups behind the same `SystemdScopes` interface.
+
+OpenCode generates the server password and prints it. Shift reads it from stdout and never sets `OPENCODE_SERVER_PASSWORD`, because OpenCode passes its own environment to tool shells. With the password, an agent could call the API and loosen its session's permissions.
+
+Results use the plugin tool chosen in the probe decision, now with a bearer token per runtime generation and a 1 MiB body limit. The token protects the endpoint from other local accounts. It does not protect it from the agent, which can read its namespace config, but an agent with the token can do nothing beyond calling the result tool directly. Shift validates results either way.
+
+Tool policy is compiled per invocation by re-emitting the `build` agent's own rules with `ask` turned into `deny`, then appending Shift's rules. Re-emitting keeps OpenCode's last-match ordering, for example `*.env.example` readable after `*.env.*`. Appending only deny overrides would break that.
+
+No OpenCode SDK was added. The adapter uses about a dozen routes, and the generated v2 client would pin the experimental API's full surface into the server dependency graph. The supervisor and adapter use built-in `fetch`, `child_process` and `/proc`.

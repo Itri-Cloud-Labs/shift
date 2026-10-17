@@ -30,5 +30,18 @@ jobs:
       - run: node -e 'if (process.platform !== "linux" || process.arch !== "${{ matrix.arch }}") process.exit(1)'
       - run: getconf GNU_LIBC_VERSION
       - run: pnpm install --frozen-lockfile
+      # Harness containment tests run OpenCode stand-ins inside systemd user scopes.
+      - name: Start a systemd user manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          runtime_dir="/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            [ -S "$runtime_dir/bus" ] && break
+            sleep 1
+          done
+          XDG_RUNTIME_DIR="$runtime_dir" systemd-run --user --scope --quiet true
       - run: pnpm check
+        env:
+          SHIFT_TEST_REQUIRE_SYSTEMD: '1'
       - run: node apps/server/tools/platform-smoke.mjs ${{ matrix.arch }}
