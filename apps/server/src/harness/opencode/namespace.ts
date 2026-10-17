@@ -104,7 +104,8 @@ const pluginSource = `export default {
           type: 'object',
           properties: {
             status: { type: 'string', enum: ['completed', 'blocked', 'failed'] },
-            data: { type: 'object' },
+            // Any JSON value: arrays and scalars are valid business data. Shift validates it.
+            data: {},
             blocker: {
               type: 'object',
               properties: { code: { type: 'string' }, message: { type: 'string' }, details: {} },

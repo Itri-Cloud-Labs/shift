@@ -43,6 +43,7 @@ interface Running extends RuntimeGeneration {
   endpoint: ResultEndpoint;
   exited: Promise<void>;
   stopping: boolean;
+  ended: boolean;
 }
 
 const credentialLabel = 'shift';
@@ -120,9 +121,12 @@ export class OpenCodeRuntime {
       running.child.kill('SIGTERM');
       const timeoutMs = this.#options.stopTimeoutMs ?? 5_000;
       await withTimeout(running.exited, timeoutMs);
-      // Tool processes leave the server's process group, so only the scope accounts for them.
-      await this.#options.scopes.kill(running.unit);
-      await running.endpoint.close();
+      try {
+        // Tool processes leave the server's process group, so only the scope accounts for them.
+        await this.#options.scopes.kill(running.unit);
+      } finally {
+        await running.endpoint.close();
+      }
     }
     await this.#cleanup;
   }
@@ -174,9 +178,17 @@ export class OpenCodeRuntime {
           endpoint,
           exited,
           stopping: false,
+          ended: false,
         };
         void exited.then(() => this.#exited(running!));
         await this.#provisionCredentials(client);
+        // The runtime can die after answering its last startup request; never publish it then.
+        if (running.ended) {
+          throw new ShiftError(
+            'HARNESS_START_FAILED',
+            'The OpenCode runtime exited during startup.',
+          );
+        }
       } catch (error) {
         if (running) running.stopping = true;
         child.kill('SIGKILL');
@@ -229,33 +241,44 @@ export class OpenCodeRuntime {
     return result;
   }
 
-  // Provider keys are registered once per namespace; v2 ignores auth.json.
+  // Provider keys persist in the namespace; v2 ignores auth.json. OpenCode cannot change a stored
+  // key, so a replaced key is added first and the outdated entries are removed afterwards.
   async #provisionCredentials(client: OpenCodeClient): Promise<void> {
     const credentials = this.#options.credentials ?? [];
     if (credentials.length === 0) return;
     const listed = await client.expect([200], 'GET', '/api/credential');
     const existing = ((listed.body as { data?: unknown[] })?.data ?? []) as Array<{
+      id: string;
       integrationID?: string;
       label?: string;
+      value?: { type?: string; key?: string };
     }>;
     for (const credential of credentials) {
-      const present = existing.some(
+      const owned = existing.filter(
         (entry) =>
           entry.integrationID === credential.integrationID && entry.label === credentialLabel,
       );
-      if (present) continue;
-      await client.expect([200], 'POST', '/api/credential', {
-        body: {
-          integrationID: credential.integrationID,
-          label: credentialLabel,
-          value: { type: 'key', key: credential.key },
-          activate: true,
-        },
-      });
+      const current = owned.find(
+        (entry) => entry.value?.type === 'key' && entry.value.key === credential.key,
+      );
+      if (!current) {
+        await client.expect([200], 'POST', '/api/credential', {
+          body: {
+            integrationID: credential.integrationID,
+            label: credentialLabel,
+            value: { type: 'key', key: credential.key },
+            activate: true,
+          },
+        });
+      }
+      for (const outdated of owned.filter((entry) => entry !== current)) {
+        await client.expect([200, 204, 404], 'DELETE', `/api/credential/${outdated.id}`);
+      }
     }
   }
 
   #exited(running: Running): void {
+    running.ended = true;
     if (running.stopping) return;
     const wasCurrent = this.#current === running;
     if (wasCurrent) this.#current = null;
@@ -266,7 +289,7 @@ export class OpenCodeRuntime {
     // A restart waits for this and then reaps any scope it failed to empty.
     this.#cleanup = this.#cleanup
       .then(() => this.#options.scopes.kill(running.unit))
-      .then(() => running.endpoint.close())
+      .finally(() => running.endpoint.close())
       .catch(() => {
         this.#options.logger.error(
           { unit: running.unit },

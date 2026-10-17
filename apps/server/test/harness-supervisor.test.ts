@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { SystemdScopes } from '../src/harness/containment.js';
@@ -31,6 +31,13 @@ async function report(runtime: OpenCodeRuntime): Promise<FakeReport> {
     await readFile(join(runtime.layout.root, 'fake-report.json'), 'utf8'),
   ) as FakeReport;
 }
+
+const storedCredentials = async (runtime: OpenCodeRuntime) =>
+  JSON.parse(await readFile(join(runtime.layout.root, 'fake-credentials.json'), 'utf8')) as Array<{
+    integrationID: string;
+    label: string;
+    value: { key: string };
+  }>;
 
 function runtimeFor(stateDirectory: string, extra: Partial<OpenCodeRuntimeOptions> = {}) {
   return new OpenCodeRuntime({
@@ -89,9 +96,13 @@ test(
       );
       const config = await readFile(join(runtime.layout.config, 'opencode/opencode.jsonc'), 'utf8');
       assert.match(config, /"token"/);
-      assert.equal(
-        await readFile(join(runtime.layout.root, 'fake-credentials.log'), 'utf8'),
-        'opencode-go\n',
+      assert.deepEqual(
+        (await storedCredentials(runtime)).map(({ integrationID, label, value }) => [
+          integrationID,
+          label,
+          value.key,
+        ]),
+        [['opencode-go', 'shift', 'test-key']],
       );
       assert.equal((await runtime.sessionProcesses('ses_fake')).length, 1);
       await runtime.stop();
@@ -156,6 +167,56 @@ test('a runtime that cannot start fails cleanly and leaves no scope', { skip }, 
     await assert.rejects(runtime.ensure(), { code: 'HARNESS_START_FAILED' });
     assert.equal(runtime.current, null);
     assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+  } finally {
+    await runtime.stop();
+    await state.remove();
+  }
+});
+
+test('a replaced provider key supersedes the stored one across restarts', { skip }, async () => {
+  const state = await temporaryState();
+  const first = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'old' }] });
+  const second = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'new' }] });
+  try {
+    await first.ensure();
+    await first.stop();
+    await second.ensure();
+    const keys = (await storedCredentials(second)).map(({ value }) => value.key);
+    assert.deepEqual(keys, ['new']);
+    await second.stop();
+    await second.ensure();
+    assert.deepEqual(
+      (await storedCredentials(second)).map(({ value }) => value.key),
+      ['new'],
+    );
+  } finally {
+    await first.stop();
+    await second.stop();
+    await state.remove();
+  }
+});
+
+test('a runtime that dies during startup is never handed out', { skip }, async () => {
+  const state = await temporaryState();
+  const runtime = runtimeFor(state.path, { credentials: [{ integrationID: 'p', key: 'k' }] });
+  await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+  const control = join(runtime.layout.root, 'fake-control.json');
+  await writeFile(control, JSON.stringify({ exitAfterCredential: true }));
+  try {
+    // Depending on timing the death is seen during startup or right after; either way the dead
+    // generation must not stay current.
+    const started = await runtime.ensure().then(
+      (generation) => generation,
+      (error: { code?: string }) => {
+        assert.equal(error.code, 'HARNESS_START_FAILED');
+        return null;
+      },
+    );
+    await eventually(() => (runtime.current === null ? true : undefined));
+    if (started) assert.equal(alive(started.pid), false);
+    await rm(control);
+    const next = await runtime.ensure();
+    assert.ok(alive(next.pid));
   } finally {
     await runtime.stop();
     await state.remove();

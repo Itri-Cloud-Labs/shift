@@ -46,7 +46,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   readonly #locations = new Map<string, PermissionRule[]>();
 
-  constructor(private readonly runtime: OpenCodeRuntime) {}
+  readonly #pageSize: number;
+
+  constructor(
+    private readonly runtime: OpenCodeRuntime,
+    options: { pageSize?: number } = {},
+  ) {
+    this.#pageSize = options.pageSize ?? 200;
+  }
 
   capabilities(): HarnessCapabilities {
     return openCodeCapabilities;
@@ -358,8 +365,10 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const messages: OpenCodeMessage[] = [];
     let cursor: string | undefined;
     for (;;) {
-      const query = new URLSearchParams({ order: 'asc', limit: '200' });
+      // A cursor carries its own direction; OpenCode rejects it combined with `order`.
+      const query = new URLSearchParams({ limit: String(this.#pageSize) });
       if (cursor) query.set('cursor', cursor);
+      else query.set('order', 'asc');
       const response = await client.expect(
         [200],
         'GET',
@@ -367,7 +376,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       );
       const page = response.body as { data: OpenCodeMessage[]; cursor?: { next?: string | null } };
       messages.push(...page.data);
-      if (page.data.length < 200 || !page.cursor?.next) return messages;
+      if (page.data.length < this.#pageSize || !page.cursor?.next) return messages;
       cursor = page.cursor.next;
     }
   }

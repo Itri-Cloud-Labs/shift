@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { connect, type AddressInfo } from 'node:net';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { classifyInvocation, type InvocationEvidence } from '../src/harness/opencode/classify.js';
-import { parseEventBlock } from '../src/harness/opencode/client.js';
+import { OpenCodeClient, parseEventBlock } from '../src/harness/opencode/client.js';
 import { compilePermissions } from '../src/harness/opencode/permissions.js';
 import { namespaceEnvironment, namespaceLayout } from '../src/harness/opencode/namespace.js';
 import { startResultEndpoint } from '../src/harness/opencode/result-endpoint.js';
-import { harnessSessionId, providerMessageId } from '../src/harness/opencode/adapter.js';
+import {
+  OpenCodeAdapter,
+  harnessSessionId,
+  providerMessageId,
+} from '../src/harness/opencode/adapter.js';
+import type { OpenCodeRuntime } from '../src/harness/opencode/runtime.js';
 import type { ResultSubmission } from '../src/harness/types.js';
 
 const evidence = (overrides: Partial<InvocationEvidence>): InvocationEvidence => ({
@@ -212,4 +220,94 @@ test('SSE blocks parse to typed events and ignore heartbeats and malformed data'
   assert.equal(parseEventBlock(': heartbeat'), null);
   assert.equal(parseEventBlock('data: not json'), null);
   assert.equal(parseEventBlock('data: {"no":"type"}'), null);
+});
+
+test('a submission that disconnects mid-body does not crash Shift', async () => {
+  let calls = 0;
+  const endpoint = await startResultEndpoint(async () => {
+    calls++;
+    return { accepted: true };
+  });
+  try {
+    const { port } = new URL(endpoint.url);
+    const socket = connect(Number(port), '127.0.0.1');
+    await new Promise((resolve) => socket.once('connect', resolve));
+    socket.write(
+      `POST /result HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer ${endpoint.token}\r\n` +
+        'Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"sessionID":',
+    );
+    await delay(50);
+    socket.destroy();
+    await delay(100);
+    const response = await fetch(endpoint.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` },
+      body: JSON.stringify({ sessionID: 's', messageID: 'm', callID: 'c', input: {} }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls, 1, 'only the complete submission reached the handler');
+  } finally {
+    await endpoint.close();
+  }
+});
+
+test('invocation inspection follows message pages across a turn boundary', async () => {
+  const transcript = [
+    { id: 'msg_earlier', type: 'user' },
+    { id: 'msg_old_reply', type: 'assistant' },
+    { id: 'msg_old_idle', type: 'idle', outcome: 'succeeded' },
+    { id: 'msg_ours', type: 'user' },
+    { id: 'msg_reply_1', type: 'assistant' },
+    { id: 'msg_reply_2', type: 'assistant' },
+    { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
+    { id: 'msg_later', type: 'user' },
+  ];
+  const limits: string[] = [];
+  const server = createServer((request, response) => {
+    const url = new URL(request.url!, 'http://localhost');
+    const json = (body: unknown) =>
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+    if (url.pathname === '/api/session/ses_s/message') {
+      if (url.searchParams.has('cursor') && url.searchParams.has('order')) {
+        response.writeHead(400).end(JSON.stringify({ _tag: 'InvalidCursorError' }));
+        return;
+      }
+      limits.push(url.searchParams.get('limit')!);
+      const start = Number(url.searchParams.get('cursor') ?? 0);
+      const limit = Number(url.searchParams.get('limit'));
+      // Like OpenCode, the last page still carries a next cursor.
+      json({
+        data: transcript.slice(start, start + limit),
+        cursor: { next: String(start + limit) },
+      });
+    } else if (url.pathname === '/api/session/ses_s/message/msg_ours') {
+      json({ data: transcript[3] });
+    } else if (url.pathname === '/api/session/active') {
+      json({ data: {} });
+    } else {
+      json({ data: [] });
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  const client = new OpenCodeClient(`http://127.0.0.1:${port}`, 'password');
+  const runtime = {
+    ensure: async () => ({ generation: 1, unit: 'unit', pid: 0, client }),
+    sessionProcesses: async () => [],
+    layout: { root: '/namespace' },
+  } as unknown as OpenCodeRuntime;
+  try {
+    const observation = await new OpenCodeAdapter(runtime, { pageSize: 3 }).inspectInvocation(
+      { shiftSessionId: 's', harnessSessionId: 'ses_s', storageNamespace: '/namespace', cwd: '/' },
+      { shiftInvocationId: 'i', providerMessageId: 'msg_ours' },
+    );
+    assert.deepEqual(observation, {
+      kind: 'ended',
+      outcome: 'succeeded',
+      messageIds: ['msg_reply_1', 'msg_reply_2'],
+    });
+    assert.deepEqual(limits, ['3', '3', '3'], 'the short last page ends the walk');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

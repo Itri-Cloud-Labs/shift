@@ -61,6 +61,7 @@ test('OpenCode v2 adapter against a real runtime', { skip, timeout: 600_000 }, a
   git('-c', 'user.name=shift', '-c', 'user.email=shift@localhost', 'commit', '-qm', 'init');
 
   const submissions: ResultSubmission[] = [];
+  const arraySessions = new Set<string>();
   const runtime = new OpenCodeRuntime({
     stateDirectory: state.path,
     scopes: new SystemdScopes('user'),
@@ -68,8 +69,14 @@ test('OpenCode v2 adapter against a real runtime', { skip, timeout: 600_000 }, a
     credentials: [{ integrationID: providerID, key: key! }],
     resultHandler: async (submission) => {
       submissions.push(submission);
-      const input = submission.input as { status?: string; data?: { wordCount?: unknown } };
-      if (input.status === 'completed' && !Number.isInteger(input.data?.wordCount)) {
+      const input = submission.input as { status?: string; data?: unknown };
+      const expectsArray = arraySessions.has(submission.harnessSessionId);
+      if (input.status !== 'completed') return { accepted: true };
+      if (expectsArray && !Array.isArray(input.data)) {
+        return { accepted: false, reason: 'data must be an array of strings' };
+      }
+      const wordCount = (input.data as { wordCount?: unknown } | undefined)?.wordCount;
+      if (!expectsArray && !Number.isInteger(wordCount)) {
         return { accepted: false, reason: 'data.wordCount must be an integer' };
       }
       return { accepted: true };
@@ -139,6 +146,23 @@ test('OpenCode v2 adapter against a real runtime', { skip, timeout: 600_000 }, a
       const accepted = submissions.filter((s) => s.harnessSessionId === handle.harnessSessionId);
       assert.ok(accepted.length >= 1);
       assert.deepEqual((accepted.at(-1)!.input as { data: unknown }).data, { wordCount: 3 });
+      // OpenCode's real cursors: one message per page must reach the same conclusion.
+      const paged = new OpenCodeAdapter(runtime, { pageSize: 1 });
+      assert.deepEqual(await paged.inspectInvocation(handle, correlation), observation);
+    });
+
+    await t.test('results are not restricted to objects', async () => {
+      const handle = await session();
+      arraySessions.add(handle.harnessSessionId);
+      const correlation = await submit(
+        handle,
+        'Read README.md. Call shift_submit_result with status "completed" and data set to a ' +
+          'JSON array containing each word of the file as a string, in order.',
+        'read_only',
+      );
+      assert.equal((await settle(handle, correlation)).kind, 'ended');
+      const last = submissions.filter((s) => s.harnessSessionId === handle.harnessSessionId).at(-1);
+      assert.deepEqual((last?.input as { data: unknown }).data, ['hi', 'there', 'friend']);
     });
 
     await t.test('read-only invocations write artifacts but not the repository', async () => {

@@ -38,7 +38,14 @@ const isString = (value: unknown): value is string => typeof value === 'string' 
 export async function startResultEndpoint(handler: ResultHandler): Promise<ResultEndpoint> {
   const token = randomBytes(32).toString('base64url');
   const expected = Buffer.from(`Bearer ${token}`);
-  const server = createServer(async (request, response) => {
+  // The listener never rejects: an unhandled rejection here would terminate the Shift process.
+  const server = createServer((request, response) => {
+    handle(request, response).catch(() => {
+      if (!response.headersSent) reply(response, 400, { accepted: false, reason: 'bad request' });
+      else response.destroy();
+    });
+  });
+  const handle = async (request: IncomingMessage, response: ServerResponse) => {
     if (request.method !== 'POST' || request.url !== '/result') {
       return reply(response, 404, { accepted: false, reason: 'not found' });
     }
@@ -74,7 +81,7 @@ export async function startResultEndpoint(handler: ResultHandler): Promise<Resul
       // Not recorded, so not accepted; the plugin reports a retryable failure to the agent.
       reply(response, 500, { accepted: false, reason: 'result could not be recorded' });
     }
-  });
+  };
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
