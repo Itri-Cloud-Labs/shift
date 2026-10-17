@@ -4,6 +4,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { administrativeCall } from '../src/admin-client.js';
 import { SystemdScopes } from '../src/harness/containment.js';
 import { runCli, startChild, temporaryState, workspace, type OwnedProcess } from './helpers.js';
 
@@ -34,7 +35,7 @@ async function setup() {
   const state = await temporaryState();
   const repo = join(state.path, 'repo');
   await mkdir(repo);
-  const serve = () =>
+  const serve = (extra: string[] = []) =>
     // A graceful stop needs time to cancel turns through the harness.
     startChild(state.path, [
       '--opencode-model',
@@ -43,6 +44,7 @@ async function setup() {
       fakeAgent,
       '--shutdown-timeout-ms',
       '10000',
+      ...extra,
     ]);
   const shift = async (...args: string[]): Promise<unknown> => {
     const result = await runCli([...args, '--state-dir', state.path]);
@@ -214,6 +216,34 @@ test(
       assert.equal(finished.attention?.code, 'HARNESS_OUTCOME_UNKNOWN');
       assert.equal(alive(tool), false);
       assert.equal(await env.userMessages(), 1);
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
+  'shutdown keeps its deadline when the harness stops answering',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    let server = await env.serve(['--shutdown-timeout-ms', '2000']);
+    try {
+      await env.start('Work. [fake-work 30000] [fake-hang-interrupt]');
+      const tool = await env.toolStarted();
+      // Measured from the acknowledged stop request, excluding CLI start-up time.
+      const acknowledged = await administrativeCall(env.state.path, {
+        method: 'POST',
+        path: '/api/v0/admin/shutdown',
+      });
+      assert.equal(acknowledged.status, 202);
+      const started = Date.now();
+      await server.exit;
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 3_000, `shutdown took ${elapsed} ms with a 2000 ms budget`);
+      assert.equal(alive(tool), false, 'the runtime scope was killed as the fallback');
+      server = await env.serve();
     } finally {
       await stopped(server);
       await env.state.remove();

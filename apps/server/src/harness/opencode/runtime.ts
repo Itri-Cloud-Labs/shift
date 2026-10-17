@@ -134,17 +134,23 @@ export class OpenCodeRuntime {
     }
   }
 
-  // Permanent: the runtime cannot be started again by this supervisor.
-  async stop(): Promise<void> {
+  // Permanent: the runtime cannot be started again by this supervisor. `timeoutMs` bounds waiting
+  // for a pending start and for a graceful exit; killing the scope is the fallback either way.
+  async stop(timeoutMs = this.#options.stopTimeoutMs ?? 5_000): Promise<void> {
     this.#closed = true;
-    await this.#starting?.catch(() => undefined);
+    const deadline = Date.now() + timeoutMs;
+    // A start still pending after this wait kills itself when it sees the closed supervisor.
+    if (this.#starting)
+      await withTimeout(
+        this.#starting.catch(() => undefined),
+        timeoutMs,
+      );
     const running = this.#current;
     if (running) {
       running.stopping = true;
       this.#current = null;
       running.child.kill('SIGTERM');
-      const timeoutMs = this.#options.stopTimeoutMs ?? 5_000;
-      await withTimeout(running.exited, timeoutMs);
+      await withTimeout(running.exited, Math.max(0, deadline - Date.now()));
       try {
         // Tool processes leave the server's process group, so only the scope accounts for them.
         await this.#options.scopes.kill(running.unit);
@@ -206,6 +212,9 @@ export class OpenCodeRuntime {
             'HARNESS_START_FAILED',
             'The OpenCode runtime exited during startup.',
           );
+        }
+        if (this.#closed) {
+          throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
         }
       } catch (error) {
         if (running) running.stopping = true;

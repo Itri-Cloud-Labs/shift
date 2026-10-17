@@ -6,6 +6,7 @@
 //   [fake-work MS]    run a detached `sleep` tool process for MS milliseconds
 //   [fake-result {…}] submit this envelope through the Shift plugin endpoint
 //   [fake-no-result]  end the turn without submitting
+//   [fake-hang-interrupt] never answer an interrupt request, and ignore SIGTERM, during this turn
 // A turn interrupted by a crash keeps its running tool and no idle record, as OpenCode does.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -38,7 +39,11 @@ function publicSession(session) {
 async function runTurn(session, prompt) {
   const text = prompt.text;
   let aborted = false;
-  const control = { abort: () => (aborted = true), tool: null };
+  const control = {
+    abort: () => (aborted = true),
+    tool: null,
+    hangInterrupt: /\[fake-hang-interrupt\]/.test(text),
+  };
   active.set(session.id, control);
   const delay = Number(/\[fake-delay (\d+)\]/.exec(text)?.[1] ?? 0);
   const work = Number(/\[fake-work (\d+)\]/.exec(text)?.[1] ?? 0);
@@ -220,6 +225,7 @@ const routes = [
     ([, sid]) => {
       const control = active.get(sid);
       if (!control) return { interrupted: false };
+      if (control.hangInterrupt) return hang;
       control.abort();
       control.tool?.kill('SIGKILL');
       if (!control.tool) {
@@ -231,6 +237,9 @@ const routes = [
     },
   ],
 ];
+
+// A route returning `hang` never answers, like a stalled OpenCode request.
+const hang = Symbol('hang');
 
 const server = createServer((request, response) => {
   if (request.headers.authorization !== expected) return response.writeHead(401).end();
@@ -246,6 +255,7 @@ const server = createServer((request, response) => {
       text ? JSON.parse(text) : {},
       url.searchParams,
     );
+    if (result === hang) return;
     if (result === undefined) return response.writeHead(404).end('{}');
     response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result));
   });
@@ -254,4 +264,7 @@ server.listen(0, '127.0.0.1', () => {
   process.stdout.write(`server listening on http://127.0.0.1:${server.address().port}\n`);
   process.stdout.write(`server password ${password}\n`);
 });
-process.on('SIGTERM', () => process.exit(130));
+// A turn that hangs its interrupt also ignores SIGTERM, like a wedged runtime; only SIGKILL works.
+process.on('SIGTERM', () => {
+  if (![...active.values()].some((control) => control.hangInterrupt)) process.exit(130);
+});

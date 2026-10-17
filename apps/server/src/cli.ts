@@ -11,7 +11,6 @@ import {
   validateShutdownAcknowledgement,
   type ProtocolError,
 } from './protocol/index.js';
-import { startServer } from './server.js';
 
 const usage = `Shift server
 
@@ -229,6 +228,8 @@ async function main(): Promise<void> {
     harness,
   });
   let requestedStop = false;
+  // Loaded only for `serve`: SQLite and the server graph would slow every administrative command.
+  const { startServer } = await import('./server.js');
   let running: Awaited<ReturnType<typeof startServer>> | undefined;
   const onSignal = () => {
     requestedStop = true;

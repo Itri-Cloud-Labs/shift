@@ -89,8 +89,12 @@ export async function startServer(
   });
   const cleanup = async (): Promise<void> => {
     const failures: unknown[] = [];
+    // One deadline for the whole shutdown; each step gets only the time that remains. Killing the
+    // runtime scope is immediate, so it still happens after the deadline has passed.
+    const deadline = Date.now() + config.shutdownTimeoutMs;
+    const remaining = () => Math.max(0, deadline - Date.now());
     // The engine cancels active turns through the harness while the store is still open.
-    for (const step of [() => engine?.stop(config.shutdownTimeoutMs), () => runtime?.stop()]) {
+    for (const step of [() => engine?.stop(remaining()), () => runtime?.stop(remaining())]) {
       try {
         await step();
       } catch (error) {
@@ -100,7 +104,7 @@ export async function startServer(
     const outcomes = await Promise.allSettled(
       [tcp, admin]
         .filter((server): server is Server => server !== undefined)
-        .map((server) => closeListener(server, config.shutdownTimeoutMs)),
+        .map((server) => closeListener(server, remaining())),
     );
     failures.push(
       ...outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason] : [])),
