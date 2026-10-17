@@ -72,6 +72,8 @@ export class OpenCodeRuntime {
   #starting: Promise<Running> | null = null;
   #cleanup: Promise<void> = Promise.resolve();
   #closed = false;
+  // The scope of a generation that has been spawned but not yet published.
+  #startingUnit: string | null = null;
   readonly #lostListeners: Array<(generation: number) => void> = [];
 
   constructor(options: OpenCodeRuntimeOptions) {
@@ -139,12 +141,14 @@ export class OpenCodeRuntime {
   async stop(timeoutMs = this.#options.stopTimeoutMs ?? 5_000): Promise<void> {
     this.#closed = true;
     const deadline = Date.now() + timeoutMs;
-    // A start still pending after this wait kills itself when it sees the closed supervisor.
-    if (this.#starting)
+    if (this.#starting) {
       await withTimeout(
         this.#starting.catch(() => undefined),
         timeoutMs,
       );
+      // A start still pending at the deadline is killed now; its startup then fails on the exit.
+      if (this.#startingUnit) await this.#options.scopes.kill(this.#startingUnit);
+    }
     const running = this.#current;
     if (running) {
       running.stopping = true;
@@ -177,6 +181,7 @@ export class OpenCodeRuntime {
       await prepareNamespace(this.layout, { url: endpoint.url, token: endpoint.token });
       const generation = ++this.#generation;
       const unit = `${this.#unitPrefix}${Date.now().toString(36)}-${generation}`;
+      this.#startingUnit = unit;
       const child = scopes.spawn(
         unit,
         this.#options.executable ?? 'opencode',
@@ -228,6 +233,8 @@ export class OpenCodeRuntime {
     } catch (error) {
       await endpoint.close();
       throw error;
+    } finally {
+      this.#startingUnit = null;
     }
   }
 

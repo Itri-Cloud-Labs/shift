@@ -258,3 +258,35 @@ test('a stopped runtime cannot be started again by a lingering task', { skip }, 
     await state.remove();
   }
 });
+
+test(
+  'stopping during a hung start kills the starting runtime within the budget',
+  { skip },
+  async () => {
+    const state = await temporaryState();
+    const runtime = runtimeFor(state.path);
+    await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+    await writeFile(
+      join(runtime.layout.root, 'fake-control.json'),
+      JSON.stringify({ hangStartup: true }),
+    );
+    try {
+      const starting = runtime.ensure();
+      starting.catch(() => undefined);
+      await eventually(() =>
+        existsSync(join(runtime.layout.root, 'fake-report.json')) ? true : undefined,
+      );
+      const hung = await report(runtime);
+      const started = Date.now();
+      await runtime.stop(500);
+      assert.ok(Date.now() - started < 2_000, 'stop kept its budget');
+      assert.equal(alive(hung.pid), false);
+      assert.equal(alive(hung.toolPid), false);
+      await assert.rejects(starting, { code: 'HARNESS_START_FAILED' });
+      assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+    } finally {
+      await runtime.stop();
+      await state.remove();
+    }
+  },
+);
