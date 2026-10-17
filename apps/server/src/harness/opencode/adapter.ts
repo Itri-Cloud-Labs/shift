@@ -56,7 +56,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   get storageNamespace(): string {
-    return this.runtime.layout.root;
+    return this.runtime.storageNamespace;
   }
 
   capabilities(): HarnessCapabilities {
@@ -108,7 +108,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     return {
       shiftSessionId: request.shiftSessionId,
       harnessSessionId: id,
-      storageNamespace: this.runtime.layout.root,
+      storageNamespace: this.runtime.storageNamespace,
       cwd: request.cwd,
     };
   }

@@ -2,35 +2,13 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { runCli, startChild, temporaryState } from '../helpers.js';
+import { environment, key, model, skip } from './opencode-setup.js';
 
-// `shift serve` driving real OpenCode, with paid model calls: opt in with SHIFT_TEST_OPENCODE=1.
-// The key comes from SHIFT_TEST_OPENCODE_KEY or an API-key entry in the OpenCode auth file.
-const model = process.env['SHIFT_TEST_OPENCODE_MODEL'] ?? 'opencode-go/claude-haiku-5-5';
-const provider = model.slice(0, model.indexOf('/'));
-
-async function credentialKey(): Promise<string | undefined> {
-  if (process.env['SHIFT_TEST_OPENCODE_KEY']) return process.env['SHIFT_TEST_OPENCODE_KEY'];
-  try {
-    const auth = JSON.parse(
-      await readFile(join(homedir(), '.local/share/opencode/auth.json'), 'utf8'),
-    ) as Record<string, { type?: string; key?: string }>;
-    return auth[provider]?.type === 'api' ? auth[provider]?.key : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-const key = process.env['SHIFT_TEST_OPENCODE'] === '1' ? await credentialKey() : undefined;
-const skip =
-  process.env['SHIFT_TEST_OPENCODE'] !== '1'
-    ? 'set SHIFT_TEST_OPENCODE=1 to run real OpenCode model calls'
-    : key === undefined && `no API-key credential for ${provider}`;
-
+// `shift serve` driving real OpenCode, with paid model calls; see opencode-setup.ts.
 interface Run {
   id: string;
   state: string;
@@ -46,9 +24,10 @@ async function toolProcess(stateDirectory: string): Promise<number> {
       try {
         const environ = await readFile(`/proc/${entry}/environ`, 'utf8');
         const command = await readFile(`/proc/${entry}/cmdline`, 'utf8');
+        // Every runtime process carries the namespace's plugin path, in either environment.
         if (
           command.startsWith('sleep\0') &&
-          environ.includes(`XDG_DATA_HOME=${stateDirectory}/harness/opencode/data`)
+          environ.includes(`${stateDirectory}/harness/opencode/`)
         ) {
           return Number(entry);
         }
@@ -76,7 +55,11 @@ test(
       { cwd: repo },
     );
     const serve = () =>
-      startChild(state.path, ['--opencode-model', model], { SHIFT_OPENCODE_API_KEY: key! });
+      startChild(
+        state.path,
+        ['--opencode-model', model, '--opencode-environment', environment],
+        key === undefined ? {} : { SHIFT_OPENCODE_API_KEY: key },
+      );
     const shift = async (...args: string[]) => {
       const result = await runCli([...args, '--state-dir', state.path]);
       if (result.code !== 0) throw new Error(result.errors);

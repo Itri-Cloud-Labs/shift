@@ -44,6 +44,7 @@ function runtimeFor(stateDirectory: string, extra: Partial<OpenCodeRuntimeOption
     stateDirectory,
     scopes,
     executable: fake,
+    environment: 'isolated',
     logger: createLogger('silent'),
     resultHandler: async () => ({ accepted: false, reason: 'unused' }),
     ...extra,
@@ -69,6 +70,50 @@ test(
     await scopes.kill(unit);
     assert.equal(alive(escaped), false);
     assert.deepEqual(await scopes.members(unit), []);
+  },
+);
+
+test(
+  'in the host environment the runtime uses the owner install and adds only the Shift plugin',
+  { skip },
+  async () => {
+    const state = await temporaryState();
+    process.env['SHIFT_HOST_TEST_MARKER'] = 'withheld';
+    process.env['HOST_TEST_MARKER'] = 'inherited';
+    const runtime = runtimeFor(state.path, { environment: 'host' });
+    try {
+      await runtime.ensure();
+      const started = await report(runtime);
+      assert.equal(started.env['HOME'], process.env['HOME']);
+      assert.equal(started.env['HOST_TEST_MARKER'], 'inherited');
+      assert.equal(started.env['SHIFT_HOST_TEST_MARKER'], undefined);
+      assert.equal(started.env['OPENCODE_SERVER_PASSWORD'], undefined);
+      const inline = JSON.parse(started.env['OPENCODE_CONFIG_CONTENT']!) as {
+        plugins: Array<{ package: string; options: { url: string; token: string } }>;
+      };
+      assert.deepEqual(
+        inline.plugins.map((plugin) => plugin.package),
+        [runtime.layout.plugin],
+      );
+      assert.match(inline.plugins[0]!.options.token, /\S{16,}/);
+      assert.equal(existsSync(runtime.layout.config), false, 'no namespace config is written');
+      assert.equal(existsSync(join(runtime.layout.root, 'fake-credentials.json')), false);
+      assert.equal(
+        runtime.storageNamespace,
+        join(
+          process.env['XDG_DATA_HOME'] || join(process.env['HOME']!, '.local/share'),
+          'opencode',
+        ),
+      );
+      // Values travel in the environment, never in a command line other accounts can read.
+      const cmdline = await readFile(`/proc/${started.pid}/cmdline`, 'utf8');
+      assert.equal(cmdline.includes(inline.plugins[0]!.options.token), false);
+    } finally {
+      delete process.env['SHIFT_HOST_TEST_MARKER'];
+      delete process.env['HOST_TEST_MARKER'];
+      await runtime.stop();
+      await state.remove();
+    }
   },
 );
 

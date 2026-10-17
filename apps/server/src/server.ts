@@ -166,6 +166,7 @@ export async function startServer(
       ...(harness.opencodeExecutable === undefined
         ? {}
         : { executable: harness.opencodeExecutable }),
+      environment: harness.environment ?? 'host',
       ...(harness.providerApiKey && defaultModel
         ? {
             credentials: [

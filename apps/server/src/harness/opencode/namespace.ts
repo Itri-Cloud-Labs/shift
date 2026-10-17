@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-// One OpenCode storage namespace per Shift server. A private HOME is required as well as XDG
-// paths: OpenCode otherwise loads skills from the host account's home directory.
+// `host` runs OpenCode as the owner's own install: their config, credentials, plugins, skills and
+// session store. `isolated` gives each Shift server a private namespace, for tests and CI. A
+// private HOME is required there as well as XDG paths: OpenCode otherwise loads skills from the
+// host account's home directory.
+export type HarnessEnvironment = 'host' | 'isolated';
+
 export interface NamespaceLayout {
   root: string;
   home: string;
@@ -52,6 +57,48 @@ export function namespaceEnvironment(
   };
 }
 
+// Variables that are Shift's own, or that would replace the password OpenCode prints at startup.
+const withheld = (key: string) =>
+  key.startsWith('SHIFT_') || key === 'OPENCODE_SERVER_PASSWORD' || key === 'OPENCODE_PASSWORD';
+
+// The owner's environment, with the Shift plugin added to any inline config already present.
+// OpenCode merges `OPENCODE_CONFIG_CONTENT` over the global config, so the owner's plugins stay.
+export function hostEnvironment(
+  layout: NamespaceLayout,
+  endpoint: { url: string; token: string },
+  inherited: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(inherited)) {
+    if (value !== undefined && !withheld(key)) env[key] = value;
+  }
+  let inline: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(env['OPENCODE_CONFIG_CONTENT'] ?? '{}');
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      inline = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // An unreadable inline config would fail OpenCode's own startup; Shift's replaces it.
+  }
+  const plugins = Array.isArray(inline['plugins']) ? inline['plugins'] : [];
+  env['OPENCODE_CONFIG_CONTENT'] = JSON.stringify({
+    ...inline,
+    plugins: [...plugins, pluginEntry(layout, endpoint)],
+  });
+  return env;
+}
+
+// Where the owner's OpenCode keeps its session store, which identifies the namespace.
+export function hostStorageNamespace(inherited: NodeJS.ProcessEnv = process.env): string {
+  return join(inherited['XDG_DATA_HOME'] || join(homedir(), '.local', 'share'), 'opencode');
+}
+
+const pluginEntry = (layout: NamespaceLayout, endpoint: { url: string; token: string }) => ({
+  package: layout.plugin,
+  options: endpoint,
+});
+
 async function writePrivate(path: string, content: string): Promise<void> {
   await writeFile(path, content, { mode: 0o600 });
   await chmod(path, 0o600);
@@ -60,17 +107,20 @@ async function writePrivate(path: string, content: string): Promise<void> {
 export async function prepareNamespace(
   layout: NamespaceLayout,
   endpoint: { url: string; token: string },
+  environment: HarnessEnvironment = 'isolated',
 ): Promise<void> {
-  for (const directory of [
-    layout.root,
-    layout.home,
-    join(layout.config, 'opencode'),
-    layout.data,
-    layout.state,
-    layout.cache,
-    layout.tmp,
-    layout.plugin,
-  ]) {
+  const isolatedDirectories =
+    environment === 'isolated'
+      ? [
+          layout.home,
+          join(layout.config, 'opencode'),
+          layout.data,
+          layout.state,
+          layout.cache,
+          layout.tmp,
+        ]
+      : [];
+  for (const directory of [layout.root, ...isolatedDirectories, layout.plugin]) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
   }
   await writePrivate(join(layout.plugin, 'index.mjs'), pluginSource);
@@ -78,11 +128,14 @@ export async function prepareNamespace(
     join(layout.plugin, 'package.json'),
     `${JSON.stringify({ name: 'shift-opencode-plugin', private: true, type: 'module', exports: './index.mjs' }, null, 2)}\n`,
   );
-  // Rewritten for every runtime generation because the endpoint port and token change.
-  await writePrivate(
-    join(layout.config, 'opencode', 'opencode.jsonc'),
-    `${JSON.stringify({ plugins: [{ package: layout.plugin, options: endpoint }] }, null, 2)}\n`,
-  );
+  // Rewritten for every runtime generation because the endpoint port and token change. In host
+  // mode the same entry travels in the environment instead.
+  if (environment === 'isolated') {
+    await writePrivate(
+      join(layout.config, 'opencode', 'opencode.jsonc'),
+      `${JSON.stringify({ plugins: [pluginEntry(layout, endpoint)] }, null, 2)}\n`,
+    );
+  }
 }
 
 export const pluginId = 'shift';

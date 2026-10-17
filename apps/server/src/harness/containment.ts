@@ -5,6 +5,9 @@ import { promisify } from 'node:util';
 import { ShiftError } from '../domain/errors.js';
 
 const run = promisify(execFile);
+// What systemd-run uses to find the user manager.
+const busVariables = ['DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'];
+
 const unitName = /^[A-Za-z0-9_.-]{1,200}$/;
 const dead = ['inactive', 'failed'];
 
@@ -35,8 +38,9 @@ export class SystemdScopes {
     }
   }
 
-  // The command runs with exactly `env`. systemd-run itself keeps this process's environment so it
-  // can reach the manager's bus; `env -i` then replaces the environment before the command starts.
+  // The command runs with exactly `env`. systemd-run also needs this process's bus variables to
+  // reach its manager; `env -u` removes those the command was not given. Values never appear in
+  // the command line, which other accounts can read; a process environment is private to its owner.
   spawn(
     unit: string,
     command: string,
@@ -44,7 +48,12 @@ export class SystemdScopes {
     options: { cwd: string; env: Record<string, string> },
   ): ChildProcess {
     if (!unitName.test(unit)) throw new ShiftError('INVALID_UNIT_NAME', 'Invalid scope name.');
-    const assignments = Object.entries(options.env).map(([key, value]) => `${key}=${value}`);
+    const bus: Record<string, string> = {};
+    for (const key of busVariables) {
+      const value = process.env[key];
+      if (value !== undefined && !(key in options.env)) bus[key] = value;
+    }
+    const unset = Object.keys(bus).flatMap((key) => ['-u', key]);
     return spawn(
       'systemd-run',
       [
@@ -55,12 +64,11 @@ export class SystemdScopes {
         `--unit=${unit}`,
         '--',
         'env',
-        '-i',
-        ...assignments,
+        ...unset,
         command,
         ...args,
       ],
-      { cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe'] },
+      { cwd: options.cwd, env: { ...options.env, ...bus }, stdio: ['ignore', 'pipe', 'pipe'] },
     );
   }
 

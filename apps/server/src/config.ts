@@ -15,10 +15,12 @@ export interface ServerConfig {
   harness?: HarnessConfig;
 }
 
-// The provider key is registered in the private OpenCode namespace and never logged or passed to
-// the harness environment. Model references are `<provider>/<model>`.
+// OpenCode runs in the owner's environment unless `isolated`. A provider key applies only to an
+// isolated namespace, where it is registered once and never logged or passed to the harness
+// environment. Model references are `<provider>/<model>`.
 export interface HarnessConfig {
   opencodeExecutable?: string;
+  environment?: 'host' | 'isolated';
   defaultModel?: string;
   systemdManager?: 'user' | 'system';
   providerApiKey?: string;
@@ -46,6 +48,7 @@ const validate = new Ajv2020({
       additionalProperties: false,
       properties: {
         opencodeExecutable: { type: 'string', minLength: 1, maxLength: 4096 },
+        environment: { enum: ['host', 'isolated'] },
         defaultModel: { type: 'string', pattern: '^[^/\\s]+/\\S+$', maxLength: 200 },
         systemdManager: { enum: ['user', 'system'] },
         providerApiKey: { type: 'string', minLength: 1, maxLength: 4096 },
@@ -80,6 +83,13 @@ export function validateConfig(input: unknown): ServerConfig {
     throw new ShiftError(
       'INVALID_CONFIGURATION',
       'Use a loopback IP address, or explicitly enable --public for another IP.',
+      422,
+    );
+  }
+  if (config.harness?.providerApiKey && config.harness.environment !== 'isolated') {
+    throw new ShiftError(
+      'INVALID_CONFIGURATION',
+      'SHIFT_OPENCODE_API_KEY needs --opencode-environment isolated; your own OpenCode install uses its own credentials.',
       422,
     );
   }
