@@ -93,7 +93,11 @@ export type ResultHandler = (submission: ResultSubmission) => Promise<ResultVerd
 
 export interface HarnessAdapter {
   readonly id: string;
+  // Where the harness keeps its sessions; recorded when Shift binds a session.
+  readonly storageNamespace: string;
   capabilities(): HarnessCapabilities;
+  // Pure: the correlation is recorded durably before the prompt is submitted.
+  correlate(invocationId: string): InvocationCorrelation;
   createSession(request: HarnessCreateRequest): Promise<HarnessSessionHandle>;
   inspectSession(handle: HarnessSessionHandle): Promise<HarnessSessionObservation>;
   submit(

@@ -71,16 +71,44 @@ Pure source contracts live under `src/protocol/schemas`; deterministic public fi
 
 Dependency scripts are explicitly allowed only for esbuild; better-sqlite3's automatic source build is disabled because the selected release ships x64/arm64 Linux prebuilds. fs-native-extensions 1.5.1 supplies Node-API Linux x64/arm64 prebuilds with no install script. A missing/incompatible prebuild fails clearly. Building a replacement native binding requires an operator/developer toolchain and the same patch/runtime checks. Workspace TypeScript stays strict; `skipLibCheck` avoids Drizzle's declarations for unused optional database drivers.
 
+## Agent runs
+
+The first vertical slice runs one fixed graph: a manual start, one agent node, and an end node. Start the server with a model, then start runs through the administrative socket:
+
+```sh
+SHIFT_OPENCODE_API_KEY=… shift serve --opencode-model opencode-go/claude-haiku-5-5
+shift run start --repo /path/to/repo --goal "Count the words in notes.txt." \
+  --result-schema '{"type":"object","required":["words"],"properties":{"words":{"type":"integer"}}}' --wait
+shift run show <run-id>
+shift run list
+```
+
+`SHIFT_OPENCODE_API_KEY` is needed once: it is stored in the private OpenCode namespace. `--read-only` denies repository writes and shell commands; artifact-directory writes stay allowed. `--result-schema` is the JSON Schema 2020-12 for the agent's business data (default: any object). `--model` overrides the server's model for one run.
+
+The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn; up to three rejections are corrected in place. A turn that ends without an accepted result gets up to two correction prompts. A completed result completes the run with `outcome.data`; a blocker or failure fails it.
+
+Every run, execution, attempt, session, invocation and result submission is in SQLite, and every external step has a durable intent first. Stopping or killing either process is recovered as follows:
+
+| Situation                                                            | Result                                                                                                                                              |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Graceful `shift stop` during a turn                                  | The turn is cancelled through the harness, and the next start continues it in the same session.                                                     |
+| Shift killed before the prompt reached OpenCode                      | The next start submits it once, with the same message ID.                                                                                           |
+| Shift killed after OpenCode accepted it but before the agent started | The next start continues in the same session.                                                                                                       |
+| Shift or OpenCode killed while the agent's tools run                 | The runtime scope is killed, so the tools stop, and the run enters `NEEDS_HUMAN` with `HARNESS_OUTCOME_UNKNOWN`. Nothing is resubmitted.            |
+| OpenCode finishes the turn while Shift is down                       | The agent's result submission fails, so the turn ends without an accepted result and gets a correction prompt that says not to redo completed work. |
+
+A restart reaps the previous OpenCode runtime instead of reconnecting to it, so a turn running during a Shift crash is always interrupted. `NEEDS_HUMAN` runs wait for an owner; repair commands are not implemented yet. Runs have no projects, workflows or workspaces yet: the agent works directly in `--repo`.
+
 ## OpenCode harness
 
-`src/harness` contains the OpenCode v2 runtime supervisor and adapter. They are not yet wired into `shift serve`; AgentService and its tables come next. The evidence behind each choice is in [OpenCode capabilities](../../docs/opencode-capabilities.md).
+`src/harness` contains the OpenCode v2 runtime supervisor and adapter that `shift serve` uses for agent runs. The evidence behind each choice is in [OpenCode capabilities](../../docs/opencode-capabilities.md).
 
 - One `opencode serve` runtime per Shift server runs in the namespace `<state>/harness/opencode`, with a private `HOME`, XDG directories and `TMPDIR`. It receives only those paths, `PATH` and `LANG`, never provider keys or bus addresses.
 - The runtime runs inside a transient systemd scope named `shift-opencode-<namespace hash>-…`. Tool processes leave OpenCode's process group, so losing the runtime kills the whole scope. Every start first kills stale scopes of the namespace. The supervisor needs a systemd user manager (`systemd-run --user`); a system manager is selectable for a root service.
 - The server password is generated by OpenCode and read from its stdout. Supplying it through the environment would expose it to every tool shell.
 - Results arrive through the `shift_submit_result` plugin tool, which calls a loopback endpoint with a per-generation bearer token.
 
-`pnpm --filter @shift/server test` includes supervisor tests that run a fake OpenCode inside real scopes; they skip without a systemd user manager unless `SHIFT_TEST_REQUIRE_SYSTEMD=1`, which CI sets. `pnpm --filter @shift/server test:opencode` runs the real-runtime integration test. It makes paid model calls, reads an API key from `SHIFT_TEST_OPENCODE_KEY` or an API-key entry in `~/.local/share/opencode/auth.json` (never OAuth), and selects the model with `SHIFT_TEST_OPENCODE_MODEL` (default `opencode-go/claude-haiku-5-5`).
+`pnpm --filter @shift/server test` includes supervisor tests and end-to-end run tests that drive real `shift serve` processes against scripted OpenCode stand-ins inside real scopes, killing either process mid-run; they skip without a systemd user manager unless `SHIFT_TEST_REQUIRE_SYSTEMD=1`, which CI sets. `pnpm --filter @shift/server test:opencode` runs the real-runtime integration test. It makes paid model calls, reads an API key from `SHIFT_TEST_OPENCODE_KEY` or an API-key entry in `~/.local/share/opencode/auth.json` (never OAuth), and selects the model with `SHIFT_TEST_OPENCODE_MODEL` (default `opencode-go/claude-haiku-5-5`).
 
 ## Platform verification
 

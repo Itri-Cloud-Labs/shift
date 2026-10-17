@@ -8,6 +8,22 @@ export async function administrativeRequest(
   stateDirectory: string,
   operation: 'info' | 'health' | 'ready' | 'stop',
 ): Promise<unknown> {
+  const { status, payload } = await administrativeCall(stateDirectory, {
+    method: operation === 'stop' ? 'POST' : 'GET',
+    path: operation === 'stop' ? '/api/v0/admin/shutdown' : `/api/v0/${operation}`,
+  });
+  if (status !== 200 && status !== 202 && !(operation === 'ready' && status === 503)) {
+    throw new ShiftError('ADMIN_REJECTED', 'The server rejected the administrative request.');
+  }
+  return payload;
+}
+
+// One request over the private administrative socket. Any JSON response is returned with its
+// status, so callers can report the server's own protocol error.
+export async function administrativeCall(
+  stateDirectory: string,
+  call: { method: 'GET' | 'POST'; path: string; body?: unknown },
+): Promise<{ status: number; payload: unknown }> {
   const directory = await realpath(stateDirectory);
   const metadata = await stat(directory);
   if (metadata.uid !== process.getuid!() || (metadata.mode & 0o077) !== 0) {
@@ -26,20 +42,29 @@ export async function administrativeRequest(
       'The administrative socket is missing or does not have mode 0600.',
     );
   }
-  return new Promise<unknown>((resolve, reject) => {
+  return new Promise<{ status: number; payload: unknown }>((resolve, reject) => {
+    const body = call.body === undefined ? undefined : JSON.stringify(call.body);
     const req = request(
       {
         socketPath,
-        method: operation === 'stop' ? 'POST' : 'GET',
-        path: operation === 'stop' ? '/api/v0/admin/shutdown' : `/api/v0/${operation}`,
+        method: call.method,
+        path: call.path,
         agent: false,
+        ...(body === undefined
+          ? {}
+          : {
+              headers: {
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(body),
+              },
+            }),
       },
       (res) => {
         const chunks: Buffer[] = [];
         let length = 0;
         res.on('data', (chunk: Buffer) => {
           length += chunk.length;
-          if (length > 64 * 1024)
+          if (length > 1024 * 1024)
             req.destroy(
               new ShiftError(
                 'ADMIN_INVALID_RESPONSE',
@@ -55,15 +80,7 @@ export async function administrativeRequest(
           clearTimeout(timeout);
           try {
             const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (
-              res.statusCode !== 200 &&
-              res.statusCode !== 202 &&
-              !(operation === 'ready' && res.statusCode === 503)
-            ) {
-              reject(
-                new ShiftError('ADMIN_REJECTED', 'The server rejected the administrative request.'),
-              );
-            } else resolve(payload);
+            resolve({ status: res.statusCode ?? 0, payload });
           } catch {
             reject(
               new ShiftError(
@@ -87,6 +104,6 @@ export async function administrativeRequest(
           : new ShiftError('ADMIN_UNAVAILABLE', 'Cannot connect to the administrative socket.'),
       );
     });
-    req.end();
+    req.end(body);
   });
 }

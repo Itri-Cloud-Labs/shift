@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { defaultStateDirectory, validateConfig } from './config.js';
 import { publicError, ShiftError } from './domain/errors.js';
-import { administrativeRequest } from './admin-client.js';
+import { administrativeCall, administrativeRequest } from './admin-client.js';
 import {
   validateServerInfo,
   validateServerHealth,
@@ -13,17 +13,124 @@ import {
 } from './protocol/index.js';
 import { startServer } from './server.js';
 
-const usage = `Shift server foundation
+const usage = `Shift server
 
 shift serve [--state-dir PATH] [--host 127.0.0.1] [--port 4317] [--public]
             [--shutdown-timeout-ms 5000] [--log-level info]
-            [--sqlite-native-binding PATH]
+            [--sqlite-native-binding PATH] [--opencode-model PROVIDER/MODEL]
+            [--opencode-executable PATH] [--systemd-manager user|system]
 shift info|health|ready|stop [--state-dir PATH]
+shift run start --goal TEXT --repo PATH [--model PROVIDER/MODEL] [--read-only]
+                [--result-schema JSON] [--wait] [--state-dir PATH]
+shift run show RUN_ID [--wait] [--state-dir PATH]
+shift run list [--state-dir PATH]
 
-TCP serves read-only /api/v0/info, /health and /ready. Administration uses
-the private admin.sock in the state directory. Pairing/execution are unavailable.
---public explicitly permits a non-loopback IP; it exposes no administration.
+TCP serves read-only /api/v0/info, /health and /ready. Administration and runs
+use the private admin.sock in the state directory. --public explicitly permits a
+non-loopback IP; it exposes no administration. SHIFT_OPENCODE_API_KEY supplies
+the provider key for --opencode-model once; it is kept in the private OpenCode
+namespace. Pairing and remote clients are unavailable.
 `;
+
+const terminal = (state: unknown) => state !== 'RUNNING';
+
+// Reports the server's own protocol error rather than a generic administrative failure.
+function payloadOf(response: { status: number; payload: unknown }): Record<string, unknown> {
+  const payload = (response.payload ?? {}) as Record<string, unknown>;
+  if (response.status >= 400) {
+    throw new ShiftError(
+      typeof payload['code'] === 'string' ? payload['code'] : 'ADMIN_REJECTED',
+      typeof payload['message'] === 'string'
+        ? payload['message']
+        : 'The server rejected the request.',
+      response.status,
+    );
+  }
+  return payload;
+}
+
+async function runCommand(args: string[]): Promise<void> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      strict: true,
+      allowPositionals: true,
+      options: {
+        'state-dir': { type: 'string' },
+        goal: { type: 'string' },
+        repo: { type: 'string' },
+        model: { type: 'string' },
+        'read-only': { type: 'boolean' },
+        'result-schema': { type: 'string' },
+        wait: { type: 'boolean' },
+      },
+    });
+  } catch {
+    throw new ShiftError('INVALID_CONFIGURATION', 'Invalid command options. Run shift help.', 422);
+  }
+  const { values, positionals } = parsed;
+  const [subcommand, runId] = positionals;
+  const stateDirectory = resolve(
+    values['state-dir'] ?? process.env['SHIFT_STATE_DIR'] ?? defaultStateDirectory(),
+  );
+  const call = async (method: 'GET' | 'POST', path: string, body?: unknown) =>
+    payloadOf(
+      await administrativeCall(stateDirectory, {
+        method,
+        path,
+        ...(body === undefined ? {} : { body }),
+      }),
+    );
+  const wait = async (run: Record<string, unknown>) => {
+    while (!terminal(run['state'])) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      run = (await call('GET', `/api/v0/admin/runs/${String(run['id'])}`))['run'] as Record<
+        string,
+        unknown
+      >;
+    }
+    return run;
+  };
+  const print = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  if (subcommand === 'start' && positionals.length === 1) {
+    if (!values.goal || !values.repo) {
+      throw new ShiftError('INVALID_CONFIGURATION', 'run start needs --goal and --repo.', 422);
+    }
+    let resultSchema: unknown;
+    if (values['result-schema'] !== undefined) {
+      try {
+        resultSchema = JSON.parse(values['result-schema']);
+      } catch {
+        throw new ShiftError('INVALID_CONFIGURATION', '--result-schema must be JSON.', 422);
+      }
+    }
+    let run = (
+      await call('POST', '/api/v0/admin/runs', {
+        goal: values.goal,
+        repository: resolve(values.repo),
+        ...(values.model === undefined ? {} : { model: values.model }),
+        ...(values['read-only'] ? { readOnly: true } : {}),
+        ...(resultSchema === undefined ? {} : { resultSchema }),
+      })
+    )['run'] as Record<string, unknown>;
+    if (values.wait) {
+      run = await wait(run);
+      if (run['state'] !== 'COMPLETED') process.exitCode = 1;
+    }
+    print(run);
+  } else if (subcommand === 'show' && runId && positionals.length === 2) {
+    let run = (await call('GET', `/api/v0/admin/runs/${encodeURIComponent(runId)}`))[
+      'run'
+    ] as Record<string, unknown>;
+    if (values.wait) run = await wait(run);
+    print(run);
+  } else if (subcommand === 'list' && positionals.length === 1) {
+    print((await call('GET', '/api/v0/admin/runs'))['runs']);
+  } else {
+    throw new ShiftError('INVALID_CONFIGURATION', 'Unknown run command. Run shift help.', 422);
+  }
+}
 
 function integer(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -44,6 +151,7 @@ async function main(): Promise<void> {
     process.stdout.write(usage);
     return;
   }
+  if (command === 'run') return runCommand(args.slice(1));
   if (!['serve', 'info', 'health', 'ready', 'stop'].includes(command)) {
     throw new ShiftError('INVALID_CONFIGURATION', 'Unknown command. Run shift help.', 422);
   }
@@ -61,6 +169,9 @@ async function main(): Promise<void> {
         'shutdown-timeout-ms': { type: 'string' },
         'log-level': { type: 'string' },
         'sqlite-native-binding': { type: 'string' },
+        'opencode-model': { type: 'string' },
+        'opencode-executable': { type: 'string' },
+        'systemd-manager': { type: 'string' },
       },
     }));
   } catch {
@@ -96,6 +207,14 @@ async function main(): Promise<void> {
   }
   const nativeBinding =
     values['sqlite-native-binding'] ?? process.env['SHIFT_SQLITE_NATIVE_BINDING'];
+  const harness = Object.fromEntries(
+    Object.entries({
+      defaultModel: values['opencode-model'] ?? process.env['SHIFT_OPENCODE_MODEL'],
+      opencodeExecutable: values['opencode-executable'] ?? process.env['SHIFT_OPENCODE_EXECUTABLE'],
+      systemdManager: values['systemd-manager'] ?? process.env['SHIFT_SYSTEMD_MANAGER'],
+      providerApiKey: process.env['SHIFT_OPENCODE_API_KEY'],
+    }).filter(([, value]) => value !== undefined && value !== ''),
+  );
   const config = validateConfig({
     stateDirectory,
     host: values.host ?? process.env['SHIFT_HOST'] ?? '127.0.0.1',
@@ -107,6 +226,7 @@ async function main(): Promise<void> {
     ),
     logLevel: values['log-level'] ?? process.env['SHIFT_LOG_LEVEL'] ?? 'info',
     ...(nativeBinding === undefined ? {} : { sqliteNativeBinding: nativeBinding }),
+    harness,
   });
   let requestedStop = false;
   let running: Awaited<ReturnType<typeof startServer>> | undefined;

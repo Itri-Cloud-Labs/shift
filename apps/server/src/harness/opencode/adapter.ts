@@ -55,8 +55,16 @@ export class OpenCodeAdapter implements HarnessAdapter {
     this.#pageSize = options.pageSize ?? 200;
   }
 
+  get storageNamespace(): string {
+    return this.runtime.layout.root;
+  }
+
   capabilities(): HarnessCapabilities {
     return openCodeCapabilities;
+  }
+
+  correlate(invocationId: string): InvocationCorrelation {
+    return { shiftInvocationId: invocationId, providerMessageId: providerMessageId(invocationId) };
   }
 
   async createSession(request: HarnessCreateRequest): Promise<HarnessSessionHandle> {
@@ -127,10 +135,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     handle: HarnessSessionHandle,
     request: HarnessInvocationRequest,
   ): Promise<SubmissionReceipt> {
-    const correlation: InvocationCorrelation = {
-      shiftInvocationId: request.invocationId,
-      providerMessageId: providerMessageId(request.invocationId),
-    };
+    const correlation = this.correlate(request.invocationId);
     const runtime = await this.runtime.ensure();
     const { client } = runtime;
     const permissions = compilePermissions(

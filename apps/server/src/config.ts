@@ -12,6 +12,16 @@ export interface ServerConfig {
   shutdownTimeoutMs: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
   sqliteNativeBinding?: string;
+  harness?: HarnessConfig;
+}
+
+// The provider key is registered in the private OpenCode namespace and never logged or passed to
+// the harness environment. Model references are `<provider>/<model>`.
+export interface HarnessConfig {
+  opencodeExecutable?: string;
+  defaultModel?: string;
+  systemdManager?: 'user' | 'system';
+  providerApiKey?: string;
 }
 
 const validate = new Ajv2020({
@@ -31,6 +41,16 @@ const validate = new Ajv2020({
     shutdownTimeoutMs: { type: 'integer', minimum: 100, maximum: 30000 },
     logLevel: { enum: ['debug', 'info', 'warn', 'error', 'silent'] },
     sqliteNativeBinding: { type: 'string', minLength: 1, maxLength: 4096 },
+    harness: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        opencodeExecutable: { type: 'string', minLength: 1, maxLength: 4096 },
+        defaultModel: { type: 'string', pattern: '^[^/\\s]+/\\S+$', maxLength: 200 },
+        systemdManager: { enum: ['user', 'system'] },
+        providerApiKey: { type: 'string', minLength: 1, maxLength: 4096 },
+      },
+    },
   },
 });
 

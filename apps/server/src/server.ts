@@ -1,4 +1,5 @@
-import { chmod, unlink } from 'node:fs/promises';
+import { chmod, mkdir, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Logger } from 'pino';
@@ -11,6 +12,11 @@ import { acquireInstanceLock } from './lifecycle/instance-lock.js';
 import { ReadinessState } from './lifecycle/readiness.js';
 import { openStore, type Store } from './persistence/store.js';
 import { createHttpServer } from './http.js';
+import { SystemdScopes } from './harness/containment.js';
+import { OpenCodeAdapter } from './harness/opencode/adapter.js';
+import { OpenCodeRuntime } from './harness/opencode/runtime.js';
+import type { ResultHandler } from './harness/types.js';
+import { RunEngine } from './runs/engine.js';
 import type { ServerIdentity } from './protocol/index.js';
 
 async function listen(
@@ -70,6 +76,8 @@ export async function startServer(
   const releaseLock = await acquireInstanceLock(state);
   const readiness = new ReadinessState();
   let store: Store | undefined;
+  let runtime: OpenCodeRuntime | undefined;
+  let engine: RunEngine | undefined;
   let tcp: Server | undefined;
   let admin: Server | undefined;
   let stopping = false;
@@ -80,13 +88,22 @@ export async function startServer(
     rejectStopped = reject;
   });
   const cleanup = async (): Promise<void> => {
+    const failures: unknown[] = [];
+    // The engine cancels active turns through the harness while the store is still open.
+    for (const step of [() => engine?.stop(), () => runtime?.stop()]) {
+      try {
+        await step();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     const outcomes = await Promise.allSettled(
       [tcp, admin]
         .filter((server): server is Server => server !== undefined)
         .map((server) => closeListener(server, config.shutdownTimeoutMs)),
     );
-    const failures: unknown[] = outcomes.flatMap((outcome) =>
-      outcome.status === 'rejected' ? [outcome.reason] : [],
+    failures.push(
+      ...outcomes.flatMap((outcome) => (outcome.status === 'rejected' ? [outcome.reason] : [])),
     );
     try {
       store?.close();
@@ -129,6 +146,40 @@ export async function startServer(
         ? {}
         : { sqliteNativeBinding: config.sqliteNativeBinding }),
     });
+    const harness = config.harness ?? {};
+    const defaultModel = harness.defaultModel;
+    // The runtime and the agent service refer to each other through the result handler.
+    let handleResult: ResultHandler = async () => ({ accepted: false, reason: 'not ready' });
+    runtime = new OpenCodeRuntime({
+      stateDirectory: state.path,
+      scopes: new SystemdScopes(harness.systemdManager ?? 'user'),
+      logger,
+      resultHandler: (submission) => handleResult(submission),
+      ...(harness.opencodeExecutable === undefined
+        ? {}
+        : { executable: harness.opencodeExecutable }),
+      ...(harness.providerApiKey && defaultModel
+        ? {
+            credentials: [
+              {
+                integrationID: defaultModel.slice(0, defaultModel.indexOf('/')),
+                key: harness.providerApiKey,
+              },
+            ],
+          }
+        : {}),
+    });
+    const artifactRoot = join(state.path, 'artifacts');
+    await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
+    engine = new RunEngine({
+      store,
+      clock,
+      logger,
+      adapter: new OpenCodeAdapter(runtime),
+      artifactRoot,
+      ...(defaultModel === undefined ? {} : { defaultModel }),
+    });
+    handleResult = engine.agents.handleResult;
     // Only the proven instance-lock owner may remove a crash-left socket. Never delete a file/symlink.
     if (await inspectOwnedFile(state.adminSocket, 'socket')) await unlink(state.adminSocket);
     admin = createHttpServer({
@@ -138,6 +189,7 @@ export async function startServer(
       logger,
       administrative: true,
       stop: requestStop,
+      engine,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
@@ -160,6 +212,8 @@ export async function startServer(
     const host = address.family === 'IPv6' ? `[${address.address}]` : address.address;
     const url = `http://${host}:${address.port}`;
     readiness.ready();
+    // Recovery inspects harness state outside any transaction; it runs after the server is ready.
+    engine.start();
     logger.info(
       {
         event: 'server.ready',
