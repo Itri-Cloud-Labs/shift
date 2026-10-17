@@ -1,4 +1,4 @@
-# 03. Probe OpenCode before committing adapter assumptions
+# 03. Probe OpenCode v2 before committing adapter assumptions
 
 Read [COMMON.md](COMMON.md).
 
