@@ -179,6 +179,11 @@ export class OpenCodeRuntime {
     const endpoint = await startResultEndpoint(this.#options.resultHandler);
     try {
       await prepareNamespace(this.layout, { url: endpoint.url, token: endpoint.token });
+      // The last await before spawning: a stop() that arrived during preparation aborts here, and
+      // one arriving later finds `#startingUnit`, which is set in the same synchronous step.
+      if (this.#closed) {
+        throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
+      }
       const generation = ++this.#generation;
       const unit = `${this.#unitPrefix}${Date.now().toString(36)}-${generation}`;
       this.#startingUnit = unit;

@@ -290,3 +290,29 @@ test(
     }
   },
 );
+
+test('a start still preparing when the runtime stops never spawns OpenCode', { skip }, async () => {
+  const state = await temporaryState();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  // Holds the start in its preparation, before anything is spawned.
+  const gated = new (class extends SystemdScopes {
+    override async available(): Promise<boolean> {
+      await gate;
+      return super.available();
+    }
+  })('user');
+  const runtime = runtimeFor(state.path, { scopes: gated });
+  try {
+    const starting = runtime.ensure();
+    starting.catch(() => undefined);
+    await runtime.stop(100);
+    release();
+    await assert.rejects(starting, { code: 'HARNESS_STOPPED' });
+    assert.equal(existsSync(join(runtime.layout.root, 'fake-report.json')), false, 'never spawned');
+    assert.deepEqual(await scopes.list(`shift-opencode-${namespaceId(runtime.layout)}-`), []);
+  } finally {
+    await runtime.stop();
+    await state.remove();
+  }
+});
