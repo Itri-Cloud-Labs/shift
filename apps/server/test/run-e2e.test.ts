@@ -43,8 +43,11 @@ async function setup() {
     { cwd: repo },
   );
   const serve = (extra: string[] = []) =>
-    // A graceful stop needs time to cancel turns through the harness.
+    // A graceful stop needs time to cancel turns through the harness. The stand-in keeps its state
+    // in the namespace, so it must never run in the owner's environment.
     startChild(state.path, [
+      '--opencode-environment',
+      'isolated',
       '--opencode-model',
       'fake/model',
       '--opencode-executable',

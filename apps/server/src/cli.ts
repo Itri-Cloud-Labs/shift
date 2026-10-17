@@ -17,7 +17,8 @@ const usage = `Shift server
 shift serve [--state-dir PATH] [--host 127.0.0.1] [--port 4317] [--public]
             [--shutdown-timeout-ms 5000] [--log-level info]
             [--sqlite-native-binding PATH] [--opencode-model PROVIDER/MODEL]
-            [--opencode-executable PATH] [--systemd-manager user|system]
+            [--opencode-executable PATH] [--opencode-environment host|isolated]
+            [--systemd-manager user|system]
 shift info|health|ready|stop [--state-dir PATH]
 shift project add --path REPO [--name NAME] [--base-ref REF]
 shift project list
@@ -35,9 +36,10 @@ Project, workflow and run commands accept --state-dir PATH; changes accept
 
 TCP serves read-only /api/v0/info, /health and /ready. Administration and runs
 use the private admin.sock in the state directory. --public explicitly permits a
-non-loopback IP; it exposes no administration. SHIFT_OPENCODE_API_KEY supplies
-the provider key for --opencode-model once; it is kept in the private OpenCode
-namespace. Pairing and remote clients are unavailable.
+non-loopback IP; it exposes no administration. OpenCode runs as your own install,
+with your config, credentials and plugins. --opencode-environment isolated gives it
+a private namespace instead; SHIFT_OPENCODE_API_KEY then supplies the provider key
+for --opencode-model once. Pairing and remote clients are unavailable.
 `;
 
 function integer(value: string | undefined, fallback: number): number {
@@ -82,6 +84,7 @@ async function main(): Promise<void> {
         'sqlite-native-binding': { type: 'string' },
         'opencode-model': { type: 'string' },
         'opencode-executable': { type: 'string' },
+        'opencode-environment': { type: 'string' },
         'systemd-manager': { type: 'string' },
       },
     }));
@@ -122,6 +125,7 @@ async function main(): Promise<void> {
     Object.entries({
       defaultModel: values['opencode-model'] ?? process.env['SHIFT_OPENCODE_MODEL'],
       opencodeExecutable: values['opencode-executable'] ?? process.env['SHIFT_OPENCODE_EXECUTABLE'],
+      environment: values['opencode-environment'] ?? process.env['SHIFT_OPENCODE_ENVIRONMENT'],
       systemdManager: values['systemd-manager'] ?? process.env['SHIFT_SYSTEMD_MANAGER'],
       providerApiKey: process.env['SHIFT_OPENCODE_API_KEY'],
     }).filter(([, value]) => value !== undefined && value !== ''),

@@ -6,7 +6,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { classifyInvocation, type InvocationEvidence } from '../src/harness/opencode/classify.js';
 import { OpenCodeClient, parseEventBlock } from '../src/harness/opencode/client.js';
 import { compilePermissions } from '../src/harness/opencode/permissions.js';
-import { namespaceEnvironment, namespaceLayout } from '../src/harness/opencode/namespace.js';
+import {
+  hostEnvironment,
+  namespaceEnvironment,
+  namespaceLayout,
+} from '../src/harness/opencode/namespace.js';
 import { startResultEndpoint } from '../src/harness/opencode/result-endpoint.js';
 import {
   OpenCodeAdapter,
@@ -145,6 +149,35 @@ test('the namespace environment contains only private paths and PATH', () => {
   ]);
   assert.equal(env['HOME'], '/state/harness/opencode/home');
   assert.ok(Object.values(env).every((value) => !value.includes('secret')));
+});
+
+test('the host environment keeps the owner environment and appends the Shift plugin', () => {
+  const layout = namespaceLayout('/state');
+  const endpoint = { url: 'http://127.0.0.1:9/result', token: 'token' };
+  const env = hostEnvironment(layout, endpoint, {
+    HOME: '/home/owner',
+    OPENAI_API_KEY: 'owner-key',
+    SHIFT_OPENCODE_API_KEY: 'shift-key',
+    OPENCODE_PASSWORD: 'password',
+    OPENCODE_SERVER_PASSWORD: 'password',
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'x/y', plugins: ['owner-plugin'] }),
+  });
+  assert.equal(env['HOME'], '/home/owner');
+  assert.equal(env['OPENAI_API_KEY'], 'owner-key');
+  for (const withheld of [
+    'SHIFT_OPENCODE_API_KEY',
+    'OPENCODE_PASSWORD',
+    'OPENCODE_SERVER_PASSWORD',
+  ]) {
+    assert.equal(env[withheld], undefined, withheld);
+  }
+  assert.deepEqual(JSON.parse(env['OPENCODE_CONFIG_CONTENT']!), {
+    model: 'x/y',
+    plugins: ['owner-plugin', { package: '/state/harness/opencode/plugin', options: endpoint }],
+  });
+  assert.deepEqual(JSON.parse(hostEnvironment(layout, endpoint, {})['OPENCODE_CONFIG_CONTENT']!), {
+    plugins: [{ package: '/state/harness/opencode/plugin', options: endpoint }],
+  });
 });
 
 test('harness identifiers derive deterministically from Shift identifiers', () => {

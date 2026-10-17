@@ -7,10 +7,13 @@ import type { SystemdScopes } from '../containment.js';
 import type { ResultHandler } from '../types.js';
 import { OpenCodeClient } from './client.js';
 import {
+  hostEnvironment,
+  hostStorageNamespace,
   namespaceEnvironment,
   namespaceId,
   namespaceLayout,
   prepareNamespace,
+  type HarnessEnvironment,
   type NamespaceLayout,
 } from './namespace.js';
 import { startResultEndpoint, type ResultEndpoint } from './result-endpoint.js';
@@ -26,6 +29,8 @@ export interface OpenCodeRuntimeOptions {
   resultHandler: ResultHandler;
   logger: Logger;
   executable?: string;
+  // Defaults to `host`. Credentials are provisioned only into an isolated namespace.
+  environment?: HarnessEnvironment;
   credentials?: readonly ProviderCredential[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
@@ -65,6 +70,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 // Shift runs: other subcommands start a persistent background service.
 export class OpenCodeRuntime {
   readonly layout: NamespaceLayout;
+  readonly environment: HarnessEnvironment;
   readonly #options: OpenCodeRuntimeOptions;
   readonly #unitPrefix: string;
   #generation = 0;
@@ -79,7 +85,20 @@ export class OpenCodeRuntime {
   constructor(options: OpenCodeRuntimeOptions) {
     this.#options = options;
     this.layout = namespaceLayout(options.stateDirectory);
+    this.environment = options.environment ?? 'host';
+    if (this.environment === 'host' && (options.credentials?.length ?? 0) > 0) {
+      throw new ShiftError(
+        'INVALID_CONFIGURATION',
+        'Provider keys apply only to an isolated OpenCode environment.',
+        422,
+      );
+    }
     this.#unitPrefix = `shift-opencode-${namespaceId(this.layout)}-`;
+  }
+
+  // The session store that harness session IDs belong to.
+  get storageNamespace(): string {
+    return this.environment === 'host' ? hostStorageNamespace() : this.layout.root;
   }
 
   get current(): RuntimeGeneration | null {
@@ -178,7 +197,8 @@ export class OpenCodeRuntime {
     await this.#reap();
     const endpoint = await startResultEndpoint(this.#options.resultHandler);
     try {
-      await prepareNamespace(this.layout, { url: endpoint.url, token: endpoint.token });
+      const access = { url: endpoint.url, token: endpoint.token };
+      await prepareNamespace(this.layout, access, this.environment);
       // The last await before spawning: a stop() that arrived during preparation aborts here, and
       // one arriving later finds `#startingUnit`, which is set in the same synchronous step.
       if (this.#closed) {
@@ -191,7 +211,13 @@ export class OpenCodeRuntime {
         unit,
         this.#options.executable ?? 'opencode',
         ['serve', '--hostname', '127.0.0.1', '--port', '0'],
-        { cwd: this.layout.root, env: namespaceEnvironment(this.layout) },
+        {
+          cwd: this.layout.root,
+          env:
+            this.environment === 'host'
+              ? hostEnvironment(this.layout, access)
+              : namespaceEnvironment(this.layout),
+        },
       );
       // A failed spawn emits `error` instead of `exit`; either ends this generation.
       const exited = new Promise<void>((resolve) => {

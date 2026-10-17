@@ -2,8 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
@@ -18,32 +17,7 @@ import type {
 } from '../../src/harness/types.js';
 import { createLogger } from '../../src/logging.js';
 import { temporaryState } from '../helpers.js';
-
-// Real OpenCode and paid model calls: opt in with SHIFT_TEST_OPENCODE=1. The key comes from
-// SHIFT_TEST_OPENCODE_KEY or an API-key entry in the owner's OpenCode auth file; OAuth entries are
-// never used, so the test cannot rotate a refresh token.
-const [providerID = '', modelID = ''] = (
-  process.env['SHIFT_TEST_OPENCODE_MODEL'] ?? 'opencode-go/claude-haiku-5-5'
-).split(/\/(.*)/);
-
-async function credentialKey(): Promise<string | undefined> {
-  if (process.env['SHIFT_TEST_OPENCODE_KEY']) return process.env['SHIFT_TEST_OPENCODE_KEY'];
-  try {
-    const auth = JSON.parse(
-      await readFile(join(homedir(), '.local/share/opencode/auth.json'), 'utf8'),
-    ) as Record<string, { type?: string; key?: string }>;
-    const entry = auth[providerID];
-    return entry?.type === 'api' ? entry.key : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-const key = process.env['SHIFT_TEST_OPENCODE'] === '1' ? await credentialKey() : undefined;
-const skip =
-  process.env['SHIFT_TEST_OPENCODE'] !== '1'
-    ? 'set SHIFT_TEST_OPENCODE=1 to run real OpenCode model calls'
-    : key === undefined && `no API-key credential for ${providerID}`;
+import { environment, key, modelID, providerID, skip } from './opencode-setup.js';
 
 const settled = (observation: InvocationObservation) =>
   !['queued', 'running'].includes(observation.kind);
@@ -66,7 +40,8 @@ test('OpenCode v2 adapter against a real runtime', { skip, timeout: 600_000 }, a
     stateDirectory: state.path,
     scopes: new SystemdScopes('user'),
     logger: createLogger('silent'),
-    credentials: [{ integrationID: providerID, key: key! }],
+    environment,
+    ...(key === undefined ? {} : { credentials: [{ integrationID: providerID, key }] }),
     resultHandler: async (submission) => {
       submissions.push(submission);
       const input = submission.input as { status?: string; data?: unknown };

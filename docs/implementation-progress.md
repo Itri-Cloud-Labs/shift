@@ -199,3 +199,16 @@ Acceptance coverage:
 Checks and results: `pnpm check` passed formatting, protocol drift, both type checks, the app build and 95 tests (86 server, 9 app) with zero failures or skips. `pnpm --filter @shift/server test:opencode` could not be run meaningfully: the owner's `opencode-go` API key has expired, and OpenCode reports `provider.auth` ("This API key has expired") on every model call, so 9 of its 10 subtests failed before any Shift behavior was exercised. It must be rerun with a valid key. The failure showed a gap: a provider authentication error ends the turn as an ordinary failure, so Shift spends its correction prompts and reports `RESULT_MISSING` instead of the provider error. Classifying provider errors as non-correctable is a follow-up.
 
 Limitations: no `workflow_nodes`/`workflow_connections` projections; Transform has templates but no arithmetic or array operations; `maxActiveMs` is not enforced; runs still work in the project checkout; `NEEDS_HUMAN` has no repair commands.
+
+## OpenCode on the owner's install
+
+Status: complete. Date: 2026-10-17. Scope: the owner's direction that Shift use the current OpenCode install with its settings, as T3 Code does.
+
+Changed files: the OpenCode namespace module (host environment, storage namespace), the runtime supervisor, systemd containment, server configuration and CLI (`--opencode-environment host|isolated`, default `host`), the adapter's storage namespace, unit, supervisor, configuration and end-to-end tests, the real-OpenCode tests and their shared setup, the server README, specification section 11.2, the capability findings and the decision log.
+
+Acceptance coverage:
+
+- A supervisor test starts the runtime in host mode and checks the inherited environment, withheld `SHIFT_*` and password variables, the single injected plugin with its token, no namespace config or credentials written, the storage namespace, and that the token is absent from the process command line.
+- A unit test covers merging into an existing inline config. A server test refuses `SHIFT_OPENCODE_API_KEY` without isolated mode and an unknown environment value.
+- End-to-end tests pin the isolated mode, because the scripted stand-in keeps its state in the namespace.
+- `pnpm check` passed 97 tests (88 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 10 of 10 in host mode with `openai/gpt-6-luna` over the owner's OpenAI OAuth connector. This also completes the real-OpenCode verification of the definitions PR, which the expired opencode-go key had blocked.

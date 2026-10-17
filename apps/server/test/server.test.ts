@@ -142,6 +142,7 @@ test('invalid configuration and invalid native binding fail with sanitized error
     ['--port', 'wrong'],
     ['--log-level', 'secret=sentinel'],
     ['--unknown=sentinel'],
+    ['--opencode-environment', 'sentinel'],
   ]) {
     const result = await runCli(['serve', '--state-dir', state.path, ...args]);
     assert.equal(result.code, 1);
@@ -150,6 +151,13 @@ test('invalid configuration and invalid native binding fail with sanitized error
     assert.equal(error.code, 'INVALID_CONFIGURATION');
     assert(!result.errors.includes('sentinel'));
   }
+  // A provider key would otherwise be written into the owner's own OpenCode credential store.
+  const keyed = await runCli(['serve', '--state-dir', state.path, '--port', '0'], {
+    SHIFT_OPENCODE_API_KEY: 'sentinel',
+  });
+  assert.equal(keyed.code, 1);
+  assert.equal((JSON.parse(keyed.errors) as { code: string }).code, 'INVALID_CONFIGURATION');
+  assert(!keyed.errors.includes('sentinel'));
   const badNative = join(state.path, 'invalid.node');
   await writeFile(badNative, 'not a native module');
   const result = await runCli(['serve', '--state-dir', state.path, '--port', '0'], {
