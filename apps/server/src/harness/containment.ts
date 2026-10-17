@@ -6,6 +6,7 @@ import { ShiftError } from '../domain/errors.js';
 
 const run = promisify(execFile);
 const unitName = /^[A-Za-z0-9_.-]{1,200}$/;
+const dead = ['inactive', 'failed'];
 
 export type SystemdManager = 'user' | 'system';
 
@@ -72,7 +73,9 @@ export class SystemdScopes {
       const procs = await readFile(`/sys/fs/cgroup${cgroup}/cgroup.procs`, 'utf8');
       return procs.split('\n').filter(Boolean).map(Number);
     } catch (error) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+      // ENODEV: systemd is removing the emptied cgroup while it is being read.
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (code === 'ENOENT' || code === 'ENODEV') return [];
       throw error;
     }
   }
@@ -96,6 +99,7 @@ export class SystemdScopes {
     }
   }
 
+  // Scopes that may still hold processes. Dead units can stay listed until systemd collects them.
   async list(prefix: string): Promise<string[]> {
     const output = await this.systemctl([
       'list-units',
@@ -108,8 +112,11 @@ export class SystemdScopes {
     ]);
     return output
       .split('\n')
-      .map((line) => line.trim().split(/\s+/)[0] ?? '')
-      .filter((name) => name.startsWith(prefix) && name.endsWith('.scope'))
-      .map((name) => name.slice(0, -'.scope'.length));
+      .map((line) => line.trim().split(/\s+/))
+      .filter(
+        ([name = '', , active = '']) =>
+          name.startsWith(prefix) && name.endsWith('.scope') && !dead.includes(active),
+      )
+      .map(([name = '']) => name.slice(0, -'.scope'.length));
   }
 }
