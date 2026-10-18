@@ -2,7 +2,15 @@
 
 This pack contains 33 prompts for implementing the server and Electron client, including a dependency review and an early OpenCode probe. It follows the 29 milestones in the [server roadmap](../shift-server-v0.md#18-ordered-implementation-roadmap), splitting foundation and transport work where parallel ownership helps. The [client roadmap](../shift-client-v0.md#11-implementation-roadmap-and-server-coordination) describes the same product sequence.
 
-The specifications remain proposed. This documentation task does not approve them or start implementation. When ready, instruct an agent to execute a selected prompt under the scope you authorize. The pack prepares local implementation and release evidence; publishing, deployment, and real external credentials remain separate instructions/prerequisites.
+The specifications are approved as working documents. Instruct an agent to execute a selected prompt under the scope you authorize. The pack prepares local implementation and release evidence; publishing, deployment, and real external credentials remain separate instructions/prerequisites.
+
+## Status
+
+Work has followed the roadmap in risk order rather than strictly by prompt number; [implementation progress](../implementation-progress.md) records each change and its verification.
+
+- Done: 00, 01, 02, 03, 04 (definitions), 05 (linear execution) and 15 (one workspace per run, without reuse).
+- Partly done: 06 (error routing, loops and node references; no branching or fan-out), 17 (OpenCode supervision and the adapter, without client UI), 18 (result contract, schemas and corrections; no reports or handoff content), and 19 (crash and interruption recovery; reconciliation commands are open).
+- Next: 08 (failure and retry controls).
 
 ## Give an agent one task
 
