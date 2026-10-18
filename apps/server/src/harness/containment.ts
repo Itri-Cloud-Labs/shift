@@ -105,6 +105,17 @@ export class SystemdScopes {
       }
       await delay(50);
     }
+    // An emptied scope stays active until systemd handles the cgroup-empty notification. Its
+    // processes are gone either way; waiting keeps the next listing consistent with that.
+    while (Date.now() <= deadline) {
+      const state = (
+        await this.systemctl(['show', '--property=ActiveState', '--value', `${unit}.scope`]).catch(
+          () => '',
+        )
+      ).trim();
+      if (state === '' || dead.includes(state)) return;
+      await delay(50);
+    }
   }
 
   // Scopes that may still hold processes. Dead units can stay listed until systemd collects them.

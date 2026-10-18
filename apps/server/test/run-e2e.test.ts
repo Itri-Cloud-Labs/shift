@@ -7,7 +7,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { administrativeCall } from '../src/admin-client.js';
 import { SystemdScopes } from '../src/harness/containment.js';
-import { runCli, startChild, temporaryState, workspace, type OwnedProcess } from './helpers.js';
+import {
+  eventually,
+  runCli,
+  startChild,
+  temporaryState,
+  workspace,
+  type OwnedProcess,
+} from './helpers.js';
 
 // Real `shift serve` processes and CLI, real systemd scopes, and a scripted OpenCode stand-in:
 // kill either process at any point and the run finishes or reports truthful uncertainty.
@@ -203,6 +210,40 @@ test(
       assert.equal(refused.code, 1);
       assert.equal((JSON.parse(refused.errors) as { code: string }).code, 'WORKSPACE_IN_USE');
       assert.ok(existsSync(finished.workspace!.path));
+      // The owner checked the workspace and records the result by hand.
+      const result = join(env.state.path, 'result.json');
+      await writeFile(result, JSON.stringify({ checked: true }));
+      await env.shift('run', 'complete', run.id, '--file', result);
+      const completed = await env.until(run.id, (candidate) => candidate.state !== 'RUNNING');
+      assert.equal(completed.state, 'COMPLETED');
+      assert.deepEqual(completed.outcome, { data: { checked: true } });
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
+  'cancelling a run stops its agent and kills the tool',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    const server = await env.serve();
+    try {
+      const run = await env.start('Work. [fake-work 30000]');
+      const tool = await env.toolStarted();
+      const cancelled = (await env.shift(
+        'run',
+        'cancel',
+        run.id,
+        '--reason',
+        'Changed my mind.',
+        '--wait',
+      )) as Run;
+      assert.equal(cancelled.state, 'CANCELLED', JSON.stringify(cancelled));
+      assert.deepEqual(cancelled.outcome, { cancelled: true, reason: 'Changed my mind.' });
+      await eventually(() => (alive(tool) ? undefined : true));
     } finally {
       await stopped(server);
       await env.state.remove();

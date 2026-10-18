@@ -240,3 +240,28 @@ Acceptance coverage:
 - Removal refuses a workspace owned by a run in `NEEDS_HUMAN`, keeps a dirty worktree unless forced, unregisters it, and is idempotent. Unknown and option-like base refs are refused.
 - End-to-end: `shift workspace list` and `remove` on a completed run. Removal through the CLI is refused for a run that waits in `NEEDS_HUMAN` after a crash.
 - `pnpm check` passed 106 tests (97 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`, including a real agent that edited `notes.txt` in its worktree while the checkout stayed clean.
+
+## Owner run controls
+
+Status: complete for the first half of M04b. Automatic retries with backoff remain. Date: 2026-10-18.
+
+Changed files: migration 0004 and its journal entry; the run repository (control commands, completion without a live claim, limit extensions, attempt numbering, cancellation settlement and recovery, run view `cancelRequested` and `controls`), the engine (`controlRun`, background cancellation, restart recovery), AgentService (harness cancellation, the retry prompt and invocation link), the retry prompt, administrative routes, `shift run cancel|retry|fail|complete|extend`, engine, storage and end-to-end tests, the API reference and workflow guide, the prompts status, and the decision log.
+
+Acceptance coverage:
+
+- **Retry:** an agent step stopped with `HARNESS_OUTCOME_UNKNOWN` is retried in the same session with the unknown-effects prompt and completes. Attempts are numbered 1 (`INTERRUPTED`) and 2 (`COMPLETED`), the uncertain invocation stays `UNKNOWN`, and the repeated command is answered from its receipt.
+- **Fail:** a stuck step fails with `ABANDONED` through an `error` connection, and without one fails the run, sending no prompt.
+- **Complete:** a result that breaks the result schema is refused and changes nothing. A valid one completes the run, keeps the session reference, and is recorded in `controls`.
+- **Extend:** a self-loop stopped at its node limit of 2 is extended by 3 and stops again at 5. The recorded extension is `{scope: node, from: 2, to: 5}`.
+- **Cancel:**
+  - A running agent is stopped through the harness. The run becomes `CANCELLED` with its reason, and its workspace is released.
+  - An unconfirmed stop waits in `NEEDS_HUMAN` and accepts only a second cancel.
+  - A cancellation interrupted by a restart finishes on the next start.
+  - A turn that finishes during cancellation does not schedule a successor.
+- **State and input checks:** every command is refused on a finished run, on an unknown run, and with an invalid body.
+- **End-to-end:**
+  - `shift run cancel --wait` on a run with a long tool call ends `CANCELLED`, and the tool process dies.
+  - `shift run complete --file` resolves a run left in `NEEDS_HUMAN` by a crash.
+- **Totals:** `pnpm check` passed 116 tests (107 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+CI follow-up, 2026-10-18: one of the two server runs on the rebased commit failed in "a runtime that cannot start fails cleanly and leaves no scope". The failed start's scope was still listed right after it was killed. `SystemdScopes.kill` returned once the scope had no processes, but systemd keeps an emptied scope `active` until it handles the cgroup-empty notification. `kill` now also waits, within the same deadline, until the unit reports `inactive`, `failed` or unloaded. The containment guarantee (no processes remain) is unchanged; the next listing just agrees with it. Five consecutive supervisor runs passed.

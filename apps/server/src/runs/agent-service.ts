@@ -13,7 +13,13 @@ import type {
 } from '../harness/types.js';
 import { envelope } from './bindings.js';
 import { checkEnvelope } from './envelope.js';
-import { continuationPrompt, correctionPrompt, goalPrompt, type AgentTask } from './prompts.js';
+import {
+  continuationPrompt,
+  correctionPrompt,
+  goalPrompt,
+  retryPrompt,
+  type AgentTask,
+} from './prompts.js';
 import {
   StaleClaim,
   type Claim,
@@ -98,6 +104,45 @@ export class AgentService {
     }
   }
 
+  // Stops the attempt's active invocation for a cancellation. A stop that cannot be confirmed
+  // leaves the invocation UNKNOWN, which keeps the cancellation waiting for the owner.
+  async cancel(claim: Claim): Promise<void> {
+    const { repository, adapter } = this.#options;
+    const last = repository.invocations(claim.attemptId).at(-1);
+    if (!last || !active.includes(last.state)) return;
+    const error = { code: 'SHIFT_CANCELLED', message: 'The run was cancelled.' };
+    if (last.state === 'PREPARING') {
+      repository.transitionInvocation(claim, last.id, ['PREPARING'], 'INTERRUPTED', { error });
+      return;
+    }
+    const session = repository.session(claim.executionId);
+    if (!session?.harnessSessionId) return;
+    const handle: HarnessSessionHandle = {
+      shiftSessionId: session.agentSessionId,
+      harnessSessionId: session.harnessSessionId,
+      storageNamespace: session.storageNamespace,
+      cwd: session.cwd,
+    };
+    try {
+      const cancelled = await adapter.cancel(handle, adapter.correlate(last.id));
+      if (cancelled.kind !== 'stopped') {
+        repository.transitionInvocation(claim, last.id, active, 'UNKNOWN', {
+          error: {
+            code: 'HARNESS_STOP_UNCONFIRMED',
+            message: `Shift could not confirm that the turn stopped: ${cancelled.explanation}`,
+          },
+        });
+      } else if (repository.submissionCounts(last.id).accepted) {
+        repository.transitionInvocation(claim, last.id, active, 'COMPLETED');
+      } else {
+        repository.transitionInvocation(claim, last.id, active, 'INTERRUPTED', { error });
+      }
+    } catch (failure) {
+      // Left active: settling the cancellation then asks the owner.
+      if (!(failure instanceof ShiftError) && !(failure instanceof StaleClaim)) throw failure;
+    }
+  }
+
   async #drive(claim: Claim, signal: AbortSignal): Promise<void> {
     const { repository, adapter } = this.#options;
     const config = repository.agentConfig(claim.executionId);
@@ -126,8 +171,12 @@ export class AgentService {
       if (!next) return;
       const id = randomUUID();
       const artifactDirectory = this.#artifactDirectory(claim, id);
-      const prompt =
-        next === 'goal'
+      // An owner retry reopens the execution: its first prompt continues the session and says that
+      // the earlier attempt's effects are unknown.
+      const retried = next === 'goal' && repository.attemptNumber(claim.attemptId) > 1;
+      const prompt = retried
+        ? retryPrompt(task, artifactDirectory)
+        : next === 'goal'
           ? goalPrompt(task, artifactDirectory)
           : next === 'correction'
             ? correctionPrompt(task)
@@ -135,10 +184,11 @@ export class AgentService {
       repository.createInvocation(claim, {
         id,
         agentSessionId: handle.shiftSessionId,
-        kind: next,
+        kind: retried ? 'continuation' : next,
         correlationId: adapter.correlate(id).providerMessageId,
         prompt,
-        previousInvocationId: last?.id ?? null,
+        previousInvocationId:
+          last?.id ?? (retried ? (repository.lastInvocationId(claim.executionId) ?? null) : null),
       });
     }
   }

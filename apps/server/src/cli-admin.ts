@@ -19,6 +19,8 @@ const options = {
   input: { type: 'string' },
   wait: { type: 'boolean' },
   force: { type: 'boolean' },
+  reason: { type: 'string' },
+  executions: { type: 'string' },
 } as const;
 
 type Values = {
@@ -106,7 +108,7 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     return value;
   };
   const waitFor = async (run: Record<string, unknown>) => {
-    while (run['state'] === 'RUNNING') {
+    while (run['state'] === 'RUNNING' || run['state'] === 'CANCEL_REQUESTED') {
       await new Promise((done) => setTimeout(done, 1_000));
       run = (await get(`/api/v0/admin/runs/${String(run['id'])}`))['run'] as Record<
         string,
@@ -201,6 +203,32 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);
+    case 'run cancel':
+    case 'run retry':
+    case 'run fail':
+    case 'run complete':
+    case 'run extend': {
+      const body: Record<string, unknown> = {};
+      if (values.reason !== undefined && (action === 'cancel' || action === 'fail')) {
+        body['reason'] = values.reason;
+      }
+      if (action === 'complete') body['data'] = await file(values.file);
+      if (action === 'extend') {
+        const executions = need(values.executions, '--executions');
+        if (!/^[1-9]\d*$/.test(executions))
+          throw invalid('--executions must be a positive integer.');
+        body['executions'] = Number(executions);
+      }
+      let run = (
+        await send(
+          'POST',
+          `/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/${action}`,
+          body,
+        )
+      )['run'] as Record<string, unknown>;
+      if (values.wait) run = await waitFor(run);
+      return print(run);
+    }
     case 'workspace list':
       return print(
         (
