@@ -318,3 +318,12 @@ Consequences the owner accepted: agents see every MCP server, plugin and skill c
 `SystemdScopes.spawn` previously passed the environment as `env -i KEY=VALUE` arguments. That was harmless for namespace paths but would publish the owner's secrets in a command line that other accounts can read. It now gives systemd-run the command's environment plus the bus variables it needs, and `env -u` removes bus variables the command was not given.
 
 Verification: the real-OpenCode suite passed 10 of 10 in host mode with `openai/gpt-6-luna` through the owner's OpenAI OAuth connector; the owner's credential store was unchanged afterwards and no Shift scope remained.
+
+## Provider and harness failures
+
+Decided 2026-10-18. A turn that OpenCode ends with `idle: failed` no longer counts as a missing result. Before, Shift sent both correction prompts into a provider that refused every request and then reported `RESULT_MISSING`, which hid the cause; this happened for real when the opencode-go key expired.
+
+The classifier attaches a cause to a failed turn from the durable transcript: the last assistant step's `error.type`. `provider.auth` becomes `PROVIDER_AUTH`, other `provider.*` types `PROVIDER_ERROR`, and anything else, including a turn that failed before any step, `HARNESS_TURN_FAILED`. Messages are Shift's own text with only the error type and HTTP status, because the provider's `message` and `response.body` can echo request details. The invocation fails with that code and the node fails as an `external` error, which an error connection can route. Corrections are kept for `RESULT_MISSING` and `RESULT_REJECTED`, the two contract failures.
+
+A failure before any step (unknown model, provider without credential) has its cause only in the live `session.execution.failed` event. Events are not durable and nothing consumes them yet, so that case reports a generic message naming the likely causes. Automatic retries for transient provider errors (rate limits, 5xx) belong to M04b's retry policy; until then such a failure fails the node.
+

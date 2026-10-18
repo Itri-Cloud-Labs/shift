@@ -56,6 +56,14 @@ export interface HarnessPrompt {
   id: string;
 }
 
+// A turn the harness itself failed, such as a provider refusing the credential. Messages are
+// Shift's own text: provider responses can echo request details, so only their type and status are
+// kept.
+export interface HarnessFailure {
+  code: 'PROVIDER_AUTH' | 'PROVIDER_ERROR' | 'HARNESS_TURN_FAILED';
+  message: string;
+}
+
 // The terminal result arrives through the adapter's result handler, not through inspection, so a
 // turn that ended is reported as `ended`; the caller combines it with its accepted-result record.
 export type InvocationObservation =
@@ -63,7 +71,13 @@ export type InvocationObservation =
   | { kind: 'queued' }
   | { kind: 'awaiting_harness_prompt'; prompts: HarnessPrompt[] }
   | { kind: 'running' }
-  | { kind: 'ended'; outcome: 'succeeded' | 'failed'; messageIds: string[] }
+  | {
+      kind: 'ended';
+      outcome: 'succeeded' | 'failed';
+      messageIds: string[];
+      // Why the harness failed the turn, when it recorded a cause.
+      failure?: HarnessFailure;
+    }
   | { kind: 'interrupted'; explanation: string; messageIds: string[] }
   | { kind: 'unknown'; explanation: string; messageIds: string[] };
 
