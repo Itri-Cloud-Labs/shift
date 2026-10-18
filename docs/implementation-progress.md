@@ -263,3 +263,6 @@ Acceptance coverage:
   - `shift run cancel --wait` on a run with a long tool call ends `CANCELLED`, and the tool process dies.
   - `shift run complete --file` resolves a run left in `NEEDS_HUMAN` by a crash.
 - **Totals:** `pnpm check` passed 116 tests (107 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+CI follow-up, 2026-10-18: one of the two server runs on the rebased commit failed in "a runtime that cannot start fails cleanly and leaves no scope". The failed start's scope was still listed right after it was killed. `SystemdScopes.kill` returned once the scope had no processes, but systemd keeps an emptied scope `active` until it handles the cgroup-empty notification. `kill` now also waits, within the same deadline, until the unit reports `inactive`, `failed` or unloaded. The containment guarantee (no processes remain) is unchanged; the next listing just agrees with it. Five consecutive supervisor runs passed.
+
