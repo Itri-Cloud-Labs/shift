@@ -1,6 +1,8 @@
 # Shift server
 
-The Linux server foundation runs without Electron or an agent harness. It provides identity, liveness/readiness, private local administration, a singleton lock and a migrated SQLite metadata store. Workflow execution, pairing, credentials and SSE arrive in later prompts and currently advertise unavailable capabilities.
+`shift serve` is the Linux server. It stores projects, versioned workflows and runs in SQLite, executes workflows durably, runs agents through a supervised OpenCode runtime, and gives each run its own Git worktree. It is administered through the `shift` CLI over a private Unix socket. Pairing, remote clients and SSE events are not implemented yet.
+
+See [Workflows and runs](../../docs/workflows.md) for what a workflow can do and [Server API](../../docs/server-api.md) for every endpoint and CLI command.
 
 Use Node 24.19.0 and pnpm 12.6.0 from the repository root:
 
@@ -73,8 +75,6 @@ Dependency scripts are explicitly allowed only for esbuild; better-sqlite3's aut
 
 ## Workflows and runs
 
-A project is an existing Git repository on this host. A workflow belongs to a project and has a mutable draft and immutable published versions. A run executes the active version it started with; editing or republishing the workflow never changes a started run.
-
 ```sh
 shift serve --opencode-model openai/gpt-6-luna
 shift project add --path /path/to/repo
@@ -82,48 +82,10 @@ shift workflow create --project <project-id> --name count-words --file docs/exam
 shift workflow publish <workflow-id>
 shift run start --workflow <workflow-id> --input '{"file":"notes.txt"}' --wait
 shift run show <run-id>
+shift workspace list
 ```
 
-Agents run on your own OpenCode install, so any provider connected there works, including OAuth connectors. `shift workflow save <id> --revision N --file …` replaces the draft only if it is still at revision `N`. Publishing validates the whole graph and numbers a new version; publishing an unchanged draft returns the current version. Every changing command carries a command ID (`--command-id`, or a generated one that the CLI reuses when it retries a lost response), so repeating a command returns its first result instead of acting twice.
-
-Each run works in its own detached Git worktree under `<state>/workspaces/<id>`. When a run starts, Shift records the commit the project's base ref points to, and the worktree is created at that commit before the first agent node runs. Later commits to the base ref never affect a started run. Your checkout is never modified; Git only records the worktree under `.git/worktrees`. Worktrees are kept after a run finishes so you can inspect or commit the agent's work:
-
-```sh
-shift workspace list [--project <project-id>]
-shift workspace show <workspace-id>
-shift workspace remove <workspace-id> [--force]
-```
-
-Removal is refused while the run that owns the workspace has not finished, including while it waits in `NEEDS_HUMAN`, and also when the worktree has uncommitted changes unless `--force` discards them. Creation is crash-safe: a workspace interrupted while being created is discarded and recreated. One that was ready but deleted outside Shift fails the agent node instead of being silently recreated. Runs started before this release keep working in the repository itself.
-
-The workflow document is `formatVersion: 1` from specification section 5; omitted defaults are filled when a draft is saved. [count-words.json](../../docs/examples/count-words.json) is a complete example. The node types are:
-
-| Type             | Config                                                                                                | Ports              |
-| ---------------- | ----------------------------------------------------------------------------------------------------- | ------------------ |
-| `manual_trigger` | Optional `inputSchema` (JSON Schema 2020-12) that `run start --input` must satisfy. One per workflow. | `success`          |
-| `transform`      | `data`: a JSON template where `{"$binding": "<name>"}` is replaced by that binding.                   | `success`, `error` |
-| `agent`          | `goal` (with `{{name}}` placeholders), optional `model`, `readOnly`, `resultSchema`, `limits`.        | `success`, `error` |
-| `end`            | Optional `outcome` (`COMPLETED` or `FAILED`) and `reason`.                                            | none               |
-
-Bindings take values from the incoming envelope (`input`), the trigger input (`trigger`), the project (`project`), a `literal`, or an earlier node on the current path (`node`, `latest` or `first` successful execution, with an explicit `fallback` when `optional`). They are resolved once when an execution starts and frozen with it. Each port has at most one connection; a port without one completes the run. A failure follows the node's `error` connection when there is one, carrying `{"error": {...}}`; otherwise the run fails. Loops are ordinary connections bounded by `limits.maxExecutionsPerRun` per node and `execution.limits.maxExecutions` per run; reaching either stops the run in `NEEDS_HUMAN`.
-
-Not yet supported, and rejected when publishing: run variables, retries (`retry.maxAttempts` above 1), overlap policies and existing workspaces. Runs work directly in the project's checkout until workspace allocation (M08).
-
-`readOnly` agents cannot write the repository or run shell commands; artifact-directory writes stay allowed. `resultSchema` defaults to any object.
-
-The agent submits `{"status": "completed", "data": …}`, a `blocked` blocker or a `failed` error through its result tool. Shift validates each submission and answers within the turn. After three rejections Shift stops the turn; a turn that ends without an accepted result gets up to two correction prompts. Once Shift accepts a result it stands, even if the turn is then interrupted or its outcome cannot be established. A completed result is the node's `success` output; a blocker or failure is a node failure, routed through its `error` connection if it has one.
-
-Every run, execution, attempt, session, invocation and result submission is in SQLite, and every external step has a durable intent first. Stopping or killing either process is recovered as follows:
-
-| Situation                                                            | Result                                                                                                                                              |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Graceful `shift stop` during a turn                                  | The turn is cancelled through the harness, and the next start continues it in the same session.                                                     |
-| Shift killed before the prompt reached OpenCode                      | The next start submits it once, with the same message ID.                                                                                           |
-| Shift killed after OpenCode accepted it but before the agent started | The next start continues in the same session.                                                                                                       |
-| Shift or OpenCode killed while the agent's tools run                 | The runtime scope is killed, so the tools stop, and the run enters `NEEDS_HUMAN` with `HARNESS_OUTCOME_UNKNOWN`. Nothing is resubmitted.            |
-| OpenCode finishes the turn while Shift is down                       | The agent's result submission fails, so the turn ends without an accepted result and gets a correction prompt that says not to redo completed work. |
-
-A restart reaps the previous OpenCode runtime instead of reconnecting to it, so a turn running during a Shift crash is always interrupted. `NEEDS_HUMAN` runs wait for an owner; repair commands are not implemented yet.
+Agents run on your own OpenCode install, so any provider connected there works, including OAuth connectors. Each run works in its own detached worktree under `<state>/workspaces`, and your checkout is never modified. [Workflows and runs](../../docs/workflows.md) describes the document format, node types, bindings, agent results, workspaces and crash recovery. [Server API](../../docs/server-api.md) describes every endpoint, command ID semantics and error code.
 
 ## OpenCode harness
 

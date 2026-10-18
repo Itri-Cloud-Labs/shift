@@ -120,10 +120,10 @@ A result accepted by Shift's callback is authoritative even if a crash prevents 
 ## 6. Unresolved and unverified
 
 - No v2 behavior used here is documented as guaranteed. The HTTP API is labelled experimental and the plugin API beta. Pin the exact version and rerun the probe for every upgrade.
-- cgroup containment of tool processes is not implemented or tested. Without it, a lost runtime can leave agent effects running.
-- The probe's result callback is unauthenticated loopback HTTP. The adapter needs a per-runtime secret, and Shift must persist each call before replying.
+- Resolved since the probe: the runtime runs in a transient systemd scope, and supervisor and end-to-end tests show that losing it kills tool processes that left its process group.
+- Resolved since the probe: the result endpoint requires a bearer token per runtime generation, and Shift records each submission in SQLite before replying.
 - Not exercised: provider errors after tool steps, rate limits and the assistant `retry` field, compaction on long sessions, concurrent sessions under load, session archive/delete, a crash while a permission or form is pending, a crash between Shift accepting a result and OpenCode recording it, and complex JSON Schema keywords in tool input. The envelope tool keeps `data` as a generic object and Shift validates it.
-- Results depend on the model following instructions. `claude-haiku-5-5` did so in both runs. Weaker models may skip the result tool, which the contract correction path covers.
+- Results depend on the model following instructions. `claude-haiku-5-5` did so in both probe runs, and `openai/gpt-6-luna` in the real-OpenCode suite since 2026-10-17. Weaker models may skip the result tool, which the contract correction path covers.
 - Command-level shell policy (`shell` rules with resource patterns) was not tested beyond `*`.
 
 ## 7. Proposed specification changes
@@ -138,7 +138,7 @@ The owner approved these on 2026-10-17, with one namespace per Shift server. The
 
 ## 8. Adapter work
 
-The supervisor, adapter and policy compiler are implemented in [`apps/server/src/harness`](../apps/server/src/harness/). Session binding, durable invocation records, the in-turn rejection limit and artifact collection belong to AgentService and remain open.
+All of the following is implemented: the supervisor, adapter and policy compiler in [`apps/server/src/harness`](../apps/server/src/harness/), and session binding, durable invocation records, the in-turn rejection limit and artifact directories in AgentService (`apps/server/src/runs`). The list is kept as the design record. Since the decision to run on the owner's install, the default environment is the owner's own OpenCode rather than a private namespace.
 
 - Supervisor: create the namespace tree, provision credentials over `/api/credential`, start `opencode serve` on loopback inside a systemd scope, capture the generated password, record pid, scope and generation, signal only the process it spawned, kill the scope on loss, and reap stale scopes of the namespace before every start.
 - Install the Shift result plugin (directory form, `codemode: false`) into the namespace config, pointing at an authenticated Shift loopback endpoint. Wait for it to be `active`.
