@@ -1,11 +1,11 @@
-import type { HarnessPrompt, InvocationObservation } from '../types.js';
+import type { HarnessFailure, HarnessPrompt, InvocationObservation } from '../types.js';
 
 export interface OpenCodeMessage {
   id: string;
   type: string;
   outcome?: 'succeeded' | 'failed' | 'interrupted';
   finish?: string;
-  error?: { type?: string };
+  error?: { type?: string; status?: number };
   content?: Array<{ type: string; state?: { status?: string } }>;
 }
 
@@ -22,6 +22,42 @@ export interface InvocationEvidence {
 const runningTool = (message: OpenCodeMessage) =>
   (message.content ?? []).some((part) => part.type === 'tool' && part.state?.status === 'running');
 
+const errorType = /^[a-z0-9._-]{1,64}$/i;
+
+// The cause of a failed turn. A provider error is recorded on the assistant step that hit it; a turn
+// that failed before any step started (an unavailable model, a provider without a credential)
+// records no cause in the transcript.
+function failureOf(assistants: OpenCodeMessage[]): HarnessFailure {
+  const error = assistants.findLast(
+    (message) => message.finish === 'error' && message.error?.type !== 'aborted',
+  )?.error;
+  const type = error?.type && errorType.test(error.type) ? error.type : undefined;
+  const status = Number.isInteger(error?.status) ? `, HTTP ${error!.status}` : '';
+  if (type === 'provider.auth') {
+    return {
+      code: 'PROVIDER_AUTH',
+      message: `The model provider rejected its credential (${type}${status}). Reconnect the provider in OpenCode.`,
+    };
+  }
+  if (type?.startsWith('provider.')) {
+    return {
+      code: 'PROVIDER_ERROR',
+      message: `The model provider failed the request (${type}${status}).`,
+    };
+  }
+  if (assistants.length === 0) {
+    return {
+      code: 'HARNESS_TURN_FAILED',
+      message:
+        'OpenCode failed the turn before the model answered, for example because the model is unavailable or its provider has no credential.',
+    };
+  }
+  return {
+    code: 'HARNESS_TURN_FAILED',
+    message: type ? `OpenCode failed the turn (${type}${status}).` : 'OpenCode failed the turn.',
+  };
+}
+
 // Applies the classification recorded in docs/opencode-capabilities.md section 5. Shift serializes
 // invocations per session, so only one turn can be live and the turn's messages are positional.
 export function classifyInvocation(evidence: InvocationEvidence): InvocationObservation {
@@ -36,8 +72,9 @@ export function classifyInvocation(evidence: InvocationEvidence): InvocationObse
   if (idle?.outcome === 'interrupted') {
     return { kind: 'interrupted', explanation: 'The harness interrupted the turn.', messageIds };
   }
-  if (idle?.outcome === 'succeeded' || idle?.outcome === 'failed') {
-    return { kind: 'ended', outcome: idle.outcome, messageIds };
+  if (idle?.outcome === 'succeeded') return { kind: 'ended', outcome: 'succeeded', messageIds };
+  if (idle?.outcome === 'failed') {
+    return { kind: 'ended', outcome: 'failed', messageIds, failure: failureOf(assistants) };
   }
   // Tools run only inside an assistant step, so a turn with none produced no effects.
   if (assistants.length === 0) {
