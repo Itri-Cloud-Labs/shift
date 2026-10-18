@@ -24,6 +24,8 @@ import {
   type RunRepository,
 } from './repository.js';
 
+const contractFailures = new Set(['RESULT_MISSING', 'RESULT_REJECTED']);
+
 export interface AgentServiceOptions {
   repository: RunRepository;
   adapter: HarnessAdapter;
@@ -195,6 +197,12 @@ export class AgentService {
           });
           return null;
         }
+        // Corrections remedy a model that broke the result contract. A turn the harness or the
+        // provider failed would fail the same way again, so its cause is the node's error.
+        if (last.error && !contractFailures.has(last.error.code)) {
+          this.#finish(claim, { kind: 'failed', error: { ...last.error, category: 'external' } });
+          return null;
+        }
         if (count('correction') < limits.corrections) return 'correction';
         this.#finish(claim, {
           kind: 'failed',
@@ -343,10 +351,13 @@ export class AgentService {
           });
           return;
         case 'ended':
-          settle('FAILED', {
-            code: 'RESULT_MISSING',
-            message: 'The turn ended without a result Shift accepted.',
-          });
+          settle(
+            'FAILED',
+            observation.failure ?? {
+              code: 'RESULT_MISSING',
+              message: 'The turn ended without a result Shift accepted.',
+            },
+          );
           return;
         case 'interrupted':
           settle('INTERRUPTED', { code: 'INTERRUPTED', message: observation.explanation });

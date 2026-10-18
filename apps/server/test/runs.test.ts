@@ -6,6 +6,7 @@ import type {
   CancellationObservation,
   HarnessAdapter,
   HarnessCapabilities,
+  HarnessFailure,
   HarnessCreateRequest,
   HarnessEvent,
   HarnessInvocationRequest,
@@ -31,6 +32,7 @@ interface Turn {
   handle: HarnessSessionHandle;
   status: 'queued' | 'running' | 'prompt' | 'ended' | 'interrupted' | 'unknown';
   outcome?: 'succeeded' | 'failed';
+  failure?: HarnessFailure;
 }
 
 type Behaviour = (turn: Turn, fake: FakeHarness) => void | Promise<void>;
@@ -118,7 +120,12 @@ class FakeHarness implements HarnessAdapter {
       case 'prompt':
         return { kind: 'awaiting_harness_prompt', prompts: [{ kind: 'permission', id: 'per_1' }] };
       case 'ended':
-        return { kind: 'ended', outcome: turn.outcome ?? 'succeeded', messageIds: ['msg_a'] };
+        return {
+          kind: 'ended',
+          outcome: turn.outcome ?? 'succeeded',
+          messageIds: ['msg_a'],
+          ...(turn.failure ? { failure: turn.failure } : {}),
+        };
       case 'interrupted':
         return { kind: 'interrupted', explanation: 'stopped', messageIds: [] };
       case 'unknown':
@@ -386,6 +393,28 @@ test('exhausted corrections fail the node with a contract error', async () => {
       { code: 'RESULT_MISSING', category: 'contract' },
     );
     assert.equal(run.executions.length, 2, 'a failed node schedules no successor');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a provider failure fails the node with its cause instead of spending corrections', async () => {
+  const harnessed = await engineFor((turn) => {
+    turn.status = 'ended';
+    turn.outcome = 'failed';
+    turn.failure = {
+      code: 'PROVIDER_AUTH',
+      message: 'The model provider rejected its credential.',
+    };
+  });
+  try {
+    const run = await settled(harnessed, await start(harnessed));
+    assert.equal(run.state, 'FAILED');
+    assert.equal(run.invocations.length, 1, 'no correction prompt is sent');
+    assert.deepEqual(
+      { code: run.executions[1]!.error?.code, category: run.executions[1]!.error?.category },
+      { code: 'PROVIDER_AUTH', category: 'external' },
+    );
   } finally {
     await harnessed.close();
   }

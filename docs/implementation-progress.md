@@ -212,3 +212,16 @@ Acceptance coverage:
 - A unit test covers merging into an existing inline config. A server test refuses `SHIFT_OPENCODE_API_KEY` without isolated mode and an unknown environment value.
 - End-to-end tests pin the isolated mode, because the scripted stand-in keeps its state in the namespace.
 - `pnpm check` passed 97 tests (88 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 10 of 10 in host mode with `openai/gpt-6-luna` over the owner's OpenAI OAuth connector. This also completes the real-OpenCode verification of the definitions PR, which the expired opencode-go key had blocked.
+
+## Provider failures are reported as such
+
+Status: complete. Date: 2026-10-18. Scope: the follow-up found when the expired opencode-go key made Shift spend its corrections and report `RESULT_MISSING`.
+
+Changed files: the harness contract (`HarnessFailure` on ended observations), the OpenCode classifier, AgentService's turn handling and correction decision, classifier, engine and real-OpenCode tests, the capability findings, specification section 6.5 and the decision log.
+
+Acceptance coverage:
+
+- Classifier tests use the transcript recorded from OpenCode v2.0.26 with a refused key: `PROVIDER_AUTH` with type and status but none of the provider's text; other provider types; a failure before any step; an unsafe error type; and no cause on a successful turn.
+- An engine test fails the node with `PROVIDER_AUTH`, category `external`, after one invocation and no correction prompt.
+- A real-OpenCode test registers a refused key in an isolated namespace and observes `PROVIDER_AUTH`. It makes no billable model call.
+- `pnpm check` passed 99 tests (90 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 11 of 11 in host mode with `openai/gpt-6-luna`.
