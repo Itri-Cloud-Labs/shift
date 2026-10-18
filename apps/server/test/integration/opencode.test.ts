@@ -206,3 +206,59 @@ test('OpenCode v2 adapter against a real runtime', { skip, timeout: 600_000 }, a
     await state.remove();
   }
 });
+
+// A refused credential is rejected before any model work, so this costs nothing. It runs in an
+// isolated namespace whatever the environment, so the owner's credentials are never involved.
+test(
+  'a refused provider credential is reported as a provider failure',
+  {
+    skip: process.env['SHIFT_TEST_OPENCODE'] !== '1' && 'set SHIFT_TEST_OPENCODE=1',
+    timeout: 120_000,
+  },
+  async () => {
+    const state = await temporaryState();
+    const repo = join(state.path, 'repo');
+    const artifacts = join(state.path, 'artifacts');
+    await mkdir(repo);
+    await mkdir(artifacts);
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    const runtime = new OpenCodeRuntime({
+      stateDirectory: state.path,
+      scopes: new SystemdScopes('user'),
+      logger: createLogger('silent'),
+      environment: 'isolated',
+      credentials: [{ integrationID: 'opencode-go', key: 'sk-shift-test-refused' }],
+      resultHandler: async () => ({ accepted: false, reason: 'unused' }),
+    });
+    const adapter = new OpenCodeAdapter(runtime);
+    try {
+      const handle = await adapter.createSession({
+        shiftSessionId: randomUUID(),
+        operationId: randomUUID(),
+        cwd: repo,
+        model: { providerID: 'opencode-go', id: 'claude-haiku-5-5' },
+      });
+      const invocationId = randomUUID();
+      const correlation = adapter.correlate(invocationId);
+      await adapter.submit(handle, {
+        invocationId,
+        goal: 'Say hi.',
+        artifactDirectory: artifacts,
+        toolPolicy: { mode: 'read_only' },
+      });
+      let observation = await adapter.inspectInvocation(handle, correlation);
+      for (let attempt = 0; attempt < 120 && !settled(observation); attempt++) {
+        await delay(500);
+        observation = await adapter.inspectInvocation(handle, correlation);
+      }
+      assert.equal(observation.kind, 'ended', JSON.stringify(observation));
+      assert.equal(
+        observation.kind === 'ended' ? observation.failure?.code : undefined,
+        'PROVIDER_AUTH',
+      );
+    } finally {
+      await runtime.stop();
+      await state.remove();
+    }
+  },
+);

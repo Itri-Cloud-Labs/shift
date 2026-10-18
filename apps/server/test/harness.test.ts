@@ -98,7 +98,45 @@ test('ended observations list only assistant messages of the turn', () => {
     kind: 'ended',
     outcome: 'failed',
     messageIds: ['msg_1', 'msg_2'],
+    failure: { code: 'HARNESS_TURN_FAILED', message: 'OpenCode failed the turn.' },
   });
+});
+
+test('a failed turn carries its cause without the provider response', () => {
+  const failed = { id: 'msg_idle', type: 'idle', outcome: 'failed' as const };
+  const failure = (turn: InvocationEvidence['turn']) => {
+    const observation = classifyInvocation(evidence({ turn }));
+    assert.equal(observation.kind, 'ended');
+    return observation.kind === 'ended' ? observation.failure : undefined;
+  };
+  // Recorded from OpenCode v2.0.26 with a refused opencode-go key.
+  const refused = assistant({
+    content: [],
+    finish: 'error',
+    error: {
+      type: 'provider.auth',
+      message: 'Upstream request failed: Invalid credential',
+      status: 401,
+      response: { body: '{"error":"secret detail"}' },
+    },
+  });
+  const auth = failure([refused, failed]);
+  assert.equal(auth?.code, 'PROVIDER_AUTH');
+  assert.match(auth!.message, /provider\.auth, HTTP 401/);
+  assert.doesNotMatch(auth!.message, /Invalid credential|secret detail/);
+  assert.equal(
+    failure([assistant({ finish: 'error', error: { type: 'provider.rate-limit' } }), failed])?.code,
+    'PROVIDER_ERROR',
+  );
+  // An unavailable model fails the turn before any step: the transcript holds no cause.
+  assert.match(failure([failed])!.message, /before the model answered/);
+  assert.equal(failure([failed])?.code, 'HARNESS_TURN_FAILED');
+  const odd = failure([assistant({ finish: 'error', error: { type: 'x y<script>' } }), failed]);
+  assert.deepEqual(odd, { code: 'HARNESS_TURN_FAILED', message: 'OpenCode failed the turn.' });
+  const succeeded = classifyInvocation(
+    evidence({ turn: [assistant(), { id: 'msg_idle', type: 'idle', outcome: 'succeeded' }] }),
+  );
+  assert.equal('failure' in succeeded, false);
 });
 
 test('unattended permissions turn every ask into deny and keep agent ordering', () => {
