@@ -225,4 +225,3 @@ Acceptance coverage:
 - An engine test fails the node with `PROVIDER_AUTH`, category `external`, after one invocation and no correction prompt.
 - A real-OpenCode test registers a refused key in an isolated namespace and observes `PROVIDER_AUTH`. It makes no billable model call.
 - `pnpm check` passed 99 tests (90 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 11 of 11 in host mode with `openai/gpt-6-luna`.
-
