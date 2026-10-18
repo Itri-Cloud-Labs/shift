@@ -86,6 +86,16 @@ shift run show <run-id>
 
 Agents run on your own OpenCode install, so any provider connected there works, including OAuth connectors. `shift workflow save <id> --revision N --file …` replaces the draft only if it is still at revision `N`. Publishing validates the whole graph and numbers a new version; publishing an unchanged draft returns the current version. Every changing command carries a command ID (`--command-id`, or a generated one that the CLI reuses when it retries a lost response), so repeating a command returns its first result instead of acting twice.
 
+Each run works in its own detached Git worktree under `<state>/workspaces/<id>`. When a run starts, Shift records the commit the project's base ref points to, and the worktree is created at that commit before the first agent node runs. Later commits to the base ref never affect a started run. Your checkout is never modified; Git only records the worktree under `.git/worktrees`. Worktrees are kept after a run finishes so you can inspect or commit the agent's work:
+
+```sh
+shift workspace list [--project <project-id>]
+shift workspace show <workspace-id>
+shift workspace remove <workspace-id> [--force]
+```
+
+Removal is refused while the run that owns the workspace has not finished, including while it waits in `NEEDS_HUMAN`, and also when the worktree has uncommitted changes unless `--force` discards them. Creation is crash-safe: a workspace interrupted while being created is discarded and recreated. One that was ready but deleted outside Shift fails the agent node instead of being silently recreated. Runs started before this release keep working in the repository itself.
+
 The workflow document is `formatVersion: 1` from specification section 5; omitted defaults are filled when a draft is saved. [count-words.json](../../docs/examples/count-words.json) is a complete example. The node types are:
 
 | Type             | Config                                                                                                | Ports              |

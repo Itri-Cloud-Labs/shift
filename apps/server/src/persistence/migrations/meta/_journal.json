@@ -22,6 +22,13 @@
       "when": 1792281600000,
       "tag": "0002_definitions",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792368000000,
+      "tag": "0003_workspaces",
+      "breakpoints": true
     }
   ]
 }

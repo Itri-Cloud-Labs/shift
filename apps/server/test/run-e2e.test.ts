@@ -22,6 +22,7 @@ interface Run {
   outcome: unknown;
   attention: { code: string } | null;
   invocations: Array<{ kind: string; state: string }>;
+  workspace: { id: string; path: string } | null;
 }
 
 interface FakeState {
@@ -155,6 +156,18 @@ test('a manual run completes with the agent result', { skip, timeout: 120_000 },
     const finished = await env.until(run.id, (candidate) => candidate.state !== 'RUNNING');
     assert.equal(finished.state, 'COMPLETED');
     assert.deepEqual(finished.outcome, { data: { count: 3 } });
+    // The finished run keeps its worktree until it is removed explicitly.
+    const listed = (await env.shift('workspace', 'list')) as Array<{ id: string; state: string }>;
+    assert.deepEqual(
+      listed.map((workspace) => [workspace.id, workspace.state]),
+      [[finished.workspace!.id, 'READY']],
+    );
+    assert.ok(existsSync(finished.workspace!.path));
+    const removed = (await env.shift('workspace', 'remove', finished.workspace!.id)) as {
+      state: string;
+    };
+    assert.equal(removed.state, 'RETIRED');
+    assert.equal(existsSync(finished.workspace!.path), false);
   } finally {
     await stopped(server);
     await env.state.remove();
@@ -178,6 +191,18 @@ test(
       assert.equal(finished.attention?.code, 'HARNESS_OUTCOME_UNKNOWN');
       assert.equal(alive(tool), false, 'the orphaned tool died with the stale runtime scope');
       assert.equal(await env.userMessages(), 1, 'nothing was resubmitted');
+      // A run waiting for a human still owns its workspace.
+      const refused = await runCli([
+        'workspace',
+        'remove',
+        finished.workspace!.id,
+        '--force',
+        '--state-dir',
+        env.state.path,
+      ]);
+      assert.equal(refused.code, 1);
+      assert.equal((JSON.parse(refused.errors) as { code: string }).code, 'WORKSPACE_IN_USE');
+      assert.ok(existsSync(finished.workspace!.path));
     } finally {
       await stopped(server);
       await env.state.remove();

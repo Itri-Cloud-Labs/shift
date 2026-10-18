@@ -18,6 +18,7 @@ const options = {
   workflow: { type: 'string' },
   input: { type: 'string' },
   wait: { type: 'boolean' },
+  force: { type: 'boolean' },
 } as const;
 
 type Values = {
@@ -200,6 +201,30 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);
+    case 'workspace list':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/workspaces${values.project ? `?projectId=${encodeURIComponent(values.project)}` : ''}`,
+          )
+        )['workspaces'],
+      );
+    case 'workspace show':
+      return print(
+        (await get(`/api/v0/admin/workspaces/${encodeURIComponent(need(target, 'WORKSPACE_ID'))}`))[
+          'workspace'
+        ],
+      );
+    case 'workspace remove':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/workspaces/${encodeURIComponent(need(target, 'WORKSPACE_ID'))}/remove`,
+            values.force ? { force: true } : {},
+          )
+        )['workspace'],
+      );
     default:
       throw invalid('Unknown command. Run shift help.');
   }

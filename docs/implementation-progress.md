@@ -225,3 +225,18 @@ Acceptance coverage:
 - An engine test fails the node with `PROVIDER_AUTH`, category `external`, after one invocation and no correction prompt.
 - A real-OpenCode test registers a refused key in an isolated namespace and observes `PROVIDER_AUTH`. It makes no billable model call.
 - `pnpm check` passed 99 tests (90 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 11 of 11 in host mode with `openai/gpt-6-luna`.
+
+## Run workspaces
+
+Status: complete for M08 as scoped with the owner (one workspace per run, no cross-run reuse, branches or fetching). Date: 2026-10-18.
+
+Changed files: migration 0003 and its journal entry; `apps/server/src/workspaces` (workspace allocation, creation, removal and the removal command); the run engine (asynchronous admission with the base commit, workspace allocation), AgentService (worktree creation before session binding), the run repository's snapshot, agent configuration and run view; administrative routes and `shift workspace list|show|remove`; engine, workspace, storage, end-to-end and real-OpenCode tests; the server and root READMEs; and the decision log.
+
+Acceptance coverage:
+
+- Two runs work in separate detached worktrees at the commit admitted with each. A commit made between them reaches only the second. The project checkout, its branch and status are unchanged after agents edited tracked and untracked files.
+- Worktree creation that fails after admission fails the node with `WORKSPACE_UNAVAILABLE` and sends no prompt.
+- Crash recovery: a partial unregistered directory, and a completed `git worktree add` whose `READY` transition never committed (with a stray edit), are both discarded and recreated cleanly. A ready workspace deleted outside Shift is reported, not recreated.
+- Removal refuses a workspace owned by a run in `NEEDS_HUMAN`, keeps a dirty worktree unless forced, unregisters it, and is idempotent. Unknown and option-like base refs are refused.
+- End-to-end: `shift workspace list` and `remove` on a completed run. Removal through the CLI is refused for a run that waits in `NEEDS_HUMAN` after a crash.
+- `pnpm check` passed 106 tests (97 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`, including a real agent that edited `notes.txt` in its worktree while the checkout stayed clean.

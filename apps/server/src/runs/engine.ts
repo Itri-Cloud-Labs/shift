@@ -8,6 +8,7 @@ import type { Store } from '../persistence/store.js';
 import { validateDocument } from '../workflows/document.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
+import type { Workspaces } from '../workspaces/workspaces.js';
 import { AgentService } from './agent-service.js';
 import { envelope, renderTemplate, renderText, resolveBindings } from './bindings.js';
 import { checkValue } from './envelope.js';
@@ -28,6 +29,7 @@ export interface RunEngineOptions {
   artifactRoot: string;
   definitions: DefinitionRepository;
   receipts: CommandReceipts;
+  workspaces: Workspaces;
   defaultModel?: string;
   maxActiveAgents?: number;
   pollIntervalMs?: number;
@@ -82,6 +84,7 @@ export class RunEngine {
       adapter: options.adapter,
       artifactRoot: options.artifactRoot,
       logger: options.logger,
+      workspaces: options.workspaces,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
     });
   }
@@ -98,9 +101,10 @@ export class RunEngine {
     this.#timer.unref();
   }
 
-  // Starts the workflow's active version with trigger input. The run, its first activation and
-  // the command receipt commit together, so a repeated command returns the same run.
-  startRun(input: unknown): CommandResponse {
+  // Starts the workflow's active version with trigger input. The base ref is resolved to a commit
+  // first; the run, its first activation and the command receipt then commit together, so a
+  // repeated command returns the same run without touching the repository again.
+  async startRun(input: unknown): Promise<CommandResponse> {
     if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
     if (!validateStart(input)) {
       throw new ShiftError(
@@ -120,39 +124,46 @@ export class RunEngine {
       input?: Json;
       commandId?: string;
     };
-    const { definitions, receipts } = this.#options;
-    const response = receipts.execute(
-      local,
-      id,
-      { op: 'run.start', workflowId, triggerInput },
-      () => {
-        const version = definitions.activeVersion(workflowId);
-        // Recheck against this server's registry: a removed node type version fails the start.
-        const document = validateDocument(version.document);
-        const project = definitions.project(version.projectId);
-        const entry = document.nodes.find((node) => nodeType(node.type, node.typeVersion)?.entry)!;
-        const inputSchema = (entry.config as { inputSchema?: Json }).inputSchema;
-        const invalid = inputSchema === undefined ? null : checkValue(inputSchema, triggerInput);
-        if (invalid)
-          throw new ShiftError('INVALID_INPUT', `Invalid trigger input: ${invalid}`, 422);
-        const snapshot: RunSnapshot = {
-          formatVersion: 2,
-          workflowId,
-          versionId: version.id,
-          versionNumber: version.number,
-          document,
-          project: {
-            id: project.id,
-            name: project.name,
-            repositoryPath: project.repositoryPath,
-            baseRef: project.baseRef,
-          },
-          defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
-        };
-        const runId = this.repository.createRun(snapshot, triggerInput);
-        return { status: 201, body: { run: this.repository.run(runId) } };
-      },
+    const { definitions, receipts, workspaces } = this.#options;
+    const request = { op: 'run.start', workflowId, triggerInput };
+    const stored = id === undefined ? null : receipts.lookup(local, id, request);
+    if (stored) return stored;
+    const admitted = definitions.activeVersion(workflowId);
+    const admittedProject = definitions.project(admitted.projectId);
+    const baseCommit = await workspaces.resolveBase(
+      admittedProject.repositoryPath,
+      admittedProject.baseRef,
     );
+    const response = receipts.execute(local, id, request, () => {
+      const version = definitions.activeVersion(workflowId);
+      // Recheck against this server's registry: a removed node type version fails the start.
+      const document = validateDocument(version.document);
+      const project = definitions.project(version.projectId);
+      if (project.id !== admittedProject.id) {
+        throw new ShiftError('REVISION_CONFLICT', 'The workflow changed project; retry.', 409);
+      }
+      const entry = document.nodes.find((node) => nodeType(node.type, node.typeVersion)?.entry)!;
+      const inputSchema = (entry.config as { inputSchema?: Json }).inputSchema;
+      const invalid = inputSchema === undefined ? null : checkValue(inputSchema, triggerInput);
+      if (invalid) throw new ShiftError('INVALID_INPUT', `Invalid trigger input: ${invalid}`, 422);
+      const snapshot: RunSnapshot = {
+        formatVersion: 2,
+        workflowId,
+        versionId: version.id,
+        versionNumber: version.number,
+        document,
+        project: {
+          id: project.id,
+          name: project.name,
+          repositoryPath: project.repositoryPath,
+          baseRef: project.baseRef,
+          baseCommit,
+        },
+        defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
+      };
+      const runId = this.repository.createRun(snapshot, triggerInput);
+      return { status: 201, body: { run: this.repository.run(runId) } };
+    });
     this.#pump();
     return response;
   }
@@ -258,9 +269,22 @@ export class RunEngine {
           422,
         );
       }
+      // Agents work in the run's worktree; runs admitted before workspaces keep the repository.
+      const { baseCommit, id: projectId } = snapshot.project;
+      const workspace =
+        baseCommit !== undefined && projectId !== null
+          ? this.#options.workspaces.allocate({
+              runId: claim.runId,
+              projectId,
+              repositoryPath: snapshot.project.repositoryPath,
+              baseRef: snapshot.project.baseRef,
+              baseCommit,
+            })
+          : undefined;
       const resolved: AgentConfig = {
         goal: renderText(authored.goal, bindings),
-        cwd: snapshot.project.repositoryPath,
+        cwd: workspace?.path ?? snapshot.project.repositoryPath,
+        ...(workspace ? { workspaceId: workspace.id } : {}),
         model: parseModel(model),
         toolPolicy: { mode: authored.readOnly ? 'read_only' : 'workspace_write' },
         resultSchema: authored.resultSchema ?? defaultResultSchema,

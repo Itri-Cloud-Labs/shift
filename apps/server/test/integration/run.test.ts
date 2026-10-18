@@ -15,6 +15,7 @@ interface Run {
   outcome: unknown;
   attention: { code: string } | null;
   invocations: Array<{ kind: string; state: string }>;
+  workspace: { path: string } | null;
 }
 
 async function toolProcess(stateDirectory: string): Promise<number> {
@@ -49,10 +50,13 @@ test(
     await mkdir(repo);
     await writeFile(join(repo, 'notes.txt'), 'alpha beta gamma\ndelta\n');
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync('git', ['add', '.'], { cwd: repo });
     execFileSync(
       'git',
-      ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'],
-      { cwd: repo },
+      ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init'],
+      {
+        cwd: repo,
+      },
     );
     const serve = () =>
       startChild(
@@ -134,6 +138,7 @@ test(
         const finished = await until(run.id);
         assert.equal(finished.state, 'COMPLETED', JSON.stringify(finished));
         assert.deepEqual(finished.outcome, { data: { words: 4 } });
+        assert.ok(finished.workspace?.path.startsWith(join(state.path, 'workspaces')));
       });
 
       await t.test(
@@ -150,13 +155,28 @@ test(
           assert.equal(finished.attention?.code, 'HARNESS_OUTCOME_UNKNOWN');
           assert.equal(existsSync(`/proc/${tool}`), false);
           await delay(16_000);
-          assert.equal(
-            existsSync(join(repo, 'crash-marker.txt')),
-            false,
-            'the effect never happened',
-          );
+          for (const directory of [repo, finished.workspace!.path]) {
+            assert.equal(
+              existsSync(join(directory, 'crash-marker.txt')),
+              false,
+              'the effect never happened',
+            );
+          }
         },
       );
+      await t.test('an agent edits its worktree, never the project checkout', async () => {
+        const run = await startAgent({
+          goal: 'Append the line "omega" to notes.txt, then report {"done": true}.',
+        });
+        const finished = await until(run.id);
+        assert.equal(finished.state, 'COMPLETED', JSON.stringify(finished));
+        assert.match(await readFile(join(finished.workspace!.path, 'notes.txt'), 'utf8'), /omega/);
+        assert.equal(await readFile(join(repo, 'notes.txt'), 'utf8'), 'alpha beta gamma\ndelta\n');
+        assert.equal(
+          execFileSync('git', ['status', '--porcelain'], { cwd: repo, encoding: 'utf8' }),
+          '',
+        );
+      });
     } finally {
       await server.terminate();
       await state.remove();

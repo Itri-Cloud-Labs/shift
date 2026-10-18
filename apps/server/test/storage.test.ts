@@ -56,6 +56,7 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
       'sqlite_sequence',
       'workflow_versions',
       'workflows',
+      'workspaces',
     ],
   );
   assert.equal(
