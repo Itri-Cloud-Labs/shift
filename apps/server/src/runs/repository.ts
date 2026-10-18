@@ -16,7 +16,15 @@ export interface RunSnapshot {
   versionId: string | null;
   versionNumber: number | null;
   document: WorkflowDocument;
-  project: { id: string | null; name: string; repositoryPath: string; baseRef: string };
+  // `baseCommit` is the commit the base ref resolved to at admission. Runs admitted before
+  // workspaces existed have none and work in the repository itself.
+  project: {
+    id: string | null;
+    name: string;
+    repositoryPath: string;
+    baseRef: string;
+    baseCommit?: string;
+  };
   defaults: { model?: string };
 }
 
@@ -24,6 +32,8 @@ export interface RunSnapshot {
 export interface AgentConfig {
   goal: string;
   cwd: string;
+  // The run workspace `cwd` belongs to, if any.
+  workspaceId?: string;
   model: ModelRef;
   toolPolicy: ToolPolicy;
   resultSchema: Json;
@@ -875,12 +885,15 @@ export class RunRepository {
   run(runId: string): Json {
     const run = this.db
       .prepare(
-        'SELECT id, state, snapshot_json, attention_json, outcome_json, created_at, finished_at FROM runs WHERE id = ?',
+        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
       )
       .get(runId) as
       | {
           id: string;
           state: string;
+          workspace_id: string | null;
+          workspace_path: string | null;
+          workspace_state: string | null;
           snapshot_json: string;
           attention_json: string | null;
           outcome_json: string | null;
@@ -923,6 +936,11 @@ export class RunRepository {
       versionId: snapshot.versionId,
       versionNumber: snapshot.versionNumber,
       repository: snapshot.project.repositoryPath,
+      baseCommit: snapshot.project.baseCommit ?? null,
+      workspace:
+        run.workspace_id === null
+          ? null
+          : { id: run.workspace_id, path: run.workspace_path, state: run.workspace_state },
       attention: parse<Json>(run.attention_json),
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,

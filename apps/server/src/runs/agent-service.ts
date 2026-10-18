@@ -31,6 +31,8 @@ export interface AgentServiceOptions {
   adapter: HarnessAdapter;
   artifactRoot: string;
   logger: Logger;
+  // Creates the run's worktree before its first session needs it.
+  workspaces?: { ensureReady(id: string): Promise<unknown> };
   pollIntervalMs?: number;
   // An inbox item can stay undelivered after a harness restart; resubmitting the same ID wakes it.
   queuedResubmitMs?: number;
@@ -43,7 +45,8 @@ const active: readonly InvocationState[] = ['PREPARING', 'SUBMITTING', 'RUNNING'
 // Owns goal construction, session binding, correction, continuation and result validation for
 // agent node executions (specification 9). Workflow routing stays in the run repository.
 export class AgentService {
-  readonly #options: Required<AgentServiceOptions>;
+  readonly #options: Required<Omit<AgentServiceOptions, 'workspaces'>> &
+    Pick<AgentServiceOptions, 'workspaces'>;
 
   constructor(options: AgentServiceOptions) {
     this.#options = {
@@ -104,6 +107,12 @@ export class AgentService {
       resultSchema: config.resultSchema,
       readOnly: config.toolPolicy.mode === 'read_only',
     };
+    if (config.workspaceId !== undefined) {
+      if (!this.#options.workspaces) {
+        throw new ShiftError('WORKSPACE_UNAVAILABLE', 'Run workspaces are not configured.', 503);
+      }
+      await this.#options.workspaces.ensureReady(config.workspaceId);
+    }
     const handle = await this.#session(claim, config);
     for (;;) {
       if (signal.aborted) return;

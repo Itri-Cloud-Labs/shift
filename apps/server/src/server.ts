@@ -19,6 +19,8 @@ import type { ResultHandler } from './harness/types.js';
 import { CommandReceipts } from './persistence/receipts.js';
 import { RunEngine } from './runs/engine.js';
 import { DefinitionRepository } from './workflows/repository.js';
+import { WorkspaceService } from './workspaces/service.js';
+import { Workspaces } from './workspaces/workspaces.js';
 import { DefinitionService } from './workflows/service.js';
 import type { ServerIdentity } from './protocol/index.js';
 
@@ -185,9 +187,11 @@ export async function startServer(
     const receipts = new CommandReceipts(store.db, clock);
     const definitions = new DefinitionRepository(store.db, clock);
     const definitionService = new DefinitionService(definitions, receipts);
+    const workspaces = new Workspaces(store.db, clock, join(state.path, 'workspaces'));
     engine = new RunEngine({
       definitions,
       receipts,
+      workspaces,
       store,
       clock,
       logger,
@@ -207,6 +211,7 @@ export async function startServer(
       stop: requestStop,
       engine,
       definitions: { service: definitionService, repository: definitions },
+      workspaces: new WorkspaceService(workspaces, receipts),
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);

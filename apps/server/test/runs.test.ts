@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import type {
@@ -24,6 +26,7 @@ import { RunEngine } from '../src/runs/engine.js';
 import { normalizeDocument } from '../src/workflows/document.js';
 import { DefinitionRepository } from '../src/workflows/repository.js';
 import { StaleClaim } from '../src/runs/repository.js';
+import { Workspaces } from '../src/workspaces/workspaces.js';
 import { FakeClock, eventually, temporaryState } from './helpers.js';
 
 interface Turn {
@@ -192,8 +195,17 @@ async function engineFor(
 ): Promise<Harnessed> {
   const state = existing?.state ?? (await temporaryState()).path;
   const repository = join(state, 'repo');
-  await mkdir(repository, { recursive: true });
+  if (!existing) {
+    await mkdir(repository, { recursive: true });
+    await writeFile(join(repository, 'notes.txt'), 'alpha beta\n');
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: repository, stdio: 'ignore' });
+    git('init', '-q', '-b', 'main');
+    git('add', '.');
+    git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
+  }
   const store = await openStore({ stateDirectory: state, clock: new FakeClock() });
+  const workspaces = new Workspaces(store.db, new FakeClock(), join(state, 'workspaces'));
   const fake = existing?.fake ?? new FakeHarness(behave);
   fake.behave = behave;
   const definitions = new DefinitionRepository(store.db, new FakeClock());
@@ -201,6 +213,7 @@ async function engineFor(
     store,
     definitions,
     receipts: new CommandReceipts(store.db, new FakeClock()),
+    workspaces,
     clock: new FakeClock(),
     logger: createLogger('silent'),
     adapter: fake,
@@ -304,7 +317,7 @@ const agentWorkflow = (agent: Record<string, unknown> = {}): Json =>
 
 async function start(harnessed: Harnessed, agent: Record<string, unknown> = {}): Promise<string> {
   const workflowId = await publish(harnessed, agentWorkflow(agent));
-  const response = harnessed.engine.startRun({ workflowId });
+  const response = await harnessed.engine.startRun({ workflowId });
   return (response.body as { run: { id: string } }).run.id;
 }
 
@@ -415,6 +428,87 @@ test('a provider failure fails the node with its cause instead of spending corre
       { code: run.executions[1]!.error?.code, category: run.executions[1]!.error?.category },
       { code: 'PROVIDER_AUTH', category: 'external' },
     );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('each run edits its own detached worktree at the commit admitted with it', async () => {
+  const cwds: string[] = [];
+  const harnessed = await engineFor(async (turn, fake) => {
+    cwds.push(turn.handle.cwd);
+    // The agent edits a tracked file and leaves an untracked one, as a real agent would.
+    await writeFile(join(turn.handle.cwd, 'notes.txt'), `edited by ${turn.handle.cwd}\n`);
+    await writeFile(join(turn.handle.cwd, 'new.txt'), 'new\n');
+    await complete({ count: 1 })(turn, fake);
+  });
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  try {
+    const workflowId = await publish(harnessed, agentWorkflow());
+    const firstCommit = git(harnessed.repository, 'rev-parse', 'HEAD');
+    const first = await settled(harnessed, (await startNow(harnessed, workflowId)).id);
+    // A later commit to the base ref is seen by later runs only.
+    await writeFile(join(harnessed.repository, 'later.txt'), 'later\n');
+    git(harnessed.repository, 'add', '.');
+    git(
+      harnessed.repository,
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@t',
+      'commit',
+      '-qm',
+      'later',
+    );
+    const secondCommit = git(harnessed.repository, 'rev-parse', 'HEAD');
+    const second = await settled(harnessed, (await startNow(harnessed, workflowId)).id);
+    const runs = [first, second] as unknown as Array<{
+      state: string;
+      baseCommit: string;
+      workspace: { id: string; path: string; state: string };
+    }>;
+    assert.deepEqual(
+      runs.map((run) => [run.state, run.baseCommit, run.workspace.state]),
+      [
+        ['COMPLETED', firstCommit, 'READY'],
+        ['COMPLETED', secondCommit, 'READY'],
+      ],
+    );
+    assert.deepEqual(
+      cwds,
+      runs.map((run) => run.workspace.path),
+    );
+    assert.notEqual(runs[0]!.workspace.path, runs[1]!.workspace.path);
+    for (const run of runs) {
+      assert.ok(run.workspace.path.startsWith(join(harnessed.state, 'workspaces')));
+      assert.equal(git(run.workspace.path, 'rev-parse', 'HEAD'), run.baseCommit);
+      assert.throws(() => git(run.workspace.path, 'symbolic-ref', '-q', 'HEAD'), 'detached');
+      assert.match(await readFile(join(run.workspace.path, 'notes.txt'), 'utf8'), /edited by/);
+    }
+    assert.equal(existsSync(join(runs[0]!.workspace.path, 'later.txt')), false);
+    // The project checkout is exactly as the owner left it.
+    assert.equal(await readFile(join(harnessed.repository, 'notes.txt'), 'utf8'), 'alpha beta\n');
+    assert.equal(git(harnessed.repository, 'status', '--porcelain'), '');
+    assert.equal(git(harnessed.repository, 'symbolic-ref', '--short', 'HEAD'), 'main');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a run whose worktree cannot be created fails without prompting the agent', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const workflowId = await publish(harnessed, agentWorkflow());
+    // A file where the workspace root belongs makes every worktree creation fail.
+    await writeFile(join(harnessed.state, 'workspaces'), '');
+    const run = await settled(harnessed, (await startNow(harnessed, workflowId)).id);
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(
+      { code: run.executions[1]!.error?.code, category: run.executions[1]!.error?.category },
+      { code: 'WORKSPACE_UNAVAILABLE', category: 'external' },
+    );
+    assert.equal(harnessed.fake.submits.length, 0, 'no prompt was sent');
   } finally {
     await harnessed.close();
   }
@@ -685,8 +779,8 @@ test('a stale claim cannot advance the run after recovery reclaims its attempt',
 test('run requests are validated before anything is stored', async () => {
   const harnessed = await engineFor(() => {});
   try {
-    assert.throws(() => harnessed.engine.startRun({}), { code: 'INVALID_REQUEST' });
-    assert.throws(() => harnessed.engine.startRun({ workflowId: 'missing' }), {
+    await assert.rejects(harnessed.engine.startRun({}), { code: 'INVALID_REQUEST' });
+    await assert.rejects(harnessed.engine.startRun({ workflowId: 'missing' }), {
       code: 'NOT_FOUND',
     });
     const draftOnly = harnessed.definitions.createWorkflow({
@@ -698,7 +792,7 @@ test('run requests are validated before anything is stored', async () => {
       name: 'draft only',
       draft: normalizeDocument(agentWorkflow()) as Json,
     }) as { id: string };
-    assert.throws(() => harnessed.engine.startRun({ workflowId: draftOnly.id }), {
+    await assert.rejects(harnessed.engine.startRun({ workflowId: draftOnly.id }), {
       code: 'WORKFLOW_UNPUBLISHED',
     });
     assert.deepEqual(harnessed.engine.repository.runs(), []);
@@ -790,10 +884,14 @@ const connect = (id: string, from: string, to: string, port = 'success') => ({
 });
 
 // The start response is the stored creation receipt; inline nodes have run by the time it returns.
-const startNow = (harnessed: Harnessed, workflowId: string, extra: Record<string, unknown> = {}) =>
+const startNow = async (
+  harnessed: Harnessed,
+  workflowId: string,
+  extra: Record<string, unknown> = {},
+) =>
   view(
     harnessed,
-    (harnessed.engine.startRun({ workflowId, ...extra }).body as { run: RunView }).run.id,
+    ((await harnessed.engine.startRun({ workflowId, ...extra })).body as { run: RunView }).run.id,
   );
 
 test('transform nodes publish data built from every binding source', async () => {
@@ -841,7 +939,7 @@ test('transform nodes publish data built from every binding source', async () =>
         connect('c3', 'echo', 'end'),
       ],
     } as Json);
-    const run = startNow(harnessed, workflowId, { input: { name: 'Ada', items: [42] } });
+    const run = await startNow(harnessed, workflowId, { input: { name: 'Ada', items: [42] } });
     assert.equal(run.state, 'COMPLETED', 'inline nodes finish before the start command returns');
     assert.deepEqual(run.outcome, { data: { echo: 'Ada' } });
     assert.deepEqual((run.executions[1]!.output as { data: unknown }).data, {
@@ -874,7 +972,7 @@ test('a selected port without a connection completes the run as a leaf', async (
       ],
       connections: [connect('c1', 'start', 'only')],
     } as Json);
-    const run = startNow(harnessed, workflowId);
+    const run = await startNow(harnessed, workflowId);
     assert.equal(run.state, 'COMPLETED');
     assert.deepEqual(run.outcome, { data: { done: true } });
   } finally {
@@ -892,7 +990,7 @@ test('an End node can declare a failed outcome with a reason', async () => {
       ],
       connections: [connect('c1', 'start', 'end')],
     } as Json);
-    const run = startNow(harnessed, workflowId, { input: { x: 1 } });
+    const run = await startNow(harnessed, workflowId, { input: { x: 1 } });
     assert.equal(run.state, 'FAILED');
     assert.deepEqual(run.outcome, { data: { x: 1 }, reason: 'Nothing to do.' });
   } finally {
@@ -925,10 +1023,10 @@ test('a missing binding fails the node, and an error connection routes the failu
       ],
     }) as Json;
   try {
-    const unhandled = startNow(harnessed, await publish(harnessed, document(false)));
+    const unhandled = await startNow(harnessed, await publish(harnessed, document(false)));
     assert.equal(unhandled.state, 'FAILED');
     assert.equal((unhandled.outcome as { code: string }).code, 'BINDING_MISSING');
-    const handled = startNow(harnessed, await publish(harnessed, document(true)));
+    const handled = await startNow(harnessed, await publish(harnessed, document(true)));
     assert.equal(handled.state, 'COMPLETED');
     assert.deepEqual(handled.outcome, { data: { recovered: 'BINDING_MISSING' } });
     assert.equal(handled.executions[1]!.state, 'FAILED', 'the failed execution stays in history');
@@ -956,7 +1054,7 @@ test('an agent blocker can be routed through its error connection', async () => 
     } as Json);
     document.connections.push(connect('c3', 'agent', 'triage', 'error') as Json);
     const workflowId = await publish(harnessed, document as unknown as Json);
-    const run = await settled(harnessed, startNow(harnessed, workflowId).id);
+    const run = await settled(harnessed, (await startNow(harnessed, workflowId)).id);
     assert.equal(run.state, 'COMPLETED');
     assert.deepEqual(run.outcome, { data: { blocked: 'MISSING_INPUT' } });
   } finally {
@@ -989,7 +1087,7 @@ test('a loop stops for an owner decision at its execution limit', async () => {
       ],
       connections: [connect('c1', 'start', 'again'), connect('c2', 'again', 'again')],
     } as Json);
-    const run = startNow(harnessed, workflowId);
+    const run = await startNow(harnessed, workflowId);
     assert.equal(run.state, 'NEEDS_HUMAN');
     assert.equal(run.attention?.code, 'EXECUTION_LIMIT');
     const passes = run.executions.filter((execution) => execution.node === 'again');
@@ -1014,19 +1112,18 @@ test('a repeated start command returns the same run', async () => {
       nodes: [{ id: 'start', type: 'manual_trigger' }],
       connections: [],
     } as Json);
-    const first = startNow(harnessed, workflowId, {
+    const first = await startNow(harnessed, workflowId, {
       commandId: 'start-command-1',
       input: { a: 1 },
     });
-    const again = startNow(harnessed, workflowId, {
+    const again = await startNow(harnessed, workflowId, {
       commandId: 'start-command-1',
       input: { a: 1 },
     });
     assert.equal(again.id, first.id);
     assert.equal((harnessed.engine.repository.runs() as unknown[]).length, 1);
-    assert.throws(
-      () =>
-        harnessed.engine.startRun({ workflowId, commandId: 'start-command-1', input: { a: 2 } }),
+    await assert.rejects(
+      harnessed.engine.startRun({ workflowId, commandId: 'start-command-1', input: { a: 2 } }),
       { code: 'COMMAND_CONFLICT' },
     );
   } finally {
@@ -1046,7 +1143,7 @@ test('runs keep the version they started with after a new version is published',
         connections: [connect('c1', 'start', 'value')],
       }) as Json;
     const workflowId = await publish(harnessed, document('v1'));
-    const first = startNow(harnessed, workflowId);
+    const first = await startNow(harnessed, workflowId);
     const workflow = harnessed.definitions.workflow(workflowId) as { draftRevision: number };
     harnessed.definitions.saveDraft(
       workflowId,
@@ -1054,7 +1151,7 @@ test('runs keep the version they started with after a new version is published',
       normalizeDocument(document('v2')) as Json,
     );
     harnessed.definitions.publish(workflowId);
-    const second = startNow(harnessed, workflowId);
+    const second = await startNow(harnessed, workflowId);
     const stored = view(harnessed, first.id) as RunView & { versionNumber: number };
     assert.equal(stored.versionNumber, 1);
     assert.deepEqual(stored.outcome, { data: 'v1' });
@@ -1084,12 +1181,12 @@ test('trigger input is validated against the trigger schema and rendered into th
     };
     document.nodes[1]!['bindings'] = { file: { kind: 'trigger', path: ['file'] } };
     const workflowId = await publish(harnessed, document as unknown as Json);
-    assert.throws(() => harnessed.engine.startRun({ workflowId, input: { file: 3 } }), {
+    await assert.rejects(harnessed.engine.startRun({ workflowId, input: { file: 3 } }), {
       code: 'INVALID_INPUT',
     });
     const run = await settled(
       harnessed,
-      startNow(harnessed, workflowId, { input: { file: 'notes.txt' } }).id,
+      (await startNow(harnessed, workflowId, { input: { file: 'notes.txt' } })).id,
     );
     assert.equal(run.state, 'COMPLETED');
     assert.match([...harnessed.fake.turns.values()][0]!.prompt, /Count the words in notes\.txt\./);

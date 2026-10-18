@@ -30,9 +30,16 @@ shift workflow list [--project PROJECT_ID]
 shift run start --workflow WORKFLOW_ID [--input JSON] [--wait]
 shift run show RUN_ID [--wait]
 shift run list
+shift workspace list [--project PROJECT_ID]
+shift workspace show WORKSPACE_ID
+shift workspace remove WORKSPACE_ID [--force]
 
-Project, workflow and run commands accept --state-dir PATH; changes accept
+Project, workflow, run and workspace commands accept --state-dir PATH; changes accept
 --command-id ID, which makes repeating the same command return its first result.
+Each run works in its own detached worktree of the project, under the state
+directory, at the commit its base ref had when the run started. Worktrees are
+kept after runs finish; remove refuses one with uncommitted changes unless
+--force is given.
 
 TCP serves read-only /api/v0/info, /health and /ready. Administration and runs
 use the private admin.sock in the state directory. --public explicitly permits a
@@ -61,7 +68,7 @@ async function main(): Promise<void> {
     process.stdout.write(usage);
     return;
   }
-  if (['project', 'workflow', 'run'].includes(command)) {
+  if (['project', 'workflow', 'run', 'workspace'].includes(command)) {
     const { adminCommand } = await import('./cli-admin.js');
     return adminCommand(command, args.slice(1));
   }

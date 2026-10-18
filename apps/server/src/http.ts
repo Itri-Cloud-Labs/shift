@@ -19,6 +19,7 @@ import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
 import type { CommandResponse } from './persistence/receipts.js';
 import type { RunEngine } from './runs/engine.js';
+import type { WorkspaceService } from './workspaces/service.js';
 import type { DefinitionRepository } from './workflows/repository.js';
 import type { DefinitionService } from './workflows/service.js';
 
@@ -33,6 +34,7 @@ export function createHttpServer(options: {
   stop: () => void;
   engine?: RunEngine;
   definitions?: { service: DefinitionService; repository: DefinitionRepository };
+  workspaces?: WorkspaceService;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -160,9 +162,9 @@ export function createHttpServer(options: {
       local(req);
       command(res, service.publish(id(req), req.body ?? {}));
     });
-    app.post(`${admin}/runs`, json, (req, res) => {
+    app.post(`${admin}/runs`, json, async (req, res) => {
       local(req);
-      command(res, engine.startRun(req.body));
+      command(res, await engine.startRun(req.body));
     });
     app.get(`${admin}/runs`, (req, res) => {
       local(req);
@@ -172,6 +174,23 @@ export function createHttpServer(options: {
       local(req);
       reply(res, 200, { run: engine.repository.run(id(req)) });
     });
+    const workspaces = options.workspaces;
+    if (workspaces) {
+      app.get(`${admin}/workspaces`, (req, res) => {
+        local(req);
+        const project =
+          typeof req.query['projectId'] === 'string' ? req.query['projectId'] : undefined;
+        reply(res, 200, { workspaces: workspaces.workspaces.list(project) });
+      });
+      app.get(`${admin}/workspaces/:id`, (req, res) => {
+        local(req);
+        reply(res, 200, { workspace: workspaces.workspaces.get(id(req)) });
+      });
+      app.post(`${admin}/workspaces/:id/remove`, json, async (req, res) => {
+        local(req);
+        command(res, await workspaces.remove(id(req), req.body ?? {}));
+      });
+    }
   }
   if (options.administrative) {
     app.post('/api/v0/admin/shutdown', (req, res) => {
