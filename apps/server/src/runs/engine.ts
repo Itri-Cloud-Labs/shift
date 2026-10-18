@@ -43,6 +43,31 @@ const validateStart = new Ajv2020({ strict: true, coerceTypes: false }).compile(
   properties: { workflowId: { type: 'string', maxLength: 100 }, input: {}, commandId },
 });
 
+const ajv = new Ajv2020({ strict: true, coerceTypes: false });
+const reason = { type: 'string', minLength: 1, maxLength: 4000 };
+const controlSchemas = {
+  cancel: { properties: { reason } },
+  retry: { properties: {} },
+  fail: { properties: { reason } },
+  complete: { required: ['data'], properties: { data: {} } },
+  extend: {
+    required: ['executions'],
+    properties: { executions: { type: 'integer', minimum: 1, maximum: 10000 } },
+  },
+} as const;
+export type RunControlKind = keyof typeof controlSchemas;
+const validateControl = Object.fromEntries(
+  Object.entries(controlSchemas).map(([kind, schema]) => [
+    kind,
+    ajv.compile({
+      type: 'object',
+      additionalProperties: false,
+      ...schema,
+      properties: { ...schema.properties, commandId },
+    }),
+  ]),
+) as Record<RunControlKind, ReturnType<typeof ajv.compile>>;
+
 const defaultResultSchema: Json = {
   type: 'object',
   description: 'What the task produced or found.',
@@ -72,6 +97,7 @@ export class RunEngine {
   readonly agents: AgentService;
   readonly #options: RunEngineOptions;
   readonly #tasks = new Map<string, { controller: AbortController; done: Promise<void> }>();
+  readonly #cancellations = new Set<Promise<void>>();
   #timer: NodeJS.Timeout | undefined;
   #stopping = false;
   #pumping = false;
@@ -91,6 +117,12 @@ export class RunEngine {
 
   // Resumes attempts left by an earlier worker generation, then admits pending work.
   start(): void {
+    // A cancellation an earlier generation did not finish is completed first.
+    for (const { runId, claims } of this.repository.reclaimCancellations(
+      this.#options.store.workerGeneration,
+    )) {
+      this.#stopForCancel(runId, claims);
+    }
     for (const claim of this.repository.reclaimOrphanedAttempts(
       this.#options.store.workerGeneration,
     )) {
@@ -166,6 +198,82 @@ export class RunEngine {
     });
     this.#pump();
     return response;
+  }
+
+  // Owner control commands on a run. Each commits with its receipt; a cancellation then stops
+  // running attempts in the background, and the run shows CANCEL_REQUESTED until they stopped.
+  controlRun(runId: string, kind: RunControlKind, input: unknown): CommandResponse {
+    if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
+    const validate = validateControl[kind];
+    if (!validate(input)) {
+      throw new ShiftError(
+        'INVALID_REQUEST',
+        'Invalid run command.',
+        422,
+        false,
+        (validate.errors ?? []).map((error) => error.instancePath || '/'),
+      );
+    }
+    const { commandId: id, ...body } = input as {
+      commandId?: string;
+      reason?: string;
+      data?: Json;
+      executions?: number;
+    };
+    let stops: Claim[] = [];
+    const response = this.#options.receipts.execute(
+      local,
+      id,
+      { op: `run.${kind}`, runId, ...body } as Json,
+      () => {
+        switch (kind) {
+          case 'cancel':
+            stops = this.repository.requestCancel(runId, local, id, body.reason);
+            break;
+          case 'retry':
+            this.repository.retry(runId, local, id);
+            break;
+          case 'fail':
+            this.repository.fail(runId, local, id, body.reason);
+            break;
+          case 'complete':
+            this.repository.complete(runId, local, id, body.data as Json);
+            break;
+          case 'extend':
+            this.repository.extend(runId, local, id, body.executions!);
+            break;
+        }
+        return { status: 200, body: { run: this.repository.run(runId) } };
+      },
+    );
+    if (stops.length > 0) this.#stopForCancel(runId, stops);
+    this.#pump();
+    return response;
+  }
+
+  // Aborts the attempts' running tasks, stops whatever is still active through the harness, then
+  // settles the cancellation.
+  #stopForCancel(runId: string, claims: Claim[]): void {
+    const done = (async () => {
+      for (const claim of claims) {
+        const task = this.#tasks.get(claim.attemptId);
+        if (task) {
+          task.controller.abort();
+          await task.done;
+        }
+        await this.agents.cancel(claim).catch((error: unknown) => {
+          if (!(error instanceof StaleClaim)) {
+            this.#options.logger.error({ runId }, 'Stopping a cancelled agent failed.');
+          }
+        });
+      }
+      this.repository.settleCancellation(runId);
+    })()
+      .catch(() => {
+        this.#options.logger.error({ runId }, 'Settling a cancellation failed.');
+      })
+      .finally(() => this.#cancellations.delete(done));
+    this.#cancellations.add(done);
   }
 
   #pump(): void {
@@ -328,7 +436,7 @@ export class RunEngine {
     for (const task of tasks) task.controller.abort();
     let timer: NodeJS.Timeout | undefined;
     await Promise.race([
-      Promise.all(tasks.map((task) => task.done)),
+      Promise.all([...tasks.map((task) => task.done), ...this.#cancellations]),
       new Promise((resolve) => (timer = setTimeout(resolve, timeoutMs))),
     ]);
     clearTimeout(timer);

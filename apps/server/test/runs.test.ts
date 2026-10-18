@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import type {
   CancellationObservation,
   HarnessAdapter,
@@ -243,6 +244,7 @@ type RunView = {
   outcome: unknown;
   attention: { code: string } | null;
   executions: Array<{
+    id: string;
     node: string;
     state: string;
     output: unknown;
@@ -1228,6 +1230,362 @@ test('a run stored by the fixed-graph slice still finishes after the upgrade', a
     }, 15_000);
     assert.equal(run.state, 'COMPLETED', JSON.stringify(run.outcome));
     assert.deepEqual(run.outcome, { data: { count: 5 } });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// ---- Owner controls ----
+
+const control = (
+  harnessed: Harnessed,
+  id: string,
+  kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend',
+  body: Record<string, unknown> = {},
+) => (harnessed.engine.controlRun(id, kind, body).body as { run: RunView }).run;
+
+type ControlledRun = RunView & {
+  cancelRequested: boolean;
+  controls: Array<{ kind: string; executionId: string | null; payload: unknown }>;
+  workspace: { id: string } | null;
+};
+
+const until = (harnessed: Harnessed, id: string, done: (run: ControlledRun) => boolean) =>
+  eventually(() => {
+    const run = view(harnessed, id) as ControlledRun;
+    return done(run) ? run : undefined;
+  });
+
+// The first turn stops without evidence of its effects; any later turn completes.
+const uncertainThenComplete = (): Behaviour => {
+  let turns = 0;
+  return async (turn, fake) => {
+    if (++turns === 1) turn.status = 'unknown';
+    else await complete({ count: 7 })(turn, fake);
+  };
+};
+
+test('retry reopens a stuck agent step in its session and says earlier effects are unknown', async () => {
+  const harnessed = await engineFor(uncertainThenComplete());
+  try {
+    const id = await start(harnessed);
+    const stuck = await settled(harnessed, id);
+    assert.equal(stuck.attention?.code, 'HARNESS_OUTCOME_UNKNOWN');
+    await assert.rejects(async () => control(harnessed, id, 'extend', { executions: 1 }), {
+      code: 'NOTHING_TO_EXTEND',
+    });
+    const resumed = control(harnessed, id, 'retry', { commandId: 'retry-command-1' });
+    assert.equal(resumed.state, 'RUNNING');
+    const run = (await settled(harnessed, id)) as ControlledRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { count: 7 } });
+    assert.deepEqual(
+      run.invocations.map((invocation) => [invocation.kind, invocation.state]),
+      [
+        ['goal', 'UNKNOWN'],
+        ['continuation', 'COMPLETED'],
+      ],
+      'the uncertain invocation stays in history',
+    );
+    const [first, second] = [...harnessed.fake.turns.values()];
+    assert.equal(second!.handle.harnessSessionId, first!.handle.harnessSessionId, 'same session');
+    assert.match(second!.prompt, /what it changed is unknown/);
+    assert.deepEqual(
+      run.controls.map((entry) => [entry.kind, entry.executionId]),
+      [['retry', run.executions[1]!.id]],
+    );
+    const attempts = harnessed.store.db
+      .prepare(
+        'SELECT attempt_number, state FROM node_attempts WHERE execution_id = ? ORDER BY attempt_number',
+      )
+      .all(run.executions[1]!.id);
+    assert.deepEqual(attempts, [
+      { attempt_number: 1, state: 'INTERRUPTED' },
+      { attempt_number: 2, state: 'COMPLETED' },
+    ]);
+    // Repeating the command answers from its receipt instead of acting again.
+    assert.equal(
+      control(harnessed, id, 'retry', { commandId: 'retry-command-1' }).state,
+      'RUNNING',
+    );
+    await assert.rejects(async () => control(harnessed, id, 'retry'), {
+      code: 'RUN_STATE_CONFLICT',
+    });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('fail abandons a stuck step through its error connection or fails the run', async () => {
+  for (const handled of [false, true]) {
+    const harnessed = await engineFor((turn) => {
+      turn.status = 'unknown';
+    });
+    try {
+      const document = agentWorkflow() as unknown as {
+        nodes: Array<Record<string, unknown>>;
+        connections: Array<Record<string, unknown>>;
+      };
+      if (handled) {
+        document.nodes.push({
+          id: 'recover',
+          type: 'end',
+          config: { outcome: 'FAILED', reason: 'recovered' },
+        });
+        document.connections.push({
+          id: 'c-error',
+          fromNodeId: 'agent',
+          fromPort: 'error',
+          toNodeId: 'recover',
+          toPort: 'input',
+        });
+      }
+      const workflowId = await publish(harnessed, document as unknown as Json);
+      const id = (await startNow(harnessed, workflowId)).id;
+      await until(harnessed, id, (run) => run.state === 'NEEDS_HUMAN');
+      control(harnessed, id, 'fail', { reason: 'Checked by hand: nothing happened.' });
+      const run = view(harnessed, id) as ControlledRun;
+      assert.equal(run.state, 'FAILED');
+      const abandoned = run.executions.find((execution) => execution.node === 'agent')!;
+      assert.deepEqual(abandoned.error, {
+        code: 'ABANDONED',
+        category: 'external',
+        message: 'Checked by hand: nothing happened.',
+      });
+      if (handled) {
+        assert.deepEqual(run.outcome, {
+          data: {
+            error: {
+              code: 'ABANDONED',
+              category: 'external',
+              message: 'Checked by hand: nothing happened.',
+            },
+          },
+          reason: 'recovered',
+        });
+      } else {
+        assert.equal((run.outcome as { code: string }).code, 'ABANDONED');
+      }
+      assert.equal(harnessed.fake.submits.length, 1, 'no prompt is sent');
+    } finally {
+      await harnessed.close();
+    }
+  }
+});
+
+test('complete records an owner result that satisfies the step contract', async () => {
+  const harnessed = await engineFor((turn) => {
+    turn.status = 'unknown';
+  });
+  try {
+    const id = await start(harnessed, {
+      resultSchema: {
+        type: 'object',
+        required: ['count'],
+        properties: { count: { type: 'integer' } },
+      },
+    });
+    await until(harnessed, id, (run) => run.state === 'NEEDS_HUMAN');
+    await assert.rejects(async () => control(harnessed, id, 'complete', { data: { count: 'x' } }), {
+      code: 'INVALID_RESULT',
+    });
+    assert.equal(view(harnessed, id).state, 'NEEDS_HUMAN', 'a refused result changes nothing');
+    control(harnessed, id, 'complete', { data: { count: 5 } });
+    const run = view(harnessed, id) as ControlledRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { count: 5 } });
+    const output = run.executions[1]!.output as { references: { agentSession?: unknown } };
+    assert.ok(output.references.agentSession, 'the step keeps its session reference');
+    assert.deepEqual(
+      run.controls.map((entry) => [entry.kind, entry.payload]),
+      [['complete', { data: { count: 5 } }]],
+      'the result is recorded as the owner’s',
+    );
+    assert.equal(run.invocations[0]!.state, 'UNKNOWN');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('extend raises the limit that stopped a loop and takes the step it held', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'again',
+          type: 'transform',
+          limits: { maxExecutionsPerRun: 2 },
+          config: { data: { n: 1 } },
+        },
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'again', toPort: 'input' },
+        { id: 'c2', fromNodeId: 'again', fromPort: 'success', toNodeId: 'again', toPort: 'input' },
+      ],
+    } as Json);
+    const id = (await startNow(harnessed, workflowId)).id;
+    const passes = (run: RunView) => run.executions.filter((e) => e.node === 'again').length;
+    assert.equal(passes(view(harnessed, id)), 2);
+    await assert.rejects(async () => control(harnessed, id, 'retry'), { code: 'NOTHING_TO_RETRY' });
+    assert.equal(control(harnessed, id, 'extend', { executions: 3 }).state, 'RUNNING');
+    const extended = view(harnessed, id) as ControlledRun;
+    assert.equal(extended.state, 'NEEDS_HUMAN', 'the loop runs until the raised limit');
+    assert.equal(passes(extended), 5);
+    assert.match(
+      (extended.attention as unknown as { explanation: string }).explanation,
+      /limit of 5 executions/,
+    );
+    assert.deepEqual(extended.controls.at(-1)!.payload, {
+      scope: 'node',
+      nodeId: 'again',
+      from: 2,
+      to: 5,
+    });
+    control(harnessed, id, 'fail');
+    assert.equal(view(harnessed, id).state, 'FAILED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('cancel stops a running agent through the harness and releases the workspace', async () => {
+  const harnessed = await engineFor((turn) => {
+    turn.status = 'running';
+  });
+  try {
+    const id = await start(harnessed);
+    await until(harnessed, id, (run) => run.invocations[0]?.state === 'RUNNING');
+    const requested = control(harnessed, id, 'cancel', {
+      reason: 'Not needed any more.',
+      commandId: 'cancel-command-1',
+    });
+    assert.ok(['CANCEL_REQUESTED', 'CANCELLED'].includes(requested.state));
+    const run = await until(harnessed, id, (candidate) => candidate.state === 'CANCELLED');
+    assert.deepEqual(run.outcome, { cancelled: true, reason: 'Not needed any more.' });
+    assert.ok(harnessed.fake.cancels >= 1);
+    assert.equal(run.invocations[0]!.state, 'INTERRUPTED');
+    assert.deepEqual(
+      run.executions.map((execution) => execution.state),
+      ['COMPLETED', 'CANCELLED'],
+    );
+    const workspace = harnessed.store.db
+      .prepare('SELECT id FROM workspaces WHERE created_by_run_id = ?')
+      .get(id) as { id: string };
+    assert.equal(
+      new Workspaces(harnessed.store.db, new FakeClock(), join(harnessed.state, 'workspaces')).get(
+        workspace.id,
+      ).claimed,
+      false,
+    );
+    assert.equal(
+      control(harnessed, id, 'cancel').state,
+      'CANCELLED',
+      'cancelling again is a no-op',
+    );
+    await assert.rejects(async () => control(harnessed, id, 'retry'), {
+      code: 'RUN_STATE_CONFLICT',
+    });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a cancellation whose stop is unconfirmed waits for the owner to cancel again', async () => {
+  const harnessed = await engineFor((turn) => {
+    turn.status = 'running';
+  });
+  try {
+    harnessed.fake.confirmCancel = false;
+    const id = await start(harnessed);
+    await until(harnessed, id, (run) => run.invocations[0]?.state === 'RUNNING');
+    control(harnessed, id, 'cancel');
+    const waiting = await until(harnessed, id, (run) => run.state === 'NEEDS_HUMAN');
+    assert.equal(waiting.cancelRequested, true);
+    assert.ok(['CANCEL_UNCONFIRMED', 'HARNESS_STOP_UNCONFIRMED'].includes(waiting.attention!.code));
+    for (const kind of ['retry', 'fail'] as const) {
+      await assert.rejects(async () => control(harnessed, id, kind), {
+        code: 'RUN_CANCEL_REQUESTED',
+      });
+    }
+    const run = control(harnessed, id, 'cancel');
+    assert.equal(run.state, 'CANCELLED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a cancellation interrupted by a restart finishes on the next start', async () => {
+  const first = await engineFor((turn) => {
+    turn.status = 'running';
+  });
+  const id = await start(first);
+  await until(first, id, (run) => run.invocations[0]?.state === 'RUNNING');
+  // The request committed, then the process stopped before the agent was stopped.
+  first.engine.repository.requestCancel(id, { kind: 'cli', id: 'local' }, undefined, undefined);
+  await first.close();
+  const second = await engineFor(() => {}, { state: first.state, fake: first.fake });
+  try {
+    const run = await until(second, id, (candidate) => candidate.state === 'CANCELLED');
+    assert.deepEqual(run.outcome, { cancelled: true });
+  } finally {
+    await second.close();
+  }
+});
+
+test('a finished turn that lands during cancellation does not move the run on', async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const harnessed = await engineFor(async (turn, fake) => {
+    turn.status = 'running';
+    await released;
+    await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const id = await start(harnessed);
+    await until(harnessed, id, (run) => run.invocations[0]?.state === 'RUNNING');
+    harnessed.engine.repository.requestCancel(
+      id,
+      { kind: 'cli', id: 'local' },
+      undefined,
+      undefined,
+    );
+    release();
+    await eventually(() =>
+      harnessed.fake.turns.size > 0 && [...harnessed.fake.turns.values()][0]!.status === 'ended'
+        ? true
+        : undefined,
+    );
+    await delay(100);
+    const run = view(harnessed, id);
+    assert.equal(run.state, 'CANCEL_REQUESTED');
+    assert.equal(run.executions.length, 2, 'no successor was scheduled');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('control commands check the run state and their input', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const id = await start(harnessed);
+    await settled(harnessed, id);
+    await assert.rejects(async () => control(harnessed, 'missing', 'cancel'), {
+      code: 'RUN_NOT_FOUND',
+    });
+    for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
+      const body = kind === 'complete' ? { data: {} } : kind === 'extend' ? { executions: 1 } : {};
+      await assert.rejects(async () => control(harnessed, id, kind, body), {
+        code: 'RUN_STATE_CONFLICT',
+      });
+    }
+    await assert.rejects(async () => control(harnessed, id, 'extend', { executions: 0 }), {
+      code: 'INVALID_REQUEST',
+    });
+    await assert.rejects(async () => control(harnessed, id, 'complete', {}), {
+      code: 'INVALID_REQUEST',
+    });
   } finally {
     await harnessed.close();
   }

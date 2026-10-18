@@ -6,7 +6,7 @@ import type { HarnessSessionHandle, Json, ModelRef, ToolPolicy } from '../harnes
 import { nodeType } from '../workflows/nodes.js';
 import type { NodeDefinition, WorkflowDocument } from '../workflows/document.js';
 import { envelope, type ChainEntry, type OutputEnvelope } from './bindings.js';
-import type { ResultEnvelope } from './envelope.js';
+import { checkValue, type ResultEnvelope } from './envelope.js';
 
 // A run freezes its published document, the project it runs in and the defaults it resolved
 // (specification 6.1). Editing the workflow or the project later never changes it.
@@ -106,11 +106,30 @@ export interface Attention {
   invocationId?: string;
 }
 
+interface ExecutionLimit {
+  scope: 'run' | 'node';
+  nodeId?: string;
+  value: number;
+  explanation: string;
+}
+
+// Limit extensions recorded by `extend` commands.
+interface RunLimits {
+  maxExecutions?: number;
+  nodes?: Record<string, number>;
+}
+
+export interface ControlActor {
+  kind: string;
+  id: string;
+}
+
 export class StaleClaim extends Error {}
 
 const parse = <T>(text: string | null): T | null =>
   text === null ? null : (JSON.parse(text) as T);
 const activeInvocationStates = "('PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN')";
+const activeStates = new Set<InvocationState>(['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN']);
 
 // Runs created before definitions existed froze a fixed manual -> agent -> end graph. They are
 // read as the equivalent document so they keep running after an upgrade.
@@ -277,19 +296,43 @@ export class RunRepository {
         'SELECT COUNT(*) AS total, SUM(node_id = ?) AS node, MAX(sequence) AS sequence FROM node_executions WHERE run_id = ?',
       )
       .get(target.id, runId) as { total: number; node: number | null; sequence: number };
-    const limit =
-      counts.total >= snapshot.document.execution.limits.maxExecutions
-        ? `The run reached its limit of ${snapshot.document.execution.limits.maxExecutions} executions.`
-        : (counts.node ?? 0) >= target.limits.maxExecutionsPerRun
-          ? `Node ${target.id} reached its limit of ${target.limits.maxExecutionsPerRun} executions.`
+    // Owner extensions raise the snapshot's limits without editing it (specification 6.7).
+    const extended = this.#limits(runId);
+    const runLimit = extended.maxExecutions ?? snapshot.document.execution.limits.maxExecutions;
+    const nodeLimit = extended.nodes?.[target.id] ?? target.limits.maxExecutionsPerRun;
+    const limit: ExecutionLimit | null =
+      counts.total >= runLimit
+        ? {
+            scope: 'run',
+            value: runLimit,
+            explanation: `The run reached its limit of ${runLimit} executions.`,
+          }
+        : (counts.node ?? 0) >= nodeLimit
+          ? {
+              scope: 'node',
+              nodeId: target.id,
+              value: nodeLimit,
+              explanation: `Node ${target.id} reached its limit of ${nodeLimit} executions.`,
+            }
           : null;
     if (limit) {
-      // Exhaustion enters NEEDS_HUMAN before another activation (specification 6.7).
+      // Exhaustion enters NEEDS_HUMAN before another activation (specification 6.7). The attention
+      // keeps what the next step needs, so an extension can resume exactly here.
+      const { explanation, ...rest } = limit;
       this.db
         .prepare(
           "UPDATE runs SET state = 'NEEDS_HUMAN', attention_json = ?, revision = revision + 1 WHERE id = ?",
         )
-        .run(JSON.stringify({ code: 'EXECUTION_LIMIT', explanation: limit }), runId);
+        .run(
+          JSON.stringify({
+            code: 'EXECUTION_LIMIT',
+            explanation,
+            executionId: from.id,
+            port,
+            limit: rest,
+          }),
+          runId,
+        );
       this.#event('run.needs_human', { runId, executionId: from.id }, { code: 'EXECUTION_LIMIT' });
       return;
     }
@@ -339,11 +382,12 @@ export class RunRepository {
         if (!execution) return null;
         const attemptId = randomUUID();
         const now = this.clock.now();
+        // An owner retry reopens the execution; its next attempt keeps the earlier ones in history.
         this.db
           .prepare(
-            "INSERT INTO node_attempts (id, execution_id, attempt_number, state, worker_generation, fence, started_at) VALUES (?, ?, 1, 'RUNNING', ?, 1, ?)",
+            "INSERT INTO node_attempts (id, execution_id, attempt_number, state, worker_generation, fence, started_at) VALUES (?, ?, (SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM node_attempts WHERE execution_id = ?), 'RUNNING', ?, 1, ?)",
           )
-          .run(attemptId, executionId, workerGeneration, now);
+          .run(attemptId, executionId, executionId, workerGeneration, now);
         this.db
           .prepare(
             "UPDATE node_executions SET state = 'RUNNING', started_at = ?, revision = revision + 1 WHERE id = ?",
@@ -782,76 +826,99 @@ export class RunRepository {
     this.db
       .transaction(() => {
         this.#fenced(claim);
-        const now = this.clock.now();
-        const context = this.execution(claim.executionId);
-        const { node, snapshot } = context;
-        const completed = outcome.kind === 'completed';
-        const output = completed ? outcome.output : null;
-        const error = completed ? null : outcome.error;
-        this.db
-          .prepare(
-            'UPDATE node_attempts SET state = ?, finished_at = ?, error_json = ? WHERE id = ?',
-          )
-          .run(
-            completed ? 'COMPLETED' : 'FAILED',
-            now,
-            error && JSON.stringify(error),
-            claim.attemptId,
-          );
-        this.db
-          .prepare(
-            'UPDATE node_executions SET state = ?, output_json = ?, error_json = ?, selected_port = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
-          )
-          .run(
-            completed ? 'COMPLETED' : 'FAILED',
-            output && JSON.stringify(output),
-            error && JSON.stringify(error),
-            completed ? outcome.port : null,
-            now,
-            claim.executionId,
-          );
-        this.db
-          .prepare(
-            "UPDATE agent_sessions SET state = 'ARCHIVED', archived_at = ?, revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?) AND lifetime = 'ephemeral'",
-          )
-          .run(now, claim.executionId);
-        this.#event(
-          completed ? 'execution.completed' : 'execution.failed',
-          { runId: claim.runId, executionId: claim.executionId },
-          completed ? { port: outcome.port } : (error as unknown as Json),
-        );
-        const from = { id: claim.executionId, nodeId: node.id };
-        if (completed) {
-          if (node.type === 'end') {
-            const config = (node.config ?? {}) as {
-              outcome?: 'COMPLETED' | 'FAILED';
-              reason?: string;
-            };
-            this.#finishRun(claim.runId, config.outcome ?? 'COMPLETED', {
-              data: outcome.output.data,
-              ...(config.reason === undefined ? {} : { reason: config.reason }),
-            });
-          } else {
-            this.#schedule(claim.runId, snapshot, from, outcome.port, outcome.output);
-          }
-          return;
-        }
-        const handled = snapshot.document.connections.some(
-          (connection) => connection.fromNodeId === node.id && connection.fromPort === 'error',
-        );
-        if (handled) {
-          this.#schedule(
-            claim.runId,
-            snapshot,
-            from,
-            'error',
-            envelope({ error: { ...outcome.error } as Json }, context.input),
-          );
-        } else {
-          this.#finishRun(claim.runId, 'FAILED', outcome.error as unknown as Json);
-        }
+        this.#finishExecution(claim, outcome);
       })
       .immediate();
+  }
+
+  // Records an execution's outcome and routes the run. `attemptId` is null for an owner decision
+  // about an execution whose attempt already stopped. Called inside a transaction.
+  #finishExecution(
+    claim: { runId: string; executionId: string; attemptId: string | null },
+    outcome: ExecutionOutcome,
+  ): void {
+    const now = this.clock.now();
+    const context = this.execution(claim.executionId);
+    const { node, snapshot } = context;
+    const completed = outcome.kind === 'completed';
+    const output = completed ? outcome.output : null;
+    const error = completed ? null : outcome.error;
+    if (claim.attemptId !== null) {
+      this.db
+        .prepare('UPDATE node_attempts SET state = ?, finished_at = ?, error_json = ? WHERE id = ?')
+        .run(
+          completed ? 'COMPLETED' : 'FAILED',
+          now,
+          error && JSON.stringify(error),
+          claim.attemptId,
+        );
+    }
+    this.db
+      .prepare(
+        'UPDATE node_executions SET state = ?, output_json = ?, error_json = ?, selected_port = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
+      )
+      .run(
+        completed ? 'COMPLETED' : 'FAILED',
+        output && JSON.stringify(output),
+        error && JSON.stringify(error),
+        completed ? outcome.port : null,
+        now,
+        claim.executionId,
+      );
+    this.db
+      .prepare(
+        "UPDATE agent_sessions SET state = 'ARCHIVED', archived_at = ?, revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?) AND lifetime = 'ephemeral'",
+      )
+      .run(now, claim.executionId);
+    this.#event(
+      completed ? 'execution.completed' : 'execution.failed',
+      { runId: claim.runId, executionId: claim.executionId },
+      completed ? { port: outcome.port } : (error as unknown as Json),
+    );
+    const from = { id: claim.executionId, nodeId: node.id };
+    // Cancellation wins: an outcome that arrives while the run is being cancelled is recorded,
+    // but the run takes no further step.
+    if (this.#runState(claim.runId) === 'CANCEL_REQUESTED') return;
+    if (completed) {
+      if (node.type === 'end') {
+        const config = (node.config ?? {}) as {
+          outcome?: 'COMPLETED' | 'FAILED';
+          reason?: string;
+        };
+        this.#finishRun(claim.runId, config.outcome ?? 'COMPLETED', {
+          data: outcome.output.data,
+          ...(config.reason === undefined ? {} : { reason: config.reason }),
+        });
+      } else {
+        this.#schedule(claim.runId, snapshot, from, outcome.port, outcome.output);
+      }
+      return;
+    }
+    const handled = snapshot.document.connections.some(
+      (connection) => connection.fromNodeId === node.id && connection.fromPort === 'error',
+    );
+    if (handled) {
+      this.#schedule(
+        claim.runId,
+        snapshot,
+        from,
+        'error',
+        envelope({ error: { ...outcome.error } as Json }, context.input),
+      );
+    } else {
+      this.#finishRun(claim.runId, 'FAILED', outcome.error as unknown as Json);
+    }
+  }
+
+  #limits(runId: string): RunLimits {
+    const row = this.db.prepare('SELECT limits_json FROM runs WHERE id = ?').get(runId) as
+      { limits_json: string | null } | undefined;
+    return parse<RunLimits>(row?.limits_json ?? null) ?? {};
+  }
+
+  #runState(runId: string): string {
+    return (this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string })
+      .state;
   }
 
   // The attempt stops and the execution waits for an owner decision; nothing resumes it on restart.
@@ -882,15 +949,432 @@ export class RunRepository {
       .immediate();
   }
 
-  run(runId: string): Json {
+  // ---- Owner controls (specification 6.6, 6.7 and 11.2) ----
+  // Each command checks the run's state, records itself in run_controls and changes the run in one
+  // transaction. Decisions about a stuck execution never fabricate harness evidence: its stopped
+  // attempt and uncertain invocations stay in history as they were.
+
+  // Requests cancellation. Waiting and pending work is cancelled at once; the returned claims are
+  // running attempts the caller must stop before `settleCancellation`.
+  requestCancel(
+    runId: string,
+    actor: ControlActor,
+    commandId: string | undefined,
+    reason: string | undefined,
+  ): Claim[] {
+    return this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        if (run.state === 'CANCELLED' || run.state === 'CANCEL_REQUESTED') {
+          return this.#runningClaims(runId);
+        }
+        this.#require(run, ['RUNNING', 'NEEDS_HUMAN'], 'cancel');
+        const now = this.clock.now();
+        this.#control(runId, 'cancel', actor, commandId, null, reason ? { reason } : {});
+        this.db
+          .prepare(
+            "UPDATE runs SET state = 'CANCEL_REQUESTED', cancel_requested_at = COALESCE(cancel_requested_at, ?), attention_json = NULL, revision = revision + 1 WHERE id = ?",
+          )
+          .run(now, runId);
+        this.#cancelIdle(runId);
+        this.#event('run.cancel_requested', { runId }, reason ? { reason } : {});
+        const claims = this.#runningClaims(runId);
+        if (claims.length === 0) this.#finishCancel(runId);
+        return claims;
+      })
+      .immediate();
+  }
+
+  // Finishes a cancellation once its attempts were asked to stop. An attempt whose stop cannot be
+  // confirmed keeps the cancellation pending and asks the owner, who cancels again after checking.
+  settleCancellation(runId: string): void {
+    this.db
+      .transaction(() => {
+        if (this.#runState(runId) !== 'CANCEL_REQUESTED') return;
+        const now = this.clock.now();
+        let unconfirmed = false;
+        for (const claim of this.#runningClaims(runId)) {
+          const last = this.invocations(claim.attemptId).at(-1);
+          const uncertain =
+            last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN');
+          unconfirmed ||= uncertain;
+          this.db
+            .prepare('UPDATE node_attempts SET state = ?, finished_at = ? WHERE id = ?')
+            .run(uncertain ? 'INTERRUPTED' : 'CANCELLED', now, claim.attemptId);
+          this.db
+            .prepare(
+              'UPDATE node_executions SET state = ?, finished_at = ?, revision = revision + 1 WHERE id = ?',
+            )
+            .run(uncertain ? 'WAITING' : 'CANCELLED', uncertain ? null : now, claim.executionId);
+        }
+        this.#cancelIdle(runId);
+        if (!unconfirmed) {
+          this.#finishCancel(runId);
+          return;
+        }
+        const attention = {
+          code: 'CANCEL_UNCONFIRMED',
+          explanation:
+            'Shift could not confirm that the agent stopped, so its effects are unknown. Check the workspace, then cancel again to finish cancelling.',
+        };
+        this.db
+          .prepare(
+            "UPDATE runs SET state = 'NEEDS_HUMAN', attention_json = ?, revision = revision + 1 WHERE id = ?",
+          )
+          .run(JSON.stringify(attention), runId);
+        this.#event('run.needs_human', { runId }, attention);
+      })
+      .immediate();
+  }
+
+  // Runs whose cancellation an earlier worker generation did not finish, with their running
+  // attempts reclaimed under a new fence.
+  reclaimCancellations(workerGeneration: string): Array<{ runId: string; claims: Claim[] }> {
+    return this.db
+      .transaction(() => {
+        const runs = this.db
+          .prepare("SELECT id FROM runs WHERE state = 'CANCEL_REQUESTED' ORDER BY created_at")
+          .all() as Array<{ id: string }>;
+        return runs.map(({ id }) => {
+          this.db
+            .prepare(
+              "UPDATE node_attempts SET fence = fence + 1, worker_generation = ? WHERE state = 'RUNNING' AND execution_id IN (SELECT id FROM node_executions WHERE run_id = ?)",
+            )
+            .run(workerGeneration, id);
+          return { runId: id, claims: this.#runningClaims(id) };
+        });
+      })
+      .immediate();
+  }
+
+  // Reopens the stuck execution with a new attempt. The owner has confirmed that retrying is safe;
+  // the agent continues in the same session and is told that earlier effects are unknown.
+  retry(runId: string, actor: ControlActor, commandId: string | undefined): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#require(run, ['NEEDS_HUMAN'], 'retry');
+        this.#notCancelling(run);
+        const stuck = this.#stuck(runId);
+        if (!stuck) {
+          throw new ShiftError(
+            'NOTHING_TO_RETRY',
+            'No step is waiting to be retried. A run stopped by an execution limit continues with extend.',
+            409,
+          );
+        }
+        this.#control(runId, 'retry', actor, commandId, stuck.id, {});
+        this.db
+          .prepare(
+            "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ?",
+          )
+          .run(stuck.id);
+        this.#resume(runId);
+        this.#event('execution.retry_requested', { runId, executionId: stuck.id }, {});
+      })
+      .immediate();
+  }
+
+  // Abandons the stuck step: it fails and follows its error connection, or the run fails.
+  fail(
+    runId: string,
+    actor: ControlActor,
+    commandId: string | undefined,
+    reason: string | undefined,
+  ): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#require(run, ['NEEDS_HUMAN'], 'fail');
+        this.#notCancelling(run);
+        const stuck = this.#stuck(runId);
+        const error: ExecutionError = {
+          code: 'ABANDONED',
+          category: 'external',
+          message: reason ?? 'The owner abandoned this step.',
+        };
+        this.#control(runId, 'fail', actor, commandId, stuck?.id ?? null, reason ? { reason } : {});
+        this.#resume(runId);
+        if (stuck) {
+          this.#finishExecution(
+            { runId, executionId: stuck.id, attemptId: null },
+            { kind: 'failed', error },
+          );
+        } else {
+          this.#finishRun(runId, 'FAILED', error as unknown as Json);
+        }
+      })
+      .immediate();
+  }
+
+  // Records a result the owner verified for a stuck agent step. It must satisfy the step's result
+  // schema; run_controls records that it came from the owner, not the agent.
+  complete(runId: string, actor: ControlActor, commandId: string | undefined, data: Json): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#require(run, ['NEEDS_HUMAN'], 'complete');
+        this.#notCancelling(run);
+        const stuck = this.#stuck(runId);
+        if (!stuck || stuck.node_type !== 'agent') {
+          throw new ShiftError(
+            'NOTHING_TO_COMPLETE',
+            'No agent step is waiting for a result.',
+            409,
+          );
+        }
+        const invalid = checkValue(this.agentConfig(stuck.id).resultSchema, data, 'data');
+        if (invalid) {
+          throw new ShiftError(
+            'INVALID_RESULT',
+            `The result does not match the step's result schema: ${invalid}`,
+            422,
+          );
+        }
+        const context = this.execution(stuck.id);
+        const output = envelope(data, context.input);
+        const session = this.session(stuck.id);
+        if (session && context.snapshot.project.id) {
+          output.references.agentSession = {
+            kind: 'agent_session',
+            id: session.agentSessionId,
+            projectId: context.snapshot.project.id,
+          };
+        }
+        this.#control(runId, 'complete', actor, commandId, stuck.id, { data });
+        this.#resume(runId);
+        this.#finishExecution(
+          { runId, executionId: stuck.id, attemptId: null },
+          { kind: 'completed', output, port: 'success' },
+        );
+      })
+      .immediate();
+  }
+
+  // Raises the execution limit that stopped the run by `executions` and takes the step it held.
+  extend(
+    runId: string,
+    actor: ControlActor,
+    commandId: string | undefined,
+    executions: number,
+  ): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#require(run, ['NEEDS_HUMAN'], 'extend');
+        this.#notCancelling(run);
+        const attention = parse<{
+          code: string;
+          executionId?: string;
+          port?: string;
+          limit?: { scope: 'run' | 'node'; nodeId?: string; value: number };
+        }>(run.attention_json);
+        if (attention?.code !== 'EXECUTION_LIMIT' || !attention.executionId || !attention.limit) {
+          throw new ShiftError(
+            'NOTHING_TO_EXTEND',
+            'The run is not stopped by an execution limit.',
+            409,
+          );
+        }
+        const { limit, executionId, port = 'success' } = attention;
+        const limits = this.#limits(runId);
+        const value = limit.value + executions;
+        if (limit.scope === 'run') limits.maxExecutions = value;
+        else limits.nodes = { ...limits.nodes, [limit.nodeId!]: value };
+        this.db
+          .prepare('UPDATE runs SET limits_json = ? WHERE id = ?')
+          .run(JSON.stringify(limits), runId);
+        this.#control(runId, 'extend', actor, commandId, executionId, {
+          scope: limit.scope,
+          ...(limit.nodeId ? { nodeId: limit.nodeId } : {}),
+          from: limit.value,
+          to: value,
+        });
+        this.#resume(runId);
+        const from = this.db
+          .prepare(
+            'SELECT node_id, input_json, output_json, error_json FROM node_executions WHERE id = ?',
+          )
+          .get(executionId) as {
+          node_id: string;
+          input_json: string;
+          output_json: string | null;
+          error_json: string | null;
+        };
+        const output =
+          port === 'error'
+            ? envelope(
+                { error: parse<Json>(from.error_json) },
+                parse<OutputEnvelope>(from.input_json) ?? undefined,
+              )
+            : parse<OutputEnvelope>(from.output_json)!;
+        const snapshot = upgradeSnapshot(
+          JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot,
+        );
+        this.#schedule(runId, snapshot, { id: executionId, nodeId: from.node_id }, port, output);
+      })
+      .immediate();
+  }
+
+  #controlled(runId: string) {
     const run = this.db
       .prepare(
-        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
+        'SELECT id, state, cancel_requested_at, attention_json, snapshot_json FROM runs WHERE id = ?',
       )
       .get(runId) as
       | {
           id: string;
           state: string;
+          cancel_requested_at: number | null;
+          attention_json: string | null;
+          snapshot_json: string;
+        }
+      | undefined;
+    if (!run) throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
+    return run;
+  }
+
+  #require(run: { state: string }, states: string[], action: string): void {
+    if (!states.includes(run.state)) {
+      throw new ShiftError(
+        'RUN_STATE_CONFLICT',
+        `The run is ${run.state}; ${action} needs a run that is ${states.join(' or ')}.`,
+        409,
+      );
+    }
+  }
+
+  #notCancelling(run: { cancel_requested_at: number | null }): void {
+    if (run.cancel_requested_at !== null) {
+      throw new ShiftError(
+        'RUN_CANCEL_REQUESTED',
+        'The run is being cancelled. Cancel it again to finish cancelling.',
+        409,
+      );
+    }
+  }
+
+  // The execution an owner decision is about: the one waiting after its attempt stopped.
+  #stuck(runId: string) {
+    return this.db
+      .prepare(
+        "SELECT id, node_id, node_type FROM node_executions WHERE run_id = ? AND state = 'WAITING' ORDER BY sequence DESC LIMIT 1",
+      )
+      .get(runId) as { id: string; node_id: string; node_type: string | null } | undefined;
+  }
+
+  #resume(runId: string): void {
+    this.db
+      .prepare(
+        "UPDATE runs SET state = 'RUNNING', attention_json = NULL, revision = revision + 1 WHERE id = ?",
+      )
+      .run(runId);
+  }
+
+  #runningClaims(runId: string): Claim[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT a.id, a.execution_id, a.fence FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id WHERE e.run_id = ? AND a.state = 'RUNNING'",
+        )
+        .all(runId) as Array<{ id: string; execution_id: string; fence: number }>
+    ).map((row) => ({
+      attemptId: row.id,
+      executionId: row.execution_id,
+      runId,
+      fence: row.fence,
+    }));
+  }
+
+  // Work that is not running stops at once.
+  #cancelIdle(runId: string): void {
+    this.db
+      .prepare(
+        "UPDATE node_executions SET state = 'CANCELLED', finished_at = ?, revision = revision + 1 WHERE run_id = ? AND state IN ('PENDING', 'WAITING')",
+      )
+      .run(this.clock.now(), runId);
+  }
+
+  #finishCancel(runId: string): void {
+    const reason = (
+      this.db
+        .prepare(
+          "SELECT json_extract(payload_json, '$.reason') AS reason FROM run_controls WHERE run_id = ? AND kind = 'cancel' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        )
+        .get(runId) as { reason: string | null } | undefined
+    )?.reason;
+    this.db
+      .prepare(
+        "UPDATE runs SET state = 'CANCELLED', attention_json = NULL, outcome_json = ?, finished_at = ?, revision = revision + 1 WHERE id = ?",
+      )
+      .run(
+        JSON.stringify({ cancelled: true, ...(reason ? { reason } : {}) }),
+        this.clock.now(),
+        runId,
+      );
+    this.#event('run.cancelled', { runId }, reason ? { reason } : {});
+  }
+
+  #control(
+    runId: string,
+    kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend',
+    actor: ControlActor,
+    commandId: string | undefined,
+    executionId: string | null,
+    payload: Json,
+  ): void {
+    this.db
+      .prepare(
+        'INSERT INTO run_controls (id, run_id, kind, execution_id, actor_kind, actor_id, command_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        randomUUID(),
+        runId,
+        kind,
+        executionId,
+        actor.kind,
+        actor.id,
+        commandId ?? null,
+        JSON.stringify(payload),
+        this.clock.now(),
+      );
+    this.#event(
+      'run.control',
+      { runId, ...(executionId ? { executionId } : {}) },
+      { kind, actor: { ...actor } },
+    );
+  }
+
+  // The last invocation of any attempt of an execution, which a retry's first prompt continues.
+  lastInvocationId(executionId: string): string | undefined {
+    return (
+      this.db
+        .prepare(
+          'SELECT id FROM agent_invocations WHERE execution_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+        )
+        .get(executionId) as { id: string } | undefined
+    )?.id;
+  }
+
+  // The attempt number of a claim; later attempts are owner retries.
+  attemptNumber(attemptId: string): number {
+    return (
+      this.db.prepare('SELECT attempt_number FROM node_attempts WHERE id = ?').get(attemptId) as {
+        attempt_number: number;
+      }
+    ).attempt_number;
+  }
+
+  run(runId: string): Json {
+    const run = this.db
+      .prepare(
+        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, r.cancel_requested_at, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
+      )
+      .get(runId) as
+      | {
+          id: string;
+          state: string;
+          cancel_requested_at: number | null;
           workspace_id: string | null;
           workspace_path: string | null;
           workspace_state: string | null;
@@ -942,6 +1426,7 @@ export class RunRepository {
           ? null
           : { id: run.workspace_id, path: run.workspace_path, state: run.workspace_state },
       attention: parse<Json>(run.attention_json),
+      cancelRequested: run.cancel_requested_at !== null,
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,
       finishedAt: run.finished_at,
@@ -962,6 +1447,28 @@ export class RunRepository {
         correlationId: invocation.correlation_id,
         submissions: invocation.submissions,
         acceptedSubmissions: invocation.accepted,
+      })),
+      controls: (
+        this.db
+          .prepare(
+            'SELECT id, kind, execution_id, actor_kind, actor_id, payload_json, created_at FROM run_controls WHERE run_id = ? ORDER BY created_at, rowid',
+          )
+          .all(runId) as Array<{
+          id: string;
+          kind: string;
+          execution_id: string | null;
+          actor_kind: string;
+          actor_id: string;
+          payload_json: string;
+          created_at: number;
+        }>
+      ).map((control) => ({
+        id: control.id,
+        kind: control.kind,
+        executionId: control.execution_id,
+        actor: { kind: control.actor_kind, id: control.actor_id },
+        payload: parse<Json>(control.payload_json),
+        createdAt: control.created_at,
       })),
     };
   }

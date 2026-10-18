@@ -10,7 +10,7 @@ Work has followed the roadmap in risk order rather than strictly by prompt numbe
 
 - Done: 00, 01, 02, 03, 04 (definitions), 05 (linear execution) and 15 (one workspace per run, without reuse).
 - Partly done: 06 (error routing, loops and node references; no branching or fan-out), 17 (OpenCode supervision and the adapter, without client UI), 18 (result contract, schemas and corrections; no reports or handoff content), and 19 (crash and interruption recovery; reconciliation commands are open).
-- Next: 08 (failure and retry controls).
+- Partly done: 08 (owner retry, fail, complete, extend and cancel; automatic retries with backoff are next).
 
 ## Give an agent one task
 

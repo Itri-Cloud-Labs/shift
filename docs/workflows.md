@@ -83,7 +83,7 @@ A connection joins one node's output port to another node's `input`.
 - Nothing may connect into the trigger.
 - When a node finishes, the run follows the connection from the port it took. A port without a connection completes the run successfully with that node's output.
 - A failed node takes its `error` port when it has a connection there. The next node receives `{"error": {"code", "category", "message"}}` as its data. Without an `error` connection the run fails.
-- Loops are ordinary connections back to an earlier node. Each pass creates a new execution. When a node reaches `limits.maxExecutionsPerRun`, or the run reaches `execution.limits.maxExecutions`, the run stops in `NEEDS_HUMAN` with `EXECUTION_LIMIT` before running anything else.
+- Loops are ordinary connections back to an earlier node. Each pass creates a new execution. When a node reaches `limits.maxExecutionsPerRun`, or the run reaches `execution.limits.maxExecutions`, the run stops in `NEEDS_HUMAN` with `EXECUTION_LIMIT` before running anything else. `shift run extend` raises the limit for that run.
 
 ## Bindings
 
@@ -188,12 +188,28 @@ Runs started before workspaces existed keep working in the repository itself.
 
 ## Run states
 
-| State         | Meaning                                                                                                                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `RUNNING`     | Nodes are executing or about to.                                                                                               |
-| `NEEDS_HUMAN` | The run stopped because it can't continue safely. `attention` says why. Commands to resolve it are not implemented yet (M04b). |
-| `COMPLETED`   | The run reached an `end` node or an unconnected port. `outcome` holds the final data.                                          |
-| `FAILED`      | A node failed without an `error` connection, or an `end` node declared `FAILED`.                                               |
+| State              | Meaning                                                                                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RUNNING`          | Nodes are executing or about to.                                                                                                                                                                   |
+| `NEEDS_HUMAN`      | The run stopped because it can't continue safely. `attention` says why. Continue it with `shift run retry`, `fail`, `complete` or `extend`, or cancel it; see [owner decisions](#owner-decisions). |
+| `CANCEL_REQUESTED` | `shift run cancel` was accepted, and Shift is stopping the running agent.                                                                                                                          |
+| `CANCELLED`        | The run was cancelled. Work completed before cancellation is kept; nothing is rolled back.                                                                                                         |
+| `COMPLETED`        | The run reached an `end` node or an unconnected port. `outcome` holds the final data.                                                                                                              |
+| `FAILED`           | A node failed without an `error` connection, or an `end` node declared `FAILED`.                                                                                                                   |
+
+## Owner decisions
+
+A run waits in `NEEDS_HUMAN` when Shift cannot tell what happened, for example after an agent's tools were killed mid-turn, or when a loop reached its limit. Only you can decide what is true, so Shift asks instead of guessing:
+
+| Command                                     | Use it when                                                                                                                                                                                              |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shift run retry <run>`                     | You checked the workspace and running the step again is safe. The agent continues in its session and is told that the earlier attempt's effects are unknown, so it inspects the workspace before acting. |
+| `shift run complete <run> --file data.json` | The step's work is in fact done and you can state its result. The result must satisfy the step's `resultSchema`, and it is recorded as yours.                                                            |
+| `shift run fail <run> [--reason]`           | The step should not continue. It fails with `ABANDONED` and follows its `error` connection, or the run fails.                                                                                            |
+| `shift run extend <run> --executions N`     | A loop reached its limit and should keep going. The limit is raised by `N`; the workflow itself is unchanged.                                                                                            |
+| `shift run cancel <run>`                    | The run should stop. It works at any point, not only in `NEEDS_HUMAN`.                                                                                                                                   |
+
+Every decision is recorded in the run's `controls`, and the stopped attempt stays in history as Shift observed it. A cancellation that cannot confirm that the agent stopped waits in `NEEDS_HUMAN` with `CANCEL_UNCONFIRMED`. Check the workspace, then cancel again. While a cancellation is pending, only cancel is accepted. A cancellation interrupted by a restart finishes on the next start.
 
 ## Crashes and restarts
 
@@ -214,7 +230,7 @@ A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn
 Publishing refuses these, so a document never silently ignores them:
 
 - Run variables (M04a).
-- Retries with `retry.maxAttempts` above 1 (M04b).
+- Automatic retries with `retry.maxAttempts` above 1 (M04b). Owner retries work today.
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 

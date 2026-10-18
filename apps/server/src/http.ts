@@ -174,6 +174,12 @@ export function createHttpServer(options: {
       local(req);
       reply(res, 200, { run: engine.repository.run(id(req)) });
     });
+    for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
+      app.post(`${admin}/runs/:id/${kind}`, json, (req, res) => {
+        local(req);
+        command(res, engine.controlRun(id(req), kind, req.body ?? {}));
+      });
+    }
     const workspaces = options.workspaces;
     if (workspaces) {
       app.get(`${admin}/workspaces`, (req, res) => {

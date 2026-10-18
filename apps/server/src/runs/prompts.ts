@@ -48,3 +48,13 @@ export function continuationPrompt(task: AgentTask, artifactDirectory: string): 
     goalPrompt(task, artifactDirectory),
   ].join('\n');
 }
+
+// After an owner retry. The earlier attempt stopped without evidence of what it did, so the agent
+// must establish the current state before acting again.
+export function retryPrompt(task: AgentTask, artifactDirectory: string): string {
+  return [
+    'An earlier attempt at this task stopped unexpectedly, and what it changed is unknown. Its tools may have completed some steps. First inspect the working directory to establish what was already done, then finish the original task without repeating completed steps.',
+    '',
+    goalPrompt(task, artifactDirectory),
+  ].join('\n');
+}
