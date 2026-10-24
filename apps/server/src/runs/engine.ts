@@ -497,9 +497,13 @@ export class RunEngine {
     const context = this.repository.execution(claim.executionId);
     if (context.config !== null && context.bindings !== null) return context;
     const { node, snapshot } = context;
-    const bindings = resolveBindings(node.bindings, {
+    const { values: bindings, sources } = resolveBindings(node.bindings, {
       input: context.input,
+      inputExecutionId: context.predecessorId,
+      // The entry trigger is the far end of the chain, or the input itself for its successor.
       trigger: context.chain.at(-1)?.output.data ?? context.input.data,
+      triggerExecutionId: context.chain.at(-1)?.id ?? context.predecessorId,
+      projectId: snapshot.project.id,
       project: {
         id: snapshot.project.id,
         name: snapshot.project.name,
@@ -586,7 +590,7 @@ export class RunEngine {
       };
       config = resolved as unknown as Json;
     }
-    this.repository.prepareExecution(claim, { config, bindings });
+    this.repository.prepareExecution(claim, { config, bindings, sources });
     return { ...context, config, bindings };
   }
 

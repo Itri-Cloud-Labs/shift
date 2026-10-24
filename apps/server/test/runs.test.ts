@@ -2567,3 +2567,229 @@ test('a loop controlled by a condition keeps each pass across a restart', async 
     await current.close();
   }
 });
+
+// ---- Execution selectors, provenance and history (specification 6.3) ----
+
+type HistoryEntry = {
+  id: string;
+  node: string;
+  sequence: number;
+  state: string;
+  predecessorId: string | null;
+  connectionId: string | null;
+  sources: Record<string, Record<string, unknown>> | null;
+  output: { data: unknown } | null;
+};
+
+test('selectors read earlier loop passes even when the newest pass skipped the producer', async () => {
+  let turns = 0;
+  const counting: Behaviour = async (turn, fake) => complete({ count: ++turns })(turn, fake);
+  const below3 = { op: 'lt', left: { binding: 'count' }, right: { value: 3 } };
+  const count = { count: { kind: 'input', path: ['data', 'count'] } };
+  const mark = (execution: unknown) => ({
+    kind: 'node',
+    nodeId: 'mark',
+    execution,
+    path: ['data', 'seen'],
+  });
+  // start -> agent -> gate: passes 1 and 2 go through mark, pass 3 skips it -> again -> report.
+  const document = {
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      {
+        id: 'agent',
+        type: 'agent',
+        config: {
+          goal: 'Count.',
+          resultSchema: { type: 'object', properties: { count: { type: 'integer' } } },
+        },
+      },
+      { id: 'gate', type: 'condition', config: { when: below3 }, bindings: count },
+      {
+        id: 'mark',
+        type: 'transform',
+        config: { data: { seen: { $binding: 'count' }, count: { $binding: 'count' } } },
+        bindings: count,
+      },
+      { id: 'again', type: 'condition', config: { when: below3 }, bindings: count },
+      {
+        id: 'report',
+        type: 'transform',
+        config: {
+          data: {
+            latest: { $binding: 'latest' },
+            first: { $binding: 'first' },
+            second: { $binding: 'second' },
+          },
+        },
+        bindings: {
+          latest: mark('latest'),
+          first: mark('first'),
+          second: {
+            kind: 'node',
+            nodeId: 'agent',
+            execution: { sequence: 6 },
+            path: ['data', 'count'],
+          },
+        },
+      },
+    ],
+    connections: [
+      connect('c1', 'start', 'agent'),
+      connect('c2', 'agent', 'gate'),
+      connect('c3', 'gate', 'mark', 'true'),
+      connect('c4', 'gate', 'again', 'false'),
+      connect('c5', 'mark', 'again'),
+      connect('c6', 'again', 'agent', 'true'),
+      connect('c7', 'again', 'report', 'false'),
+    ],
+  } as Json;
+  const first = await engineFor(counting);
+  const { id } = await startNow(first, await publish(first, document));
+  const done = await settled(first, id);
+  assert.equal(done.state, 'COMPLETED');
+  assert.deepEqual(done.outcome, { data: { latest: 2, first: 1, second: 2 } });
+  await first.close();
+
+  // Provenance is stored with the execution, so a restarted server reports the same producers.
+  const second = await engineFor(() => {}, { state: first.state });
+  try {
+    const history = (second.engine.repository.run(id) as unknown as { executions: HistoryEntry[] })
+      .executions;
+    const at = (sequence: number) => history.find((entry) => entry.sequence === sequence)!;
+    assert.deepEqual(
+      history.map((entry) => `${entry.sequence}:${entry.node}`),
+      [
+        '1:start',
+        '2:agent',
+        '3:gate',
+        '4:mark',
+        '5:again',
+        '6:agent',
+        '7:gate',
+        '8:mark',
+        '9:again',
+        '10:agent',
+        '11:gate',
+        '12:again',
+        '13:report',
+      ],
+    );
+    const report = at(13);
+    assert.equal(report.predecessorId, at(12).id);
+    assert.equal(report.connectionId, 'c7');
+    assert.deepEqual(report.sources, {
+      latest: {
+        kind: 'node',
+        nodeId: 'mark',
+        executionId: at(8).id,
+        sequence: 8,
+        path: ['data', 'seen'],
+      },
+      first: {
+        kind: 'node',
+        nodeId: 'mark',
+        executionId: at(4).id,
+        sequence: 4,
+        path: ['data', 'seen'],
+      },
+      second: {
+        kind: 'node',
+        nodeId: 'agent',
+        executionId: at(6).id,
+        sequence: 6,
+        path: ['data', 'count'],
+      },
+    });
+    assert.deepEqual(at(12).sources, {
+      count: { kind: 'input', executionId: at(11).id, path: ['data', 'count'] },
+    });
+
+    const page = (after: number, limit: number) =>
+      second.engine.repository.executions(id, after, limit) as unknown as {
+        executions: HistoryEntry[];
+        next: number | null;
+      };
+    const firstPage = page(0, 5);
+    assert.deepEqual(
+      firstPage.executions.map((entry) => entry.sequence),
+      [1, 2, 3, 4, 5],
+    );
+    assert.equal(firstPage.next, 5);
+    const lastPage = page(10, 5);
+    assert.deepEqual(
+      lastPage.executions.map((entry) => entry.sequence),
+      [11, 12, 13],
+    );
+    assert.equal(lastPage.next, null);
+    assert.deepEqual(lastPage.executions[2], report, 'pages hold the same entries as the run view');
+    assert.throws(() => second.engine.repository.executions('nope', 0, 1), {
+      code: 'RUN_NOT_FOUND',
+    });
+  } finally {
+    await second.close();
+  }
+});
+
+test('a selector naming a failed, later or foreign execution fails the node, even when optional', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const selector = (execution: unknown, optional = false) =>
+      ({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          // Fails: its binding has no value, so its error connection is taken.
+          {
+            id: 'bad',
+            type: 'transform',
+            config: { data: { $binding: 'gone' } },
+            bindings: { gone: { kind: 'trigger', path: ['absent'] } },
+          },
+          {
+            id: 'after',
+            type: 'transform',
+            config: { data: { $binding: 'value' } },
+            bindings: {
+              value: {
+                kind: 'node',
+                nodeId: 'bad',
+                execution,
+                path: [],
+                ...(optional ? { optional: true, fallback: null } : {}),
+              },
+            },
+          },
+        ],
+        connections: [connect('c1', 'start', 'bad'), connect('c2', 'bad', 'after', 'error')],
+      }) as Json;
+    for (const [execution, optional] of [
+      [{ sequence: 2 }, false],
+      [{ sequence: 2 }, true],
+      [{ sequence: 9 }, true],
+      [{ executionId: 'elsewhere' }, true],
+    ] as const) {
+      const run = await startNow(
+        harnessed,
+        await publish(harnessed, selector(execution, optional)),
+      );
+      assert.equal(run.state, 'FAILED', JSON.stringify(execution));
+      assert.equal((run.outcome as { code: string }).code, 'BINDING_UNAVAILABLE');
+    }
+    // A missing latest value is different: the optional fallback applies.
+    const fallback = await startNow(harnessed, await publish(harnessed, selector('latest', true)));
+    assert.equal(fallback.state, 'COMPLETED');
+    assert.deepEqual(fallback.outcome, { data: null });
+    assert.deepEqual((fallback.executions[2] as unknown as HistoryEntry).sources, {
+      value: {
+        kind: 'node',
+        nodeId: 'bad',
+        executionId: null,
+        sequence: null,
+        path: [],
+        fallback: true,
+      },
+    });
+  } finally {
+    await harnessed.close();
+  }
+});

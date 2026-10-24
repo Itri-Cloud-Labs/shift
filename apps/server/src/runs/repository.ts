@@ -5,7 +5,7 @@ import { ShiftError } from '../domain/errors.js';
 import type { HarnessSessionHandle, Json, ModelRef, ToolPolicy } from '../harness/types.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { NodeDefinition, WorkflowDocument } from '../workflows/document.js';
-import { envelope, type ChainEntry, type OutputEnvelope } from './bindings.js';
+import { envelope, type BindingSource, type ChainEntry, type OutputEnvelope } from './bindings.js';
 import { checkValue, type ResultEnvelope } from './envelope.js';
 
 // A run freezes its published document, the project it runs in and the defaults it resolved
@@ -150,6 +150,7 @@ export interface ExecutionContext {
   bindings: Record<string, Json> | null;
   // Successful executions on this execution's predecessor chain, nearest first.
   chain: ChainEntry[];
+  predecessorId: string | null;
 }
 
 export interface Attention {
@@ -549,6 +550,7 @@ export class RunRepository {
       // Failed results stay in history but never become `latest` successful output.
       if (entry.state === 'COMPLETED' && entry.output_json) {
         chain.push({
+          id: cursor,
           nodeId: entry.node_id,
           sequence: entry.sequence,
           output: JSON.parse(entry.output_json) as OutputEnvelope,
@@ -565,22 +567,31 @@ export class RunRepository {
       config: parse<Json>(row.config_json),
       bindings: parse<Record<string, Json>>(row.bindings_json),
       chain,
+      predecessorId: row.predecessor_execution_id,
     };
   }
 
   // Bindings and resolved configuration are frozen once; recovery reuses them instead of resolving
   // newer data again (specification 6.3).
-  prepareExecution(claim: Claim, prepared: { config: Json; bindings: Record<string, Json> }): void {
+  prepareExecution(
+    claim: Claim,
+    prepared: {
+      config: Json;
+      bindings: Record<string, Json>;
+      sources: Record<string, BindingSource>;
+    },
+  ): void {
     this.db
       .transaction(() => {
         this.#fenced(claim);
         this.db
           .prepare(
-            'UPDATE node_executions SET config_json = ?, bindings_json = ?, revision = revision + 1 WHERE id = ? AND config_json IS NULL',
+            'UPDATE node_executions SET config_json = ?, bindings_json = ?, binding_sources_json = ?, revision = revision + 1 WHERE id = ? AND config_json IS NULL',
           )
           .run(
             JSON.stringify(prepared.config),
             JSON.stringify(prepared.bindings),
+            JSON.stringify(prepared.sources),
             claim.executionId,
           );
       })
@@ -2023,6 +2034,73 @@ export class RunRepository {
     return row ? { state: row.state, error: parse<ExecutionError>(row.error_json) } : null;
   }
 
+  // Executions of a run in sequence order, each with its attempts and the exact producers of its
+  // input and bindings. `after` and `limit` page through long loops.
+  #executionViews(runId: string, after = 0, limit = -1): Json[] {
+    const executions = this.db
+      .prepare(
+        'SELECT id, node_id, node_type, sequence, state, selected_port, output_json, error_json, predecessor_execution_id, incoming_connection_id, binding_sources_json FROM node_executions WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?',
+      )
+      .all(runId, after, limit) as Array<{
+      id: string;
+      node_id: string;
+      node_type: string | null;
+      sequence: number;
+      state: string;
+      selected_port: string | null;
+      output_json: string | null;
+      error_json: string | null;
+      predecessor_execution_id: string | null;
+      incoming_connection_id: string | null;
+      binding_sources_json: string | null;
+    }>;
+    const attempts = this.db
+      .prepare(
+        'SELECT a.execution_id, a.attempt_number, a.state, a.error_json FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id WHERE e.run_id = ? ORDER BY a.attempt_number',
+      )
+      .all(runId) as Array<{
+      execution_id: string;
+      attempt_number: number;
+      state: string;
+      error_json: string | null;
+    }>;
+    return executions.map((execution) => ({
+      id: execution.id,
+      node: execution.node_id,
+      type: execution.node_type ?? execution.node_id,
+      sequence: execution.sequence,
+      state: execution.state,
+      port: execution.selected_port,
+      // The execution whose output became this one's input, and the connection it followed.
+      predecessorId: execution.predecessor_execution_id,
+      connectionId: execution.incoming_connection_id,
+      sources: parse<Json>(execution.binding_sources_json),
+      output: parse<Json>(execution.output_json),
+      error: parse<Json>(execution.error_json),
+      attempts: attempts
+        .filter((attempt) => attempt.execution_id === execution.id)
+        .map((attempt) => ({
+          number: attempt.attempt_number,
+          state: attempt.state,
+          error: parse<Json>(attempt.error_json),
+        })),
+    }));
+  }
+
+  // A page of a run's execution history. `next` is the `after` value for the following page.
+  executions(runId: string, after: number, limit: number): Json {
+    if (!this.db.prepare('SELECT 1 FROM runs WHERE id = ?').get(runId)) {
+      throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
+    }
+    const page = this.#executionViews(runId, after, limit + 1);
+    const more = page.length > limit;
+    const executions = page.slice(0, limit);
+    return {
+      executions,
+      next: more ? (executions.at(-1) as { sequence: number }).sequence : null,
+    };
+  }
+
   run(runId: string): Json {
     const run = this.db
       .prepare(
@@ -2044,20 +2122,6 @@ export class RunRepository {
         }
       | undefined;
     if (!run) throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
-    const executions = this.db
-      .prepare(
-        'SELECT id, node_id, node_type, sequence, state, selected_port, output_json, error_json FROM node_executions WHERE run_id = ? ORDER BY sequence',
-      )
-      .all(runId) as Array<{
-      id: string;
-      node_id: string;
-      node_type: string | null;
-      sequence: number;
-      state: string;
-      selected_port: string | null;
-      output_json: string | null;
-      error_json: string | null;
-    }>;
     const invocations = this.db
       .prepare(
         'SELECT i.id, i.kind, i.state, i.correlation_id, (SELECT COUNT(*) FROM agent_result_submissions s WHERE s.invocation_id = i.id) AS submissions, (SELECT COUNT(*) FROM agent_result_submissions s WHERE s.invocation_id = i.id AND s.accepted = 1) AS accepted FROM agent_invocations i JOIN node_executions e ON e.id = i.execution_id WHERE e.run_id = ? ORDER BY i.created_at, i.rowid',
@@ -2069,16 +2133,6 @@ export class RunRepository {
       correlation_id: string;
       submissions: number;
       accepted: number;
-    }>;
-    const attempts = this.db
-      .prepare(
-        'SELECT a.execution_id, a.attempt_number, a.state, a.error_json FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id WHERE e.run_id = ? ORDER BY a.attempt_number',
-      )
-      .all(runId) as Array<{
-      execution_id: string;
-      attempt_number: number;
-      state: string;
-      error_json: string | null;
     }>;
     const pendingInteraction = this.db
       .prepare(
@@ -2133,23 +2187,7 @@ export class RunRepository {
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,
       finishedAt: run.finished_at,
-      executions: executions.map((execution) => ({
-        id: execution.id,
-        node: execution.node_id,
-        type: execution.node_type ?? execution.node_id,
-        sequence: execution.sequence,
-        state: execution.state,
-        port: execution.selected_port,
-        output: parse<Json>(execution.output_json),
-        error: parse<Json>(execution.error_json),
-        attempts: attempts
-          .filter((attempt) => attempt.execution_id === execution.id)
-          .map((attempt) => ({
-            number: attempt.attempt_number,
-            state: attempt.state,
-            error: parse<Json>(attempt.error_json),
-          })),
-      })),
+      executions: this.#executionViews(runId),
       invocations: invocations.map((invocation) => ({
         id: invocation.id,
         kind: invocation.kind,

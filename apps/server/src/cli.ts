@@ -30,6 +30,7 @@ shift workflow list [--project PROJECT_ID]
 shift run start --workflow WORKFLOW_ID [--input JSON] [--wait]
 shift run show RUN_ID [--wait]
 shift run list
+shift run executions RUN_ID [--after SEQUENCE] [--limit N]
 shift run cancel RUN_ID [--reason TEXT] [--wait]
 shift run retry RUN_ID [--wait]
 shift run fail RUN_ID [--reason TEXT]

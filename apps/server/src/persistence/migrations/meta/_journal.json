@@ -57,6 +57,13 @@
       "when": 1792713600000,
       "tag": "0007_human_interactions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792800000000,
+      "tag": "0008_binding_sources",
+      "breakpoints": true
     }
   ]
 }

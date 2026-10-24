@@ -18,7 +18,8 @@ export type ValueSource =
   | {
       kind: 'node';
       nodeId: string;
-      execution: 'latest' | 'first';
+      // The nearest or earliest successful execution on this run's path, or exactly one of them.
+      execution: 'latest' | 'first' | { sequence: number } | { executionId: string };
       path: string[];
       optional?: boolean;
       fallback?: Json;
@@ -225,7 +226,23 @@ const validateSource = ajv.compile({
       properties: {
         kind: { const: 'node' },
         nodeId: { type: 'string' },
-        execution: { enum: ['latest', 'first'] },
+        execution: {
+          oneOf: [
+            { enum: ['latest', 'first'] },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['sequence'],
+              properties: { sequence: { type: 'integer', minimum: 1 } },
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['executionId'],
+              properties: { executionId: { type: 'string', minLength: 1, maxLength: 100 } },
+            },
+          ],
+        },
         path,
         optional: { type: 'boolean' },
         fallback: {},

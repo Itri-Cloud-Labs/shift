@@ -200,6 +200,17 @@ test('validation rejects graphs the executor cannot run', () => {
       /undeclared binding version/,
     ],
     [
+      'execution selector with sequence 0',
+      (d) =>
+        (d.nodes[1].bindings.name = {
+          kind: 'node',
+          nodeId: 'start',
+          execution: { sequence: 0 },
+          path: [],
+        }),
+      /Invalid value source/,
+    ],
+    [
       'condition comparing an undeclared binding',
       (d) =>
         d.nodes.splice(1, 1, {

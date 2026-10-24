@@ -174,6 +174,28 @@ export function createHttpServer(options: {
       local(req);
       reply(res, 200, { run: engine.repository.run(id(req)) });
     });
+    // A page of a run's history: `after` is a sequence number, `limit` at most 500.
+    app.get(`${admin}/runs/:id/executions`, (req, res) => {
+      local(req);
+      const number = (name: string, fallback: number, min: number, max: number) => {
+        const raw = req.query[name];
+        if (raw === undefined) return fallback;
+        const value = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN;
+        if (!(value >= min && value <= max)) {
+          throw new ShiftError('INVALID_REQUEST', `Invalid ${name}.`, 422, false, [`/${name}`]);
+        }
+        return value;
+      };
+      reply(
+        res,
+        200,
+        engine.repository.executions(
+          id(req),
+          number('after', 0, 0, Number.MAX_SAFE_INTEGER),
+          number('limit', 100, 1, 500),
+        ) as Record<string, unknown>,
+      );
+    });
     for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
       app.post(`${admin}/runs/:id/${kind}`, json, (req, res) => {
         local(req);
