@@ -21,6 +21,7 @@ const options = {
   force: { type: 'boolean' },
   reason: { type: 'string' },
   executions: { type: 'string' },
+  'active-minutes': { type: 'string' },
 } as const;
 
 type Values = {
@@ -219,10 +220,14 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       }
       if (action === 'complete') body['data'] = await file(values.file);
       if (action === 'extend') {
-        const executions = need(values.executions, '--executions');
-        if (!/^[1-9]\d*$/.test(executions))
-          throw invalid('--executions must be a positive integer.');
-        body['executions'] = Number(executions);
+        const minutes = values['active-minutes'];
+        if ((values.executions === undefined) === (minutes === undefined)) {
+          throw invalid('Give either --executions or --active-minutes.');
+        }
+        const amount = values.executions ?? minutes!;
+        if (!/^[1-9]\d*$/.test(amount)) throw invalid('The extension must be a positive integer.');
+        if (minutes === undefined) body['executions'] = Number(amount);
+        else body['activeMs'] = Number(amount) * 60_000;
       }
       let run = (
         await send(

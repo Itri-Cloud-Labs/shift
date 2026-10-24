@@ -201,11 +201,11 @@ interface Harnessed {
 
 async function engineFor(
   behave: Behaviour,
-  existing?: { state: string; fake?: FakeHarness; clock?: FakeClock },
+  existing?: { state?: string; fake?: FakeHarness; clock?: FakeClock },
 ): Promise<Harnessed> {
   const state = existing?.state ?? (await temporaryState()).path;
   const repository = join(state, 'repo');
-  if (!existing) {
+  if (!existing?.state) {
     await mkdir(repository, { recursive: true });
     await writeFile(join(repository, 'notes.txt'), 'alpha beta\n');
     const git = (...args: string[]) =>
@@ -1785,5 +1785,156 @@ test('cancelling during a backoff cancels the run and its wake-up', async () => 
     ]);
   } finally {
     await harnessed.close();
+  }
+});
+
+// ---- Active execution time (specification 6.7) ----
+
+type TimedRun = ControlledRun & {
+  activeTime: { usedMs: number; limitMs: number };
+  attention: { code: string; explanation: string; limit?: unknown } | null;
+};
+
+// Starts start -> agent -> end with a run active-time limit.
+async function startLimited(
+  harnessed: Harnessed,
+  maxActiveMs: number,
+  node: Record<string, unknown> = {},
+): Promise<string> {
+  const document = {
+    ...(agentWorkflow({}, node) as Record<string, Json>),
+    execution: { limits: { maxExecutions: 1000, maxActiveMs } },
+  };
+  const workflowId = await publish(harnessed, document as Json);
+  return ((await harnessed.engine.startRun({ workflowId })).body as { run: { id: string } }).run.id;
+}
+
+test('only running attempts use active time; a retry backoff costs nothing', async () => {
+  const clock = new FakeClock();
+  let turns = 0;
+  const harnessed = await engineFor(
+    async (turn, fake) => {
+      if (++turns === 1) {
+        clock.advance(5_000);
+        turn.status = 'ended';
+        turn.outcome = 'failed';
+        turn.failure = { code: 'PROVIDER_ERROR', message: 'The provider failed.' };
+        return;
+      }
+      clock.advance(3_000);
+      await complete({ count: 1 })(turn, fake);
+    },
+    { clock },
+  );
+  try {
+    const id = await start(harnessed, {}, retrying(2, 60_000));
+    await until(harnessed, id, (run) => run.state === 'WAITING');
+    clock.advance(60_000);
+    const run = (await settled(harnessed, id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.activeTime, { usedMs: 8_000, limitMs: 4 * 60 * 60 * 1000 });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a run out of active time stops before its next step until the owner extends it', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(
+    async (turn, fake) => {
+      clock.advance(6_000);
+      await complete({ count: 1 })(turn, fake);
+    },
+    { clock },
+  );
+  try {
+    const id = await startLimited(harnessed, 5_000);
+    const stopped = (await settled(harnessed, id)) as TimedRun;
+    assert.equal(stopped.state, 'NEEDS_HUMAN');
+    assert.equal(stopped.attention?.code, 'ACTIVE_TIME_LIMIT');
+    assert.equal(stopped.executions.length, 2, 'the end node was not activated');
+    await assert.rejects(async () => control(harnessed, id, 'extend', { executions: 1 }), {
+      code: 'NOTHING_TO_EXTEND',
+    });
+    control(harnessed, id, 'extend', { activeMs: 60_000 });
+    const run = (await settled(harnessed, id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.activeTime, { usedMs: 6_000, limitMs: 66_000 });
+    assert.deepEqual(
+      run.controls.map((entry) => entry.payload),
+      [{ scope: 'active', from: 5_000, to: 66_000 }],
+      'the extension starts from the time already used',
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a running agent that uses up the active time is stopped and waits for the owner', async () => {
+  const clock = new FakeClock();
+  let turns = 0;
+  const harnessed = await engineFor(
+    async (turn, fake) => {
+      if (++turns === 1) {
+        turn.status = 'running';
+        return;
+      }
+      await complete({ count: 2 })(turn, fake);
+    },
+    { clock },
+  );
+  try {
+    const id = await startLimited(harnessed, 5_000);
+    await until(harnessed, id, (run) => run.invocations[0]?.state === 'RUNNING');
+    clock.advance(10_000);
+    const stopped = (await until(harnessed, id, (run) => run.state === 'NEEDS_HUMAN')) as TimedRun;
+    assert.equal(stopped.attention?.code, 'ACTIVE_TIME_LIMIT');
+    assert.match(stopped.attention!.explanation, /its agent was stopped/);
+    assert.ok(harnessed.fake.cancels >= 1, 'the turn was stopped through the harness');
+    assert.equal(stopped.invocations[0]!.state, 'INTERRUPTED');
+    assert.equal(stopped.activeTime.usedMs, 10_000);
+
+    control(harnessed, id, 'extend', { activeMs: 60_000 });
+    const run = (await settled(harnessed, id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(attemptsOf(run), [
+      ['INTERRUPTED', null],
+      ['COMPLETED', null],
+    ]);
+    const [first, second] = [...harnessed.fake.turns.values()];
+    assert.equal(second!.handle.harnessSessionId, first!.handle.harnessSessionId, 'same session');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('after a restart, time a running attempt cannot account for is charged and explained', async () => {
+  const first = await engineFor((turn) => {
+    turn.status = 'running';
+  });
+  const id = await start(first);
+  await until(first, id, (run) => run.invocations[0]?.state === 'RUNNING');
+  await first.close();
+  const second = await engineFor(complete({ count: 3 }), {
+    state: first.state,
+    fake: first.fake,
+    clock: new FakeClock(first.clock.now() + 120_000),
+  });
+  try {
+    const run = (await settled(second, id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.equal(run.activeTime.usedMs, 120_000);
+    const charged = second.store.db
+      .prepare("SELECT payload_json FROM events WHERE type = 'run.active_time_charged'")
+      .all() as Array<{ payload_json: string }>;
+    assert.equal(charged.length, 1);
+    const payload = JSON.parse(charged[0]!.payload_json) as {
+      chargedMs: number;
+      explanation: string;
+    };
+    assert.equal(payload.chargedMs, 120_000);
+    assert.match(payload.explanation, /charged in full/);
+  } finally {
+    await second.close();
   }
 });

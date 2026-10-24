@@ -282,3 +282,18 @@ Acceptance coverage:
 - **Cancel:** cancelling during a backoff ends `CANCELLED` at once, owner `retry` is refused while waiting, the wake-up ends `CANCELLED`, and advancing past its due time sends nothing.
 - **End-to-end:** `shift run show --wait` follows a real server through two provider errors (HTTP 503 from the fake agent) and returns the completed run with three attempts and three prompts in one session.
 - **Totals:** `pnpm check` passed 123 tests (114 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Active execution time
+
+Status: complete for the active-time budget of M04b. Reopening a `FAILED` run with an explicit retry remains open. Date: 2026-10-24.
+
+Changed files: migration 0006 (`runs.active_ms`, `node_attempts.checkpoint_at`) and its journal entry; the run repository (charging at every attempt transition, checkpoints, recovery charges with their event, the limit before scheduling, settling a stopped over-budget attempt, `extend` with `activeMs`, `activeTime` in the run view); the engine (checkpoints on its interval, shared stopping for cancellation and the budget, `extend` validation); `shift run extend --active-minutes`; engine and end-to-end tests; the workflow guide, API reference, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Accounting:** a run with a 5-second failed turn, a 60-second retry backoff and a 3-second successful turn has used exactly 8 seconds.
+- **Between steps:** a 6-second turn under a 5-second budget stops the run in `NEEDS_HUMAN` with `ACTIVE_TIME_LIMIT` before the end node. `extend` with `executions` is refused. `extend` with 60 seconds sets the limit to 66 seconds (`{scope: active, from: 5000, to: 66000}`) and completes the run.
+- **During a turn:** a turn still running after the budget is stopped through the harness (invocation `INTERRUPTED`). The run waits in `NEEDS_HUMAN`, and after `extend` a second attempt in the same session completes. Attempts read `INTERRUPTED`, `COMPLETED`.
+- **Recovery:** an attempt left running across a 2-minute outage is charged 120 seconds at restart, with one `run.active_time_charged` event that explains it.
+- **End-to-end:** with a 3-second budget, the fake agent's 8-second tool is stopped and dies. `shift run extend --active-minutes 1` continues the run to `COMPLETED`, and both attempts are charged.
+- **Totals:** `pnpm check` passed 128 tests (119 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

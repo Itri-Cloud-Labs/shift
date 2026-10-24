@@ -44,7 +44,7 @@ A minimal document needs only `nodes` and `connections`. Everything else has def
 | -------------------------------- | ----------------- | ------------------------------------------------------------------------ |
 | `formatVersion`                  | `1`               | The only supported version.                                              |
 | `execution.limits.maxExecutions` | `1000`            | Executions allowed per run, across all nodes.                            |
-| `execution.limits.maxActiveMs`   | 4 hours           | Validated and stored, not enforced yet.                                  |
+| `execution.limits.maxActiveMs`   | 4 hours           | Active execution time allowed per run. See [active time](#active-time).  |
 | `execution.workspace`            | `{"kind": "new"}` | Every run gets a new workspace. Other values are refused.                |
 | `execution.overlap`              | `"allow"`         | Concurrent runs of one workflow are allowed. Other policies are refused. |
 | `presentation`                   | `{}`              | Editor data. Execution ignores it.                                       |
@@ -226,6 +226,19 @@ While it waits, the run is `WAITING` and its `wait` shows the attempt that comes
 
 Wake-ups are stored with their due time, so a restart during a backoff keeps waiting, and a retry that fell due while Shift was stopped runs when it starts. Cancelling a waiting run cancels it immediately, and the retry never runs. `shift run show --wait` keeps waiting through a backoff.
 
+## Active time
+
+`execution.limits.maxActiveMs` bounds how long a run's attempts may spend running, in total. Only running attempts count. Waiting for a retry, or in `NEEDS_HUMAN`, costs nothing. The run's `activeTime` shows `{usedMs, limitMs}`.
+
+Shift records the time of each running attempt every 2 seconds and when the attempt ends. When a run reaches its limit:
+
+- **Between steps,** it stops in `NEEDS_HUMAN` with `ACTIVE_TIME_LIMIT` before the next step starts.
+- **During an agent turn,** Shift stops the turn through OpenCode, the same way as a cancellation, and the run then waits in `NEEDS_HUMAN` with `ACTIVE_TIME_LIMIT`. If the stop could not be confirmed, the explanation says that the agent's effects are unknown.
+
+`shift run extend <run> --active-minutes N` gives the run `N` more minutes beyond what it has used and continues where it stopped. A turn that was stopped continues in a new attempt in the same session. `fail`, `complete` and `cancel` work as for any stuck step.
+
+After a crash, Shift can't tell whether a running attempt's tools kept working until the restart, so it charges the whole time since the attempt's last record, and adds a `run.active_time_charged` event explaining it. A long outage during a running agent turn can therefore use up a run's active time.
+
 ## Owner decisions
 
 A run waits in `NEEDS_HUMAN` when Shift cannot tell what happened, for example after an agent's tools were killed mid-turn, or when a loop reached its limit. Only you can decide what is true, so Shift asks instead of guessing:
@@ -236,6 +249,7 @@ A run waits in `NEEDS_HUMAN` when Shift cannot tell what happened, for example a
 | `shift run complete <run> --file data.json` | The step's work is in fact done and you can state its result. The result must satisfy the step's `resultSchema`, and it is recorded as yours.                                                            |
 | `shift run fail <run> [--reason]`           | The step should not continue. It fails with `ABANDONED` and follows its `error` connection, or the run fails.                                                                                            |
 | `shift run extend <run> --executions N`     | A loop reached its limit and should keep going. The limit is raised by `N`; the workflow itself is unchanged.                                                                                            |
+| `shift run extend <run> --active-minutes N` | The run used its [active time](#active-time) and should keep going. It gets `N` more minutes beyond what it has used.                                                                                    |
 | `shift run cancel <run>`                    | The run should stop. It works at any point, not only in `NEEDS_HUMAN`.                                                                                                                                   |
 
 Every decision is recorded in the run's `controls`, and the stopped attempt stays in history as Shift observed it. A cancellation that cannot confirm that the agent stopped waits in `NEEDS_HUMAN` with `CANCEL_UNCONFIRMED`. Check the workspace, then cancel again. While a cancellation is pending, only cancel is accepted. A cancellation interrupted by a restart finishes on the next start.
