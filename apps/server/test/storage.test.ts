@@ -48,6 +48,8 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
       'command_receipts',
       'events',
       'harness_sessions',
+      'human_interactions',
+      'human_responses',
       'node_attempts',
       'node_executions',
       'projects',

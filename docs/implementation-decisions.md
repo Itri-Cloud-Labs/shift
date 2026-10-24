@@ -383,3 +383,26 @@ Decided 2026-10-24 as the first half of M04c, following specification section 8 
 - **Firing.** A due timer completes the execution in the firing transaction. Its input passes through on `success`, and the run is routed in that same transaction. The node does not go back through a claim, unlike a retry. It completes only if the attempt, the execution and the run are all still `WAITING`, so a timer fires exactly once, and a cancelled run's timer settles without effect. Cancellation also marks waiting attempts `CANCELLED`.
 
 Human Input and Approval nodes, the second half of M04c, use the same `WAITING` states and the `deadline` wake-up reason.
+
+## Human input and approval
+
+Decided 2026-10-24 to finish M04c, following specification sections 4.4, 6.6 and 10 and the plan the owner approved.
+
+- **Nodes.**
+  - `human_input` takes a `title`, a `form`, optional `instructions` and an optional `timeoutMs`. Its ports are `success`, `timeout` and `error`.
+  - `approval` takes the same settings plus named `outcomes` (default `approved` and `rejected`), and its form defaults to an optional comment. Each outcome becomes a port. The node registry gained `portsFor(config)` so publish can check connections against a node's configured outcomes. `timeout` and `error` are reserved names.
+- **Forms** are a restricted JSON Schema 2020-12 dialect that matches the widgets in client section 5.4: strings with length, pattern, choices and four formats; numbers and integers with bounds and choices; booleans; and objects and arrays nested at most 4 levels. Any other keyword is refused at publish with its pointer. The form is also checked against the meta-schema. Freezing adds `additionalProperties: false` to every object, so a response carries only declared fields. This is the same dialect agents already use, and responses are validated with the same checker.
+- **Freezing.** When the execution is prepared, the title and instructions are rendered from bindings and stored with the form, outcomes and absolute deadline. Starting the interaction then commits the interaction row, the `WAITING` attempt, execution and run, the optional `deadline` wake-up, and the `interaction.requested` event in one transaction. Nothing is runnable until the request settles.
+- **Responses.**
+  - **Commit.** A response, its `human_responses` row, the interaction's state change and revision, the cancelled deadline, the event, the completed execution and the routed successor all commit inside the command-receipt transaction, so a client can disconnect right after sending.
+  - **Ordering.** The checks run in this order: retired (`410 INTERACTION_RETIRED`), already answered (`409 INTERACTION_CONFLICT`), revision (`409 REVISION_CONFLICT`), then the decision and form (`422 INVALID_RESPONSE`). An identical retry is answered from its receipt before any of these run.
+  - **Conflict details.** The protocol's error schema carries no resource, so the conflict message names the accepted decision, actor and time, and clients read the interaction for the rest. Adding the resource to errors belongs to the paired protocol (M05).
+- **Outputs.** The data wrappers are the ones in the specification:
+  - `human_input`: `{input, response}`.
+  - `approval`: `{input, decision, response}`, on the decision's port.
+  - Expiry on `timeout`: `{input, expiredAt}`.
+
+  All three keep the incoming envelope's context. An expiry without a `timeout` connection fails the node with `INTERACTION_EXPIRED` (`blocked`), which an `error` connection can still route.
+
+- **Races.** Every path settles only a `PENDING` interaction of a `WAITING` run, in one transaction: a response, the deadline wake-up, and cancellation, which retires pending requests in `#cancelIdle`. The first to commit wins, and the others find the request already settled.
+- **Not done.** Holds come with manual intervention. Until then, a held run accepting a response but not advancing cannot be built. The desktop attention inbox comes with the connected client (M06). Local CLI responses are recorded as actor `cli:local`.

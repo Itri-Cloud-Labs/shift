@@ -313,3 +313,33 @@ Acceptance coverage:
 - **Publish:** a wait with neither setting, with a local time, or with an undeclared binding is refused.
 - **End-to-end:** `shift run show --wait` returns a run completed by a real server's 1.5-second wait.
 - **Totals:** `pnpm check` passed 133 tests (124 server, 9 app) with zero skips. The active-time end-to-end test passed 3 more runs in a row. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Human input and approval
+
+Status: complete for M04c as scoped with the owner. Held runs accepting a response wait for manual intervention, and the client attention inbox for M06. Date: 2026-10-24.
+
+Changed files:
+
+- **Storage:** migration 0007 (`human_interactions`, `human_responses`) and its journal entry.
+- **Nodes and forms:** the restricted form dialect and its freezing (`workflows/forms.ts`), and the `human_input` and `approval` node types, with configuration-dependent ports and publish checks for forms, outcomes and template bindings.
+- **Engine:** the request is frozen when the step is prepared, and the interaction starts from there. The `respond` command was added.
+- **Run repository:** starting, answering and expiring interactions, retiring them on cancel, the run's `human` wait, and the interaction views.
+- **Interfaces:** administrative routes and `shift interaction list|show|respond`.
+- **Tests and docs:** engine, workflow, storage and end-to-end tests, the workflow guide, API reference, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Approval:**
+  - The run waits with `wait.kind: human`, and the title and instructions are rendered from a trigger binding.
+  - Republishing the workflow with another title leaves the pending request unchanged.
+  - Wrong outcomes, a mistyped field, an undeclared field and a stale revision are each refused without changing anything.
+  - The first response completes the run with `{input, decision, response}` on the `approved` port.
+  - Repeating its command returns the same interaction, and a different answer is a conflict.
+  - The run used no active time.
+- **Human input:** a response that breaks the form, or that carries a decision, is refused. A valid one publishes `{input, response}` and cancels the deadline.
+- **Deadlines:** with a `timeout` connection, an expired request takes it. Without one, the run fails with `INTERACTION_EXPIRED` (`blocked`). Responding to an expired request returns `INTERACTION_RETIRED`.
+- **Races:** a deadline falling due after a response changes nothing. Cancelling retires the request, refuses later responses as cancelled, and the attempt ends `CANCELLED`.
+- **Restart:** a pending approval survives a restart, a rejection routes to its failed end with the decision in the outcome, and exactly one `interaction.responded` event exists.
+- **Publish:** unsupported form keywords and formats, an outcome named `timeout`, a connection from a missing outcome and an undeclared title binding are refused. An approval with custom outcomes, a timeout route and every form widget validates.
+- **End-to-end CLI:** start, draft, then review. A `rejected` answer with a comment file loops back to draft and asks again. The server restarts while the second request is pending. `interaction respond --decision approved --wait` completes the run with executions start, draft, review, draft, review, end. Repeating that command returns the stored response, and a conflicting answer exits with `INTERACTION_CONFLICT`.
+- **Totals:** `pnpm check` passed 141 tests (132 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

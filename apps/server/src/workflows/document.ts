@@ -3,6 +3,7 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
 import { assertResultSchema } from '../runs/envelope.js';
+import { formProblem } from './forms.js';
 import { nodeType } from './nodes.js';
 
 // The serialized workflow graph (server specification section 5). Renderer positions are
@@ -366,9 +367,21 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(`${at}/bindings/${name}/fallback`, 'An optional binding needs an explicit fallback.');
       }
     }
-    for (const name of templateBindings(
-      config['goal'] ?? config['data'] ?? config['until'] ?? null,
-    )) {
+    if (typeof config['form'] === 'object' && config['form'] !== null) {
+      const problem = formProblem(config['form']);
+      if (problem) add(`${at}/config/form${problem.at}`, problem.message);
+      else {
+        try {
+          assertResultSchema(config['form']);
+        } catch {
+          add(`${at}/config/form`, 'Not a valid JSON Schema 2020-12 document.');
+        }
+      }
+    }
+    const templated = ['goal', 'data', 'until', 'title', 'instructions']
+      .map((field) => config[field])
+      .filter((value) => value !== undefined);
+    for (const name of templateBindings(templated)) {
       if (!(name in node.bindings))
         add(`${at}/config`, `The template uses undeclared binding ${name}.`);
     }
@@ -388,7 +401,8 @@ export function diagnose(document: unknown): Diagnostic[] {
     if (!from) add(`${at}/fromNodeId`, `No node ${connection.fromNodeId}.`);
     if (!to) add(`${at}/toNodeId`, `No node ${connection.toNodeId}.`);
     const fromType = from && nodeType(from.type, from.typeVersion);
-    if (fromType && !fromType.ports.includes(connection.fromPort)) {
+    const ports = fromType && (fromType.portsFor?.(from.config) ?? fromType.ports);
+    if (ports && !ports.includes(connection.fromPort)) {
       add(`${at}/fromPort`, `Node ${from.id} has no port ${connection.fromPort}.`);
     }
     const toType = to && nodeType(to.type, to.typeVersion);

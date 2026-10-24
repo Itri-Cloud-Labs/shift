@@ -180,6 +180,20 @@ export function createHttpServer(options: {
         command(res, engine.controlRun(id(req), kind, req.body ?? {}));
       });
     }
+    app.get(`${admin}/interactions`, (req, res) => {
+      local(req);
+      reply(res, 200, {
+        interactions: engine.repository.interactions(req.query['all'] === 'true'),
+      });
+    });
+    app.get(`${admin}/interactions/:id`, (req, res) => {
+      local(req);
+      reply(res, 200, { interaction: engine.repository.interaction(id(req)) });
+    });
+    app.post(`${admin}/interactions/:id/respond`, json, (req, res) => {
+      local(req);
+      command(res, engine.respond(id(req), req.body ?? {}));
+    });
     const workspaces = options.workspaces;
     if (workspaces) {
       app.get(`${admin}/workspaces`, (req, res) => {

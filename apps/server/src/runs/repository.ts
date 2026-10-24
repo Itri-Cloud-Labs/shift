@@ -97,7 +97,44 @@ export type RunWait =
       attempt: number;
       error: { code: string; message: string };
     }
-  | { kind: 'timer'; executionId: string; dueAt: number };
+  | { kind: 'timer'; executionId: string; dueAt: number }
+  | { kind: 'human'; executionId: string; interactionId: string; expiresAt: number | null };
+
+// A Human Input or Approval request as frozen when its execution was prepared.
+export interface FrozenInteraction {
+  kind: 'input' | 'approval';
+  title: string;
+  instructions: string | null;
+  form: Json;
+  outcomes: string[] | null;
+  expiresAt: number | null;
+}
+
+interface InteractionRow {
+  id: string;
+  run_id: string;
+  execution_id: string;
+  attempt_id: string;
+  kind: 'input' | 'approval';
+  form_json: string;
+  presentation_json: string;
+  outcomes_json: string | null;
+  state: 'PENDING' | 'RESPONDED' | 'EXPIRED' | 'CANCELLED';
+  expires_at: number | null;
+  created_at: number;
+  settled_at: number | null;
+  revision: number;
+  node_id: string;
+  run_state: string;
+  decision: string | null;
+  response_json: string | null;
+  actor_kind: string | null;
+  actor_id: string | null;
+  responded_at: number | null;
+}
+
+const interactionSelect =
+  'SELECT i.*, e.node_id, r.state AS run_state, h.decision, h.response_json, h.actor_kind, h.actor_id, h.created_at AS responded_at FROM human_interactions i JOIN node_executions e ON e.id = i.execution_id JOIN runs r ON r.id = i.run_id LEFT JOIN human_responses h ON h.id = i.accepted_response_id';
 
 export type ExecutionOutcome =
   | { kind: 'completed'; output: OutputEnvelope; port: string }
@@ -1025,6 +1062,10 @@ export class RunRepository {
             this.#finishWait(wakeup.run_id, wakeup.execution_id);
             continue;
           }
+          if (wakeup.reason === 'deadline') {
+            this.#expireInteraction(wakeup.execution_id);
+            continue;
+          }
           const reopened = this.db
             .prepare(
               "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ? AND state = 'WAITING' AND run_id IN (SELECT id FROM runs WHERE state = 'WAITING')",
@@ -1090,6 +1131,287 @@ export class RunRepository {
       { runId, executionId, attemptId: waiting.id },
       { kind: 'completed', output: this.execution(executionId).input, port: 'success' },
     );
+  }
+
+  // ---- Human interactions (specification 6.6) ----
+
+  // Creates the interaction with its frozen form, and puts the attempt, execution and run in
+  // WAITING, in one transaction. Nothing runs after it until a response or the deadline.
+  startInteraction(claim: Claim, frozen: FrozenInteraction): void {
+    this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        const now = this.clock.now();
+        const id = randomUUID();
+        this.#charge(claim.runId, claim.attemptId);
+        this.db
+          .prepare("UPDATE node_attempts SET state = 'WAITING' WHERE id = ?")
+          .run(claim.attemptId);
+        this.db
+          .prepare(
+            "UPDATE node_executions SET state = 'WAITING', revision = revision + 1 WHERE id = ?",
+          )
+          .run(claim.executionId);
+        this.db
+          .prepare("UPDATE runs SET state = 'WAITING', revision = revision + 1 WHERE id = ?")
+          .run(claim.runId);
+        this.db
+          .prepare(
+            "INSERT INTO human_interactions (id, run_id, execution_id, attempt_id, kind, form_json, presentation_json, outcomes_json, state, expires_at, created_at, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, 0)",
+          )
+          .run(
+            id,
+            claim.runId,
+            claim.executionId,
+            claim.attemptId,
+            frozen.kind,
+            JSON.stringify(frozen.form),
+            JSON.stringify({ title: frozen.title, instructions: frozen.instructions }),
+            frozen.outcomes && JSON.stringify(frozen.outcomes),
+            frozen.expiresAt,
+            now,
+          );
+        if (frozen.expiresAt !== null) {
+          this.db
+            .prepare(
+              "INSERT INTO wakeups (id, run_id, execution_id, reason, due_at, state, payload_json, created_at) VALUES (?, ?, ?, 'deadline', ?, 'PENDING', ?, ?)",
+            )
+            .run(
+              randomUUID(),
+              claim.runId,
+              claim.executionId,
+              frozen.expiresAt,
+              JSON.stringify({ interactionId: id }),
+              now,
+            );
+        }
+        this.#event(
+          'interaction.requested',
+          { runId: claim.runId, executionId: claim.executionId },
+          { interactionId: id, kind: frozen.kind },
+        );
+      })
+      .immediate();
+  }
+
+  // Records the first valid response, then completes the execution and routes the run, all in the
+  // caller's command transaction. A request that was already answered, cancelled or expired is
+  // refused, so exactly one response and one successor are ever recorded.
+  respond(
+    interactionId: string,
+    actor: ControlActor,
+    commandId: string | undefined,
+    input: { revision: number; decision?: string; response?: Json },
+  ): void {
+    this.db
+      .transaction(() => {
+        const row = this.#interactionRow(interactionId);
+        if (row.state === 'CANCELLED' || row.state === 'EXPIRED') {
+          throw new ShiftError(
+            'INTERACTION_RETIRED',
+            `The request was ${row.state === 'CANCELLED' ? 'cancelled' : 'not answered before its deadline'} and no longer accepts responses.`,
+            410,
+          );
+        }
+        if (row.state === 'RESPONDED') {
+          throw new ShiftError(
+            'INTERACTION_CONFLICT',
+            `The request was already answered${row.decision ? ` with ${row.decision}` : ''} by ${row.actor_kind}:${row.actor_id} at ${new Date(row.responded_at!).toISOString()}.`,
+            409,
+          );
+        }
+        if (input.revision !== row.revision) {
+          throw new ShiftError(
+            'REVISION_CONFLICT',
+            `The request is at revision ${row.revision}, not ${input.revision}.`,
+            409,
+          );
+        }
+        const outcomes = parse<string[]>(row.outcomes_json);
+        if (row.kind === 'approval' && !outcomes!.includes(input.decision ?? '')) {
+          throw new ShiftError(
+            'INVALID_RESPONSE',
+            `Choose one of: ${outcomes!.join(', ')}.`,
+            422,
+            false,
+            ['/decision'],
+          );
+        }
+        if (row.kind === 'input' && input.decision !== undefined) {
+          throw new ShiftError(
+            'INVALID_RESPONSE',
+            'This request takes a form response, not a decision.',
+            422,
+            false,
+            ['/decision'],
+          );
+        }
+        const response = input.response ?? {};
+        const invalid = checkValue(JSON.parse(row.form_json) as Json, response, 'response');
+        if (invalid) {
+          throw new ShiftError(
+            'INVALID_RESPONSE',
+            `The response does not match the form: ${invalid}`,
+            422,
+            false,
+            ['/response'],
+          );
+        }
+        const now = this.clock.now();
+        const responseId = randomUUID();
+        this.db
+          .prepare(
+            'INSERT INTO human_responses (id, interaction_id, actor_kind, actor_id, command_id, decision, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(
+            responseId,
+            interactionId,
+            actor.kind,
+            actor.id,
+            commandId ?? null,
+            input.decision ?? null,
+            JSON.stringify(response),
+            now,
+          );
+        this.db
+          .prepare(
+            "UPDATE human_interactions SET state = 'RESPONDED', accepted_response_id = ?, settled_at = ?, revision = revision + 1 WHERE id = ?",
+          )
+          .run(responseId, now, interactionId);
+        this.db
+          .prepare(
+            "UPDATE wakeups SET state = 'CANCELLED', settled_at = ? WHERE execution_id = ? AND state = 'PENDING'",
+          )
+          .run(now, row.execution_id);
+        this.#event(
+          'interaction.responded',
+          { runId: row.run_id, executionId: row.execution_id },
+          {
+            interactionId,
+            actor: { ...actor },
+            ...(input.decision === undefined ? {} : { decision: input.decision }),
+          },
+        );
+        const context = this.execution(row.execution_id);
+        const data: Json =
+          row.kind === 'approval'
+            ? { input: context.input.data, decision: input.decision!, response }
+            : { input: context.input.data, response };
+        this.#resume(row.run_id);
+        this.#finishExecution(
+          { runId: row.run_id, executionId: row.execution_id, attemptId: row.attempt_id },
+          {
+            kind: 'completed',
+            output: envelope(data, context.input),
+            port: row.kind === 'approval' ? input.decision! : 'success',
+          },
+        );
+      })
+      .immediate();
+  }
+
+  // A request nobody answered in time takes its `timeout` connection, or fails the node. Only a
+  // still-pending request of a waiting run expires, so a response or cancellation that came first
+  // wins. Called inside the firing transaction.
+  #expireInteraction(executionId: string): void {
+    const pending = this.db
+      .prepare(
+        "SELECT i.id FROM human_interactions i JOIN runs r ON r.id = i.run_id WHERE i.execution_id = ? AND i.state = 'PENDING' AND r.state = 'WAITING'",
+      )
+      .get(executionId) as { id: string } | undefined;
+    if (!pending) return;
+    const row = this.#interactionRow(pending.id);
+    const now = this.clock.now();
+    this.db
+      .prepare(
+        "UPDATE human_interactions SET state = 'EXPIRED', settled_at = ?, revision = revision + 1 WHERE id = ?",
+      )
+      .run(now, row.id);
+    this.#event(
+      'interaction.expired',
+      { runId: row.run_id, executionId },
+      { interactionId: row.id },
+    );
+    const context = this.execution(executionId);
+    const claim = { runId: row.run_id, executionId, attemptId: row.attempt_id };
+    this.#resume(row.run_id);
+    const handled = context.snapshot.document.connections.some(
+      (connection) =>
+        connection.fromNodeId === context.node.id && connection.fromPort === 'timeout',
+    );
+    if (handled) {
+      this.#finishExecution(claim, {
+        kind: 'completed',
+        output: envelope({ input: context.input.data, expiredAt: now }, context.input),
+        port: 'timeout',
+      });
+      return;
+    }
+    const { title } = JSON.parse(row.presentation_json) as { title: string };
+    this.#finishExecution(claim, {
+      kind: 'failed',
+      error: {
+        code: 'INTERACTION_EXPIRED',
+        category: 'blocked',
+        message: `Nobody answered "${title}" before its deadline.`,
+      },
+    });
+  }
+
+  #interactionRow(id: string): InteractionRow {
+    const row = this.db.prepare(`${interactionSelect} WHERE i.id = ?`).get(id) as
+      InteractionRow | undefined;
+    if (!row) throw new ShiftError('INTERACTION_NOT_FOUND', 'No such request.', 404);
+    return row;
+  }
+
+  #interactionView(row: InteractionRow): Json {
+    const presentation = JSON.parse(row.presentation_json) as {
+      title: string;
+      instructions: string | null;
+    };
+    return {
+      id: row.id,
+      runId: row.run_id,
+      executionId: row.execution_id,
+      node: row.node_id,
+      kind: row.kind,
+      state: row.state,
+      revision: row.revision,
+      title: presentation.title,
+      instructions: presentation.instructions,
+      form: parse<Json>(row.form_json),
+      outcomes: parse<Json>(row.outcomes_json),
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+      settledAt: row.settled_at,
+      runState: row.run_state,
+      response:
+        row.response_json === null
+          ? null
+          : {
+              decision: row.decision,
+              data: parse<Json>(row.response_json),
+              actor: { kind: row.actor_kind, id: row.actor_id },
+              createdAt: row.responded_at,
+            },
+    };
+  }
+
+  interaction(id: string): Json {
+    return this.#interactionView(this.#interactionRow(id));
+  }
+
+  // Pending requests oldest first, or the 100 newest requests in any state.
+  interactions(all = false): Json {
+    const rows = this.db
+      .prepare(
+        all
+          ? `${interactionSelect} ORDER BY i.created_at DESC, i.rowid DESC LIMIT 100`
+          : `${interactionSelect} WHERE i.state = 'PENDING' ORDER BY i.created_at, i.rowid`,
+      )
+      .all() as InteractionRow[];
+    return rows.map((row) => this.#interactionView(row));
   }
 
   // When the earliest pending wake-up falls due, or null when nothing waits.
@@ -1618,6 +1940,11 @@ export class RunRepository {
       .run(now, runId);
     this.db
       .prepare(
+        "UPDATE human_interactions SET state = 'CANCELLED', settled_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'PENDING'",
+      )
+      .run(now, runId);
+    this.db
+      .prepare(
         "UPDATE wakeups SET state = 'CANCELLED', settled_at = ? WHERE run_id = ? AND state = 'PENDING'",
       )
       .run(now, runId);
@@ -1753,25 +2080,38 @@ export class RunRepository {
       state: string;
       error_json: string | null;
     }>;
+    const pendingInteraction = this.db
+      .prepare(
+        "SELECT id, execution_id, expires_at FROM human_interactions WHERE run_id = ? AND state = 'PENDING'",
+      )
+      .get(runId) as { id: string; execution_id: string; expires_at: number | null } | undefined;
+    // An interaction's deadline is shown on the interaction, not as a separate wait.
     const wakeup = this.db
       .prepare(
-        "SELECT execution_id, reason, due_at, payload_json FROM wakeups WHERE run_id = ? AND state = 'PENDING' ORDER BY due_at LIMIT 1",
+        "SELECT execution_id, reason, due_at, payload_json FROM wakeups WHERE run_id = ? AND state = 'PENDING' AND reason != 'deadline' ORDER BY due_at LIMIT 1",
       )
       .get(runId) as
       { execution_id: string; reason: string; due_at: number; payload_json: string } | undefined;
-    const wait: RunWait | null = !wakeup
-      ? null
-      : wakeup.reason === 'retry'
-        ? {
-            kind: 'retry',
-            executionId: wakeup.execution_id,
-            dueAt: wakeup.due_at,
-            ...(JSON.parse(wakeup.payload_json) as {
-              attempt: number;
-              error: { code: string; message: string };
-            }),
-          }
-        : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
+    const wait: RunWait | null = pendingInteraction
+      ? {
+          kind: 'human',
+          executionId: pendingInteraction.execution_id,
+          interactionId: pendingInteraction.id,
+          expiresAt: pendingInteraction.expires_at,
+        }
+      : !wakeup
+        ? null
+        : wakeup.reason === 'retry'
+          ? {
+              kind: 'retry',
+              executionId: wakeup.execution_id,
+              dueAt: wakeup.due_at,
+              ...(JSON.parse(wakeup.payload_json) as {
+                attempt: number;
+                error: { code: string; message: string };
+              }),
+            }
+          : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,
