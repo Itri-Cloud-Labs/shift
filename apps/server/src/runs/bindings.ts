@@ -22,6 +22,7 @@ export const envelope = (data: Json, input?: OutputEnvelope): OutputEnvelope => 
 });
 
 export interface ChainEntry {
+  id: string;
   nodeId: string;
   sequence: number;
   output: OutputEnvelope;
@@ -29,8 +30,12 @@ export interface ChainEntry {
 
 export interface BindingScope {
   input: OutputEnvelope;
+  // The execution that produced `input`, which can be a failed one routed through `error`.
+  inputExecutionId: string | null;
   trigger: Json;
+  triggerExecutionId: string | null;
   project: Json;
+  projectId: string | null;
   // Successful executions on the current predecessor chain, nearest first.
   chain: ChainEntry[];
 }
@@ -55,33 +60,85 @@ export function lookup(value: unknown, path: readonly string[]): unknown {
 const bindingError = (name: string, message: string) =>
   new ShiftError('BINDING_MISSING', `Binding ${name}: ${message}`, 422);
 
+// Where a frozen binding value came from, so inspection can name its exact producer.
+export type BindingSource =
+  | { kind: 'literal' }
+  | { kind: 'input' | 'trigger'; executionId: string | null; path: string[] }
+  | { kind: 'project'; projectId: string | null; path: string[] }
+  | {
+      kind: 'node';
+      nodeId: string;
+      executionId: string | null;
+      sequence: number | null;
+      path: string[];
+      fallback?: true;
+    };
+
 // Resolution never runs a producer. A missing required value fails before the executor runs; an
-// optional node reference falls back only when the value is missing.
+// optional node reference falls back only when the value is missing. An explicit execution selector
+// must name an earlier successful execution on this run's path: anything else is a wrong selector,
+// not a missing value, so it fails even when the binding is optional.
 export function resolveBindings(
   bindings: Record<string, ValueSource>,
   scope: BindingScope,
-): Record<string, Json> {
-  const resolved: Record<string, Json> = {};
+): { values: Record<string, Json>; sources: Record<string, BindingSource> } {
+  const values: Record<string, Json> = {};
+  const sources: Record<string, BindingSource> = {};
   for (const [name, source] of Object.entries(bindings)) {
     let value: unknown;
     switch (source.kind) {
       case 'literal':
         value = source.value;
+        sources[name] = { kind: 'literal' };
         break;
       case 'input':
         value = lookup(scope.input, source.path);
+        sources[name] = { kind: 'input', executionId: scope.inputExecutionId, path: source.path };
         break;
       case 'trigger':
         value = lookup(scope.trigger, source.path);
+        sources[name] = {
+          kind: 'trigger',
+          executionId: scope.triggerExecutionId,
+          path: source.path,
+        };
         break;
       case 'project':
         value = lookup(scope.project, source.path);
+        sources[name] = { kind: 'project', projectId: scope.projectId, path: source.path };
         break;
       case 'node': {
         const matches = scope.chain.filter((entry) => entry.nodeId === source.nodeId);
-        const producer = source.execution === 'latest' ? matches[0] : matches.at(-1);
+        const selector = source.execution;
+        const producer =
+          selector === 'latest'
+            ? matches[0]
+            : selector === 'first'
+              ? matches.at(-1)
+              : matches.find((entry) =>
+                  'sequence' in selector
+                    ? entry.sequence === selector.sequence
+                    : entry.id === selector.executionId,
+                );
+        if (!producer && typeof selector === 'object') {
+          throw new ShiftError(
+            'BINDING_UNAVAILABLE',
+            `Binding ${name}: ${'sequence' in selector ? `sequence ${selector.sequence}` : `execution ${selector.executionId}`} of node ${source.nodeId} is not an earlier successful execution on this run's path.`,
+            422,
+          );
+        }
         value = producer ? lookup(producer.output, source.path) : missing;
-        if (value === missing && source.optional) value = source.fallback;
+        sources[name] = {
+          kind: 'node',
+          nodeId: source.nodeId,
+          executionId: producer?.id ?? null,
+          sequence: producer?.sequence ?? null,
+          path: source.path,
+        };
+        if (value === missing && source.optional) {
+          value = source.fallback;
+          sources[name] = { ...(sources[name] as object), fallback: true } as BindingSource;
+        }
         break;
       }
     }
@@ -91,9 +148,9 @@ export function resolveBindings(
         `no value at ${source.kind} ${JSON.stringify('path' in source ? source.path : [])}.`,
       );
     }
-    resolved[name] = value as Json;
+    values[name] = value as Json;
   }
-  return resolved;
+  return { values, sources };
 }
 
 // `{"$binding": "<name>"}` objects are replaced by the binding's value.

@@ -417,3 +417,18 @@ Decided 2026-10-24 for the branching half of prompt 06 (M04), following specific
 - **Joins.** None. A node with several incoming connections runs whenever the path reaches it, with that connection's output, as specification 6.2 says.
 
 The second half of prompt 06 follows next: selecting earlier executions by sequence or ID, binding provenance, and paginated execution history.
+
+## Execution selectors, provenance and history
+
+Decided 2026-10-24 to finish prompt 06, following specification sections 6.3 and 10 and the plan the owner approved.
+
+- **Selectors.** A `node` binding's `execution` is `latest`, `first`, `{sequence: N}` or `{executionId}`. Every form searches only the successful executions on the current predecessor chain. That chain spans all earlier loop passes, so a pass that skipped the producer still reads the previous one. When `latest` or `first` finds nothing, or a path finds nothing, the value is missing, and the optional fallback applies as before. When an explicit selector names something outside the chain, the binding fails with `BINDING_UNAVAILABLE`, even if it is optional. That covers a failed execution, a later one, another branch's or another run's. The owner chose this so that a wrong selector is reported instead of hidden behind a fallback.
+- **Provenance.** Resolution returns a source next to each value, and the source is frozen in `node_executions.binding_sources_json` (migration 0008) with the values:
+  - `node`: the producing execution's ID and sequence, plus `fallback: true` when the fallback was used.
+  - `input` and `trigger`: the producing execution.
+  - `project`: the project ID.
+  - `literal`: nothing more.
+
+  The execution view adds `predecessorId`, `connectionId` and `sources`. Executions prepared before this change show `sources: null`.
+
+- **History.** `GET /runs/{id}/executions?after=SEQ&limit=N` returns entries in the same form as the run view, paged by sequence: up to 500 per page, 100 by default, with `next` as the following cursor. `shift run executions` wraps it. The run view still lists every execution, which the execution limit caps at 1,000 by default. Trimming the run view can wait for the paired client, which will page.

@@ -104,15 +104,30 @@ A binding names a value, which the node's config refers to by that name.
 }
 ```
 
-| Kind      | Reads                                                                                                     |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| `trigger` | The run input.                                                                                            |
-| `input`   | The incoming [output envelope](#output-envelope) from the previous node, so data paths start with `data`. |
-| `project` | `{id, name, repositoryPath, baseRef}` of the run's project.                                               |
-| `literal` | `value` itself.                                                                                           |
-| `node`    | An earlier successful execution of `nodeId` on the current path: the `latest` one, or the `first`.        |
+| Kind      | Reads                                                                                                             |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `trigger` | The run input.                                                                                                    |
+| `input`   | The incoming [output envelope](#output-envelope) from the previous node, so data paths start with `data`.         |
+| `project` | `{id, name, repositoryPath, baseRef}` of the run's project.                                                       |
+| `literal` | `value` itself.                                                                                                   |
+| `node`    | An earlier successful execution of `nodeId` on the current path. See [execution selectors](#execution-selectors). |
 
 `path` walks object keys and array indexes. A path that finds nothing fails the node with `BINDING_MISSING`. A `node` binding with `optional: true` must state an explicit `fallback` (it can be `null`) and uses it instead. Bindings are resolved once, when an execution starts, and frozen with it, so recovery and later attempts see the same values.
+
+### Execution selectors
+
+A `node` binding's `execution` picks which earlier execution of `nodeId` it reads. Only successful executions on the current path qualify: the chain of executions that led to this one, back to the trigger. Every pass of a loop is on that path, so a pass that skipped the producer can still read the one before it.
+
+| `execution`               | Reads                                         |
+| ------------------------- | --------------------------------------------- |
+| `"latest"`                | The nearest one.                              |
+| `"first"`                 | The earliest one.                             |
+| `{"sequence": N}`         | The one with that sequence number in the run. |
+| `{"executionId": "<id>"}` | That execution.                               |
+
+If `latest` or `first` finds no execution, or its path finds nothing, the value is missing: the node fails with `BINDING_MISSING` unless the binding is optional. A `sequence` or `executionId` that names anything else fails the node with `BINDING_UNAVAILABLE`, even when the binding is optional. That includes an execution that failed, one that comes later, one on another branch and one in another run. A wrong selector is a mistake in the workflow, not a missing value.
+
+Each execution records where its bindings came from, as its `sources` in the run view. The record has the producing execution and sequence for `node`, `input` and `trigger` bindings, and marks a fallback that was used. With each execution's `predecessorId` and `connectionId`, this shows exactly which output every value came from.
 
 A transform's `data` and an agent's `goal` refer to bindings by name. In `data`, an object `{"$binding": "words"}` becomes the value itself, keeping its type. In `goal`, `{{words}}` becomes text, and values that aren't strings are rendered as JSON. Referring to an undeclared binding is a validation error.
 

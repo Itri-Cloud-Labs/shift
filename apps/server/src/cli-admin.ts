@@ -23,6 +23,8 @@ const options = {
   executions: { type: 'string' },
   'active-minutes': { type: 'string' },
   decision: { type: 'string' },
+  after: { type: 'string' },
+  limit: { type: 'string' },
   all: { type: 'boolean' },
 } as const;
 
@@ -209,6 +211,20 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       ] as Record<string, unknown>;
       if (values.wait) run = await waitFor(run);
       return print(run);
+    }
+    case 'run executions': {
+      const query = new URLSearchParams();
+      for (const name of ['after', 'limit'] as const) {
+        const value = values[name];
+        if (value === undefined) continue;
+        if (!/^\d+$/.test(value)) throw invalid(`--${name} must be a nonnegative integer.`);
+        query.set(name, value);
+      }
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      const { executions, next } = await get(
+        `/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/executions${suffix}`,
+      );
+      return print({ executions, next });
     }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);

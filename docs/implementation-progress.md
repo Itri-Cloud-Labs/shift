@@ -358,3 +358,19 @@ Acceptance coverage:
 - **Loop across a restart:** agent, condition and a 60-second wait loop until the agent reports 3. The server restarts during the first pause. The run records three agent executions with outputs 1, 2 and 3, the condition's `true`, `true` and `false` ports, and completes once.
 - **Publish:** undeclared rule bindings, a missing right operand, groups nested 5 deep, a case named `default`, duplicate case ports and a connection from a missing case port are refused.
 - **Totals:** `pnpm check` passed 145 tests (136 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Execution selectors, provenance and history
+
+Status: complete; prompt 06 is done. Date: 2026-10-24.
+
+Changed files: binding resolution (`sequence` and `executionId` selectors, provenance), migration 0008 and its journal entry, the execution context's predecessor, frozen sources in the run repository, the shared execution view with `predecessorId`, `connectionId` and `sources`, the paged executions route and `shift run executions`, engine, workflow and end-to-end tests, the workflow guide, API reference, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Skipped producer in a loop:** an agent loop with three passes records 13 executions. A condition sends passes 1 and 2 through `mark` and lets pass 3 skip it. The report reads `mark` latest as 2, `mark` first as 1, and agent `{sequence: 6}` as 2.
+- **Provenance across a restart:** after the server restarts, the report's sources name executions 8, 4 and 6 with their IDs and paths, its predecessor is execution 12 via `c7`, and execution 12's input source is execution 11.
+- **Pages:** `after 0, limit 5` returns sequences 1 to 5 with `next: 5`. `after 10` returns 11 to 13 with `next: null`. Entries match the run view, and an unknown run returns `RUN_NOT_FOUND`.
+- **Rejected selectors:** a failed execution (required or optional), a later sequence and a foreign execution ID all fail the run with `BINDING_UNAVAILABLE`. A missing `latest` value of the same optional binding uses its fallback, recorded with `fallback: true`.
+- **Publish:** `{sequence: 0}` is refused.
+- **End-to-end:** `shift run executions --limit 1` returns the trigger with `next: 1`, `--after 1` returns the rest with `next: null`, and `--limit 0` is refused with `INVALID_REQUEST`.
+- **Totals:** `pnpm check` passed 147 tests (138 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

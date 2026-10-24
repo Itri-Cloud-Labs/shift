@@ -282,6 +282,33 @@ test(
       const finished = (await env.shift('run', 'show', run.id, '--wait')) as Run;
       assert.equal(finished.state, 'COMPLETED');
       assert.deepEqual(finished.outcome, { data: {} });
+      // History pages by sequence.
+      const page = (await env.shift('run', 'executions', run.id, '--limit', '1')) as {
+        executions: Array<{ sequence: number; node: string }>;
+        next: number | null;
+      };
+      assert.deepEqual(
+        page.executions.map((execution) => execution.node),
+        ['start'],
+      );
+      assert.equal(page.next, 1);
+      const rest = (await env.shift('run', 'executions', run.id, '--after', '1')) as typeof page;
+      assert.deepEqual(
+        rest.executions.map((execution) => execution.sequence),
+        [2],
+      );
+      assert.equal(rest.next, null);
+      const refused = await runCli([
+        'run',
+        'executions',
+        run.id,
+        '--limit',
+        '0',
+        '--state-dir',
+        env.state.path,
+      ]);
+      assert.equal(refused.code, 1);
+      assert.equal((JSON.parse(refused.errors) as { code: string }).code, 'INVALID_REQUEST');
     } finally {
       await stopped(server);
       await env.state.remove();
