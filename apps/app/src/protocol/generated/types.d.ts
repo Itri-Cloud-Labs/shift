@@ -11,7 +11,25 @@ export type FoundationPayload =
   | PairResponse
   | PairingIssued
   | DeviceList
-  | DeviceResponse;
+  | DeviceResponse
+  | Project
+  | Workflow
+  | Run
+  | Interaction
+  | Workspace
+  | CommandReceipt
+  | ProjectResponse
+  | WorkflowResponse
+  | RunResponse
+  | InteractionResponse
+  | WorkspaceResponse
+  | CommandReceiptResponse
+  | ProjectList
+  | WorkflowList
+  | RunList
+  | InteractionList
+  | WorkspaceList
+  | ExecutionPage;
 export type Uuid = string;
 export type Readiness = {
   ready: boolean;
@@ -62,7 +80,7 @@ export interface ProtocolRange {
   max: 0;
 }
 export interface ServerCapabilities {
-  commands: false;
+  commands: boolean;
   events: false;
   pairing: boolean;
   /**
@@ -151,4 +169,294 @@ export interface DeviceResponse {
   schemaVersion: 1;
   requestId: Uuid;
   device: Device;
+}
+export interface Project {
+  id: Uuid;
+  name: string;
+  repositoryPath: string;
+  baseRef: string;
+  createdAt: number;
+}
+export interface Workflow {
+  id: Uuid;
+  projectId: Uuid;
+  name: string;
+  enabled: boolean;
+  draftRevision: number;
+  draft: {
+    [k: string]: unknown;
+  };
+  activeVersionId: Uuid | null;
+  /**
+   * @maxItems 100000
+   */
+  versions: {
+    id: Uuid;
+    number: number;
+    hash: string;
+    createdAt: number;
+  }[];
+  createdAt: number;
+}
+export interface Run {
+  id: Uuid;
+  state:
+    | 'QUEUED'
+    | 'RUNNING'
+    | 'WAITING'
+    | 'HELD'
+    | 'NEEDS_HUMAN'
+    | 'FAILED'
+    | 'CANCEL_REQUESTED'
+    | 'CANCELLED'
+    | 'COMPLETED';
+  workflowId: Uuid | null;
+  versionId: Uuid | null;
+  versionNumber: number | null;
+  repository: string;
+  baseCommit: string | null;
+  workspace: null | {
+    id: Uuid;
+    path: string | null;
+    state: string | null;
+  };
+  attention: {
+    [k: string]: unknown;
+  } | null;
+  wait: {
+    [k: string]: unknown;
+  } | null;
+  activeTime: {
+    usedMs: number;
+    limitMs: number;
+  };
+  cancelRequested: boolean;
+  outcome: unknown;
+  createdAt: number;
+  finishedAt: number | null;
+  /**
+   * @maxItems 100000
+   */
+  executions: Execution[];
+  /**
+   * @maxItems 100000
+   */
+  invocations: {
+    id: Uuid;
+    kind: 'goal' | 'correction' | 'continuation';
+    state: string;
+    correlationId: string;
+    submissions: number;
+    acceptedSubmissions: number;
+  }[];
+  /**
+   * @maxItems 100000
+   */
+  controls: {
+    id: Uuid;
+    kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend';
+    executionId: Uuid | null;
+    actor: {
+      kind: string;
+      id: string;
+    };
+    payload: unknown;
+    createdAt: number;
+  }[];
+}
+export interface Execution {
+  id: Uuid;
+  node: string;
+  type: string;
+  sequence: number;
+  state: 'PENDING' | 'RUNNING' | 'WAITING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  port: string | null;
+  predecessorId: Uuid | null;
+  connectionId: string | null;
+  sources: {
+    [k: string]: unknown;
+  } | null;
+  output: unknown;
+  error: unknown;
+  /**
+   * @maxItems 1000
+   */
+  attempts: Attempt[];
+}
+export interface Attempt {
+  number: number;
+  state: 'PENDING' | 'RUNNING' | 'WAITING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED' | 'CANCELLED';
+  error: unknown;
+}
+export interface Interaction {
+  id: Uuid;
+  runId: Uuid;
+  executionId: Uuid;
+  node: string;
+  kind: 'input' | 'approval';
+  state: 'PENDING' | 'RESPONDED' | 'EXPIRED' | 'CANCELLED';
+  revision: number;
+  title: string;
+  instructions: string | null;
+  form: {
+    [k: string]: unknown;
+  };
+  outcomes:
+    | null
+    | []
+    | [string]
+    | [string, string]
+    | [string, string, string]
+    | [string, string, string, string]
+    | [string, string, string, string, string]
+    | [string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string, string]
+    | [string, string, string, string, string, string, string, string, string, string];
+  expiresAt: number | null;
+  createdAt: number;
+  settledAt: number | null;
+  runState:
+    | 'QUEUED'
+    | 'RUNNING'
+    | 'WAITING'
+    | 'HELD'
+    | 'NEEDS_HUMAN'
+    | 'FAILED'
+    | 'CANCEL_REQUESTED'
+    | 'CANCELLED'
+    | 'COMPLETED';
+  response: null | {
+    decision: string | null;
+    data: unknown;
+    actor: {
+      kind: string;
+      id: string;
+    };
+    createdAt: number;
+  };
+}
+export interface Workspace {
+  id: Uuid;
+  projectId: Uuid;
+  runId: Uuid;
+  path: string;
+  repositoryPath: string;
+  baseRef: string;
+  baseCommit: string;
+  state: 'CREATING' | 'READY' | 'RETIRED';
+  createdAt: number;
+  readyAt: number | null;
+  retiredAt: number | null;
+  claimed: boolean;
+}
+export interface CommandReceipt {
+  commandId: CommandId;
+  status: number;
+  body: {
+    [k: string]: unknown;
+  };
+  createdAt: number;
+}
+export interface ProjectResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  project: Project;
+}
+export interface WorkflowResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  workflow: Workflow;
+}
+export interface RunResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  run: Run;
+}
+export interface InteractionResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  interaction: Interaction;
+}
+export interface WorkspaceResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  workspace: Workspace;
+}
+export interface CommandReceiptResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  receipt: CommandReceipt;
+}
+export interface ProjectList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  projects: Project[];
+}
+export interface WorkflowList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  workflows: WorkflowSummary[];
+}
+export interface WorkflowSummary {
+  id: Uuid;
+  projectId: Uuid;
+  name: string;
+  activeVersionId: Uuid | null;
+}
+export interface RunList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  runs: RunSummary[];
+}
+export interface RunSummary {
+  id: Uuid;
+  state:
+    | 'QUEUED'
+    | 'RUNNING'
+    | 'WAITING'
+    | 'HELD'
+    | 'NEEDS_HUMAN'
+    | 'FAILED'
+    | 'CANCEL_REQUESTED'
+    | 'CANCELLED'
+    | 'COMPLETED';
+  workflowId: Uuid | null;
+  createdAt: number;
+  finishedAt: number | null;
+}
+export interface InteractionList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  interactions: Interaction[];
+}
+export interface WorkspaceList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  workspaces: Workspace[];
+}
+export interface ExecutionPage {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 500
+   */
+  executions: Execution[];
+  next: number | null;
 }

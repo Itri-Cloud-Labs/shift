@@ -1,6 +1,6 @@
 # Shift server
 
-`shift serve` is the Linux server. It stores projects, versioned workflows and runs in SQLite, executes workflows durably, runs agents through a supervised OpenCode runtime, and gives each run its own Git worktree. It is administered through the `shift` CLI over a private Unix socket. Desktop clients pair with a one-time phrase and authenticate with device tokens over TCP; the device API for runs and SSE events are not implemented yet.
+`shift serve` is the Linux server. It stores projects, versioned workflows and runs in SQLite, executes workflows durably, runs agents through a supervised OpenCode runtime, and gives each run its own Git worktree. It is administered through the `shift` CLI over a private Unix socket. Desktop clients pair with a one-time phrase and use the same resources over TCP with device tokens; SSE events are not implemented yet.
 
 See [Workflows and runs](../../docs/workflows.md) for what a workflow can do and [Server API](../../docs/server-api.md) for every endpoint and CLI command.
 
@@ -63,7 +63,7 @@ The state directory must belong to the service account and have mode 0700. SQLit
 
 TCP exposes only `GET /api/v0/info`, `GET /api/v0/health` and `GET /api/v0/ready`. Health returns HTTP 200 for liveness, with a separate readiness value. Ready returns 503 while starting/stopping or when persistence is unavailable. Info/health include a stable server ID, stable event epoch, wire range 0..0, payload schema version 1 and request ID. Readiness never implies that unfinished future capabilities exist.
 
-`POST /api/v0/admin/shutdown` exists only on the administrative socket. It accepts no body, rejects browser Origin headers and returns a validated 202 acknowledgement. There are no TCP administrative routes. TCP also serves pairing and the token-authenticated device routes ([server API](../../docs/server-api.md#devices)). `--public` explicitly exposes them beyond loopback; put a TLS-terminating reverse proxy in front, because device tokens travel in clear text over plain HTTP. Default startup remains loopback-only.
+`POST /api/v0/admin/shutdown` exists only on the administrative socket. It accepts no body, rejects browser Origin headers and returns a validated 202 acknowledgement. There are no TCP administrative routes. TCP also serves pairing and the token-authenticated [device API](../../docs/server-api.md#device-api). `--public` explicitly exposes them beyond loopback; put a TLS-terminating reverse proxy in front, because device tokens travel in clear text over plain HTTP. Default startup remains loopback-only.
 
 ## Storage and protocol ownership
 

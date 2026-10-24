@@ -1,15 +1,15 @@
 # Shift server API
 
-This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. Paired devices can pair and manage devices over TCP ([devices](#devices)). The rest of the remote protocol, with the device API for runs and SSE events ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)), follows in later releases. [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
+This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. Paired devices use the same resources over TCP with a bearer token ([device API](#device-api)). SSE events ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)) follow in a later release. [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
 
 ## Transports
 
 The server listens on two transports with different reach.
 
-| Transport             | Address                                                                                    | Serves                                                                                                                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| TCP                   | `127.0.0.1:4317` by default (`--host`, `--port`). A non-loopback address needs `--public`. | `GET /api/v0/info`, `/api/v0/health` and `/api/v0/ready`; `POST /api/v0/pair`; and the [device](#devices) routes, which need a bearer token. Only device commands take a request body. |
-| Administrative socket | `<state>/admin.sock`, a Unix socket with mode `0600` inside the private state directory    | Everything on TCP, plus every `/api/v0/admin/…` route.                                                                                                                                 |
+| Transport             | Address                                                                                    | Serves                                                                                                                                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TCP                   | `127.0.0.1:4317` by default (`--host`, `--port`). A non-loopback address needs `--public`. | `GET /api/v0/info`, `/api/v0/health` and `/api/v0/ready`; `POST /api/v0/pair`; and, with a device's bearer token, the [device API](#device-api): every resource below at `/api/v0/…` instead of `/api/v0/admin/…`, plus [devices](#devices). Never `/api/v0/admin/…` or shutdown. |
+| Administrative socket | `<state>/admin.sock`, a Unix socket with mode `0600` inside the private state directory    | Everything on TCP, plus every `/api/v0/admin/…` route.                                                                                                                                                                                                                            |
 
 The state directory defaults to `$XDG_STATE_HOME/shift`, or `~/.local/state/shift` when `XDG_STATE_HOME` is unset. Set it with `--state-dir` or `SHIFT_STATE_DIR`. Access to the socket is access control: only the account that owns the state directory can connect. The CLI also refuses to use a socket or state directory that another account could read. Requests that carry an `Origin` header are refused with `403 INVALID_REQUEST`, so a browser page cannot drive the socket through a local proxy.
 
@@ -71,6 +71,8 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `POST /api/v0/admin/pairing`                   | `shift device pair`         | Issue a pairing phrase                           |
 | `GET /api/v0/admin/devices`                    | `shift device list`         | Paired devices                                   |
 | `POST /api/v0/admin/devices/{id}/revoke`       | `shift device revoke`       | Revoke a device                                  |
+| `GET /api/v0/commands/{commandId}`             | none                        | The device's own command receipt (TCP, token)    |
+| `GET /api/v0/admin/commands/{commandId}`       | none                        | The CLI's own command receipt                    |
 | `POST /api/v0/admin/projects`                  | `shift project add`         | Register a repository                            |
 | `GET /api/v0/admin/projects`                   | `shift project list`        | List projects                                    |
 | `POST /api/v0/admin/workflows`                 | `shift workflow create`     | Create a workflow with a draft                   |
@@ -418,6 +420,22 @@ A `Workspace`:
 - `409 WORKSPACE_DIRTY`: the worktree has uncommitted or untracked changes. Pass `force: true` to discard them.
 - `404 WORKSPACE_NOT_FOUND`.
 
+### Device API
+
+Every resource in this reference is also served on TCP to paired devices: the same request and response at `/api/v0/<path>` instead of `/api/v0/admin/<path>`, for example `GET /api/v0/runs/{id}` or `POST /api/v0/interactions/{id}/respond`. Shutdown and the device-issuing routes of the socket are not. Differences from the socket:
+
+- Every request needs `Authorization: Bearer <token>` ([devices](#devices)). Without one the answer is `401 DEVICE_UNAUTHORIZED`.
+- Every mutation must carry a `commandId`; without one it is refused with `422 INVALID_REQUEST`. Run controls and interaction responses record the device as their actor, `{"kind": "device", "id": <device id>}`, where the CLI records `{"kind": "cli", "id": "local"}`.
+- Command receipts belong to the device that sent the command. Another device reusing the same `commandId` gets its own receipt, and cannot read or replay someone else's.
+
+Every response, on both transports, is checked against the shared protocol schema before it is sent (`Project`, `Workflow`, `Run`, `Interaction`, `Workspace`, their lists and `ExecutionPage`), so a client can rely on the generated types. A replayed receipt is sent as it was stored.
+
+#### Receipt lookup
+
+`GET /api/v0/commands/{commandId}` returns `{"receipt": {"commandId", "status", "body", "createdAt"}}`: the response the caller's own command produced, with its HTTP status. A command that failed stores nothing, so it gets `404 COMMAND_NOT_FOUND`, as does another device's command. The socket has the same lookup at `/api/v0/admin/commands/{commandId}` for the CLI's commands.
+
+After a lost response, look the receipt up, or resend the identical request with the same `commandId`; both give the stored answer and nothing is applied twice. A different body under the same `commandId` is `409 COMMAND_CONFLICT`. Don't replay a queue of pending writes automatically: read the resource and decide. A network error does not mean the command failed, and an aborted request does not cancel a run it started; cancelling takes `POST /runs/{id}/cancel`.
+
 ### Devices
 
 A desktop client pairs once with a phrase and then authenticates every request with a bearer token ([specification 13.1](shift-server-v0.md#131-enrollment-and-secrets)).
@@ -456,7 +474,7 @@ HTTP errors returned by the endpoints above:
 | 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                |
 | 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`                                                                                                                                                                                                                          |
 | 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                             |
-| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`                                                                                                                                                               |
+| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`, `COMMAND_NOT_FOUND`                                                                                                                                          |
 | 409    | `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
 | 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                  |
 | 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB or a workflow document over 1 MiB                                                                                                                                                                                                                               |

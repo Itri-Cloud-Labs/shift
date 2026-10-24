@@ -14,8 +14,8 @@ export function contractTypes(info: ServerInfo, error: ProtocolError): void {
     ...info,
     capabilities: {
       ...info.capabilities,
-      // @ts-expect-error Foundation cannot advertise an implemented mutation transport.
-      commands: true,
+      // @ts-expect-error The event stream is not implemented yet, so it cannot be advertised.
+      events: true,
     },
   };
   void [wrongVersion, wrongIdentity, wrongCapabilities];

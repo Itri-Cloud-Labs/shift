@@ -1,7 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
-import type { CommandReceipts, CommandResponse } from '../persistence/receipts.js';
+import type { Actor, CommandReceipts, CommandResponse } from '../persistence/receipts.js';
 import type { Workspaces } from './workspaces.js';
 
 const local = { kind: 'cli' as const, id: 'local' };
@@ -22,7 +22,7 @@ export class WorkspaceService {
     private readonly receipts: CommandReceipts,
   ) {}
 
-  async remove(id: string, input: unknown): Promise<CommandResponse> {
+  async remove(id: string, input: unknown, actor: Actor = local): Promise<CommandResponse> {
     if (!validateRemove(input)) {
       throw new ShiftError(
         'INVALID_REQUEST',
@@ -34,10 +34,10 @@ export class WorkspaceService {
     }
     const { commandId, force = false } = input as { force?: boolean; commandId?: string };
     const request = { op: 'workspace.remove', workspaceId: id, force };
-    const stored = commandId === undefined ? null : this.receipts.lookup(local, commandId, request);
+    const stored = commandId === undefined ? null : this.receipts.lookup(actor, commandId, request);
     if (stored) return stored;
     const workspace = await this.workspaces.remove(id, { force });
-    return this.receipts.execute(local, commandId, request, () => ({
+    return this.receipts.execute(actor, commandId, request, () => ({
       status: 200,
       body: { workspace: workspace as unknown as Json },
     }));

@@ -11,6 +11,18 @@ import type {
   PairingIssued,
   DeviceList,
   DeviceResponse,
+  ProjectResponse,
+  WorkflowResponse,
+  RunResponse,
+  InteractionResponse,
+  WorkspaceResponse,
+  CommandReceiptResponse,
+  ProjectList,
+  WorkflowList,
+  RunList,
+  InteractionList,
+  WorkspaceList,
+  ExecutionPage,
 } from './types.js';
 
 export interface ValidationDiagnostic {
@@ -35,3 +47,15 @@ export const validatePairResponse: Validator<PairResponse>;
 export const validatePairingIssued: Validator<PairingIssued>;
 export const validateDeviceList: Validator<DeviceList>;
 export const validateDeviceResponse: Validator<DeviceResponse>;
+export const validateProjectResponse: Validator<ProjectResponse>;
+export const validateWorkflowResponse: Validator<WorkflowResponse>;
+export const validateRunResponse: Validator<RunResponse>;
+export const validateInteractionResponse: Validator<InteractionResponse>;
+export const validateWorkspaceResponse: Validator<WorkspaceResponse>;
+export const validateCommandReceiptResponse: Validator<CommandReceiptResponse>;
+export const validateProjectList: Validator<ProjectList>;
+export const validateWorkflowList: Validator<WorkflowList>;
+export const validateRunList: Validator<RunList>;
+export const validateInteractionList: Validator<InteractionList>;
+export const validateWorkspaceList: Validator<WorkspaceList>;
+export const validateExecutionPage: Validator<ExecutionPage>;

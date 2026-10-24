@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
-import type { CommandReceipts, CommandResponse } from '../persistence/receipts.js';
+import type { Actor, CommandReceipts, CommandResponse } from '../persistence/receipts.js';
 import { normalizeDocument } from './document.js';
 import type { DefinitionRepository } from './repository.js';
 
@@ -67,7 +67,7 @@ export class DefinitionService {
   ) {}
 
   // A project is an existing repository on this host, addressed by its canonical top level.
-  async addProject(input: unknown): Promise<CommandResponse> {
+  async addProject(input: unknown, actor: Actor = local): Promise<CommandResponse> {
     const request = check<{ path: string; name?: string; baseRef?: string; commandId?: string }>(
       validators.project,
       input,
@@ -94,7 +94,7 @@ export class DefinitionService {
     });
     const project = { name: request.name ?? basename(path), repositoryPath: path, baseRef };
     return this.receipts.execute(
-      local,
+      actor,
       request.commandId,
       { op: 'project.add', ...project },
       () => ({
@@ -104,14 +104,14 @@ export class DefinitionService {
     );
   }
 
-  createWorkflow(input: unknown): CommandResponse {
+  createWorkflow(input: unknown, actor: Actor = local): CommandResponse {
     const request = check<{ projectId: string; name: string; draft: Json; commandId?: string }>(
       validators.workflow,
       input,
     );
     const draft = normalizeDocument(request.draft) as Json;
     const { commandId: id, ...rest } = request;
-    return this.receipts.execute(local, id, { op: 'workflow.create', ...rest }, () => ({
+    return this.receipts.execute(actor, id, { op: 'workflow.create', ...rest }, () => ({
       status: 201,
       body: {
         workflow: this.definitions.createWorkflow({
@@ -123,24 +123,24 @@ export class DefinitionService {
     }));
   }
 
-  saveDraft(workflowId: string, input: unknown): CommandResponse {
+  saveDraft(workflowId: string, input: unknown, actor: Actor = local): CommandResponse {
     const request = check<{ revision: number; draft: Json; commandId?: string }>(
       validators.draft,
       input,
     );
     const draft = normalizeDocument(request.draft) as Json;
     const { commandId: id, ...rest } = request;
-    return this.receipts.execute(local, id, { op: 'workflow.save', workflowId, ...rest }, () => ({
+    return this.receipts.execute(actor, id, { op: 'workflow.save', workflowId, ...rest }, () => ({
       status: 200,
       body: { workflow: this.definitions.saveDraft(workflowId, request.revision, draft) },
     }));
   }
 
-  publish(workflowId: string, input: unknown): CommandResponse {
+  publish(workflowId: string, input: unknown, actor: Actor = local): CommandResponse {
     const request = check<{ revision?: number; commandId?: string }>(validators.publish, input);
     const { commandId: id, ...rest } = request;
     return this.receipts.execute(
-      local,
+      actor,
       id,
       { op: 'workflow.publish', workflowId, ...rest },
       () => ({

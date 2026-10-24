@@ -35,6 +35,60 @@
     },
     {
       "$ref": "#/$defs/DeviceResponse"
+    },
+    {
+      "$ref": "#/$defs/Project"
+    },
+    {
+      "$ref": "#/$defs/Workflow"
+    },
+    {
+      "$ref": "#/$defs/Run"
+    },
+    {
+      "$ref": "#/$defs/Interaction"
+    },
+    {
+      "$ref": "#/$defs/Workspace"
+    },
+    {
+      "$ref": "#/$defs/CommandReceipt"
+    },
+    {
+      "$ref": "#/$defs/ProjectResponse"
+    },
+    {
+      "$ref": "#/$defs/WorkflowResponse"
+    },
+    {
+      "$ref": "#/$defs/RunResponse"
+    },
+    {
+      "$ref": "#/$defs/InteractionResponse"
+    },
+    {
+      "$ref": "#/$defs/WorkspaceResponse"
+    },
+    {
+      "$ref": "#/$defs/CommandReceiptResponse"
+    },
+    {
+      "$ref": "#/$defs/ProjectList"
+    },
+    {
+      "$ref": "#/$defs/WorkflowList"
+    },
+    {
+      "$ref": "#/$defs/RunList"
+    },
+    {
+      "$ref": "#/$defs/InteractionList"
+    },
+    {
+      "$ref": "#/$defs/WorkspaceList"
+    },
+    {
+      "$ref": "#/$defs/ExecutionPage"
     }
   ],
   "$defs": {
@@ -163,7 +217,7 @@
       "required": ["commands", "events", "pairing", "nodeTypes", "harnesses"],
       "properties": {
         "commands": {
-          "const": false
+          "type": "boolean"
         },
         "events": {
           "const": false
@@ -472,6 +526,935 @@
         },
         "device": {
           "$ref": "#/$defs/Device"
+        }
+      }
+    },
+    "Project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "repositoryPath", "baseRef", "createdAt"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "repositoryPath": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "baseRef": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "WorkflowSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "projectId", "name", "activeVersionId"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "activeVersionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "name",
+        "enabled",
+        "draftRevision",
+        "draft",
+        "activeVersionId",
+        "versions",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "draftRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "draft": {
+          "type": "object"
+        },
+        "activeVersionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "number", "hash", "createdAt"],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "maxItems": 100000
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "state", "error"],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "enum": [
+            "PENDING",
+            "RUNNING",
+            "WAITING",
+            "COMPLETED",
+            "FAILED",
+            "INTERRUPTED",
+            "CANCELLED"
+          ]
+        },
+        "error": {}
+      }
+    },
+    "Execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "node",
+        "type",
+        "sequence",
+        "state",
+        "port",
+        "predecessorId",
+        "connectionId",
+        "sources",
+        "output",
+        "error",
+        "attempts"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "node": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "type": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "enum": ["PENDING", "RUNNING", "WAITING", "COMPLETED", "FAILED", "CANCELLED"]
+        },
+        "port": {
+          "type": ["string", "null"],
+          "maxLength": 100
+        },
+        "predecessorId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connectionId": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "sources": {
+          "type": ["object", "null"]
+        },
+        "output": {},
+        "error": {},
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Attempt"
+          },
+          "maxItems": 1000
+        }
+      }
+    },
+    "RunSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "workflowId", "createdAt", "finishedAt"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state": {
+          "enum": [
+            "QUEUED",
+            "RUNNING",
+            "WAITING",
+            "HELD",
+            "NEEDS_HUMAN",
+            "FAILED",
+            "CANCEL_REQUESTED",
+            "CANCELLED",
+            "COMPLETED"
+          ]
+        },
+        "workflowId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finishedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "state",
+        "workflowId",
+        "versionId",
+        "versionNumber",
+        "repository",
+        "baseCommit",
+        "workspace",
+        "attention",
+        "wait",
+        "activeTime",
+        "cancelRequested",
+        "outcome",
+        "createdAt",
+        "finishedAt",
+        "executions",
+        "invocations",
+        "controls"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "state": {
+          "enum": [
+            "QUEUED",
+            "RUNNING",
+            "WAITING",
+            "HELD",
+            "NEEDS_HUMAN",
+            "FAILED",
+            "CANCEL_REQUESTED",
+            "CANCELLED",
+            "COMPLETED"
+          ]
+        },
+        "workflowId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "versionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "versionNumber": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "repository": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "baseCommit": {
+          "type": ["string", "null"],
+          "maxLength": 64
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "path", "state"],
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/Uuid"
+                },
+                "path": {
+                  "type": ["string", "null"],
+                  "maxLength": 4096
+                },
+                "state": {
+                  "type": ["string", "null"],
+                  "maxLength": 20
+                }
+              }
+            }
+          ]
+        },
+        "attention": {
+          "type": ["object", "null"]
+        },
+        "wait": {
+          "type": ["object", "null"]
+        },
+        "activeTime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["usedMs", "limitMs"],
+          "properties": {
+            "usedMs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limitMs": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "cancelRequested": {
+          "type": "boolean"
+        },
+        "outcome": {},
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finishedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          },
+          "maxItems": 100000
+        },
+        "invocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "kind",
+              "state",
+              "correlationId",
+              "submissions",
+              "acceptedSubmissions"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "kind": {
+                "enum": ["goal", "correction", "continuation"]
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 20
+              },
+              "correlationId": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "submissions": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "acceptedSubmissions": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "maxItems": 100000
+        },
+        "controls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "executionId", "actor", "payload", "createdAt"],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "kind": {
+                "enum": ["cancel", "retry", "fail", "complete", "extend"]
+              },
+              "executionId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "actor": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "id"],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "maxLength": 20
+                  },
+                  "id": {
+                    "type": "string",
+                    "maxLength": 100
+                  }
+                }
+              },
+              "payload": {},
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "maxItems": 100000
+        }
+      }
+    },
+    "Interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "runId",
+        "executionId",
+        "node",
+        "kind",
+        "state",
+        "revision",
+        "title",
+        "instructions",
+        "form",
+        "outcomes",
+        "expiresAt",
+        "createdAt",
+        "settledAt",
+        "runState",
+        "response"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "runId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "executionId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "node": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "kind": {
+          "enum": ["input", "approval"]
+        },
+        "state": {
+          "enum": ["PENDING", "RESPONDED", "EXPIRED", "CANCELLED"]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "instructions": {
+          "type": ["string", "null"],
+          "maxLength": 20000
+        },
+        "form": {
+          "type": "object"
+        },
+        "outcomes": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "maxItems": 10
+            }
+          ]
+        },
+        "expiresAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "settledAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "runState": {
+          "enum": [
+            "QUEUED",
+            "RUNNING",
+            "WAITING",
+            "HELD",
+            "NEEDS_HUMAN",
+            "FAILED",
+            "CANCEL_REQUESTED",
+            "CANCELLED",
+            "COMPLETED"
+          ]
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["decision", "data", "actor", "createdAt"],
+              "properties": {
+                "decision": {
+                  "type": ["string", "null"],
+                  "maxLength": 40
+                },
+                "data": {},
+                "actor": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "id"],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "maxLength": 20
+                    },
+                    "id": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  }
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "Workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "runId",
+        "path",
+        "repositoryPath",
+        "baseRef",
+        "baseCommit",
+        "state",
+        "createdAt",
+        "readyAt",
+        "retiredAt",
+        "claimed"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "runId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "repositoryPath": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "baseRef": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "baseCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "state": {
+          "enum": ["CREATING", "READY", "RETIRED"]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readyAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "retiredAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "claimed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CommandReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commandId", "status", "body", "createdAt"],
+      "properties": {
+        "commandId": {
+          "$ref": "#/$defs/CommandId"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "body": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ProjectResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "project"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "project": {
+          "$ref": "#/$defs/Project"
+        }
+      }
+    },
+    "WorkflowResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "workflow"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "workflow": {
+          "$ref": "#/$defs/Workflow"
+        }
+      }
+    },
+    "RunResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "run"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "run": {
+          "$ref": "#/$defs/Run"
+        }
+      }
+    },
+    "InteractionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "interaction"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "interaction": {
+          "$ref": "#/$defs/Interaction"
+        }
+      }
+    },
+    "WorkspaceResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "workspace"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "workspace": {
+          "$ref": "#/$defs/Workspace"
+        }
+      }
+    },
+    "CommandReceiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "receipt"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "receipt": {
+          "$ref": "#/$defs/CommandReceipt"
+        }
+      }
+    },
+    "ProjectList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "projects"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Project"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "WorkflowList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "workflows"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "workflows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowSummary"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "RunList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "runs"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RunSummary"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "InteractionList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "interactions"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "interactions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Interaction"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "WorkspaceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "workspaces"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "workspaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Workspace"
+          },
+          "maxItems": 10000
+        }
+      }
+    },
+    "ExecutionPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "executions", "next"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "executions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Execution"
+          },
+          "maxItems": 500
+        },
+        "next": {
+          "type": ["integer", "null"],
+          "minimum": 1
         }
       }
     }

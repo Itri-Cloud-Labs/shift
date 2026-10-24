@@ -391,3 +391,17 @@ Acceptance coverage:
 - **Master key:** created with mode 0600 and reopened with the same key. A wrong context or tampered ciphertext fails, mode 0644 is refused, and a file whose current key is missing is invalid.
 - **End-to-end:** info advertises pairing. `shift device pair` prints the phrase, `POST /api/v0/pair` returns a validated `PairResponse`, and a repeat returns the same token. Without a token the device list is `401` with `WWW-Authenticate: Bearer`; with it, the list is validated. A device can issue a new phrase. After `shift device revoke`, the token gets `401`.
 - **Totals:** `pnpm check` passed 153 tests (144 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Device API
+
+Status: complete for the device API part of M05's server half (prompt 10). Events are next. Date: 2026-10-24.
+
+Changed files: one resource router for both listeners in `http.ts`; actor parameters in the definition, workspace and run services; receipt lookup and the replay marker in `persistence/receipts.ts`; the shared protocol schema, fixtures and generated validators for both apps; server wiring of the engine and services into TCP; device API, server and protocol type tests; the API reference, server README, prompts status and decision log.
+
+Acceptance coverage:
+
+- **End-to-end over TCP:** two paired devices. A mutation without a command ID is refused. With command IDs, the laptop registers a project, creates and publishes an approval workflow, and starts a run. All responses are validated by the server and again by the test.
+- **Lost acknowledgement:** a stale revision is refused first. The laptop's answer is then sent and its response ignored. `GET /commands/respond-1` returns the stored `RESPONDED` interaction, recorded with the laptop as actor. Resending the identical command returns the same interaction, and a changed body is `COMMAND_CONFLICT`. The desktop's later answer is `INTERACTION_CONFLICT`. The desktop cannot see the laptop's receipt (`COMMAND_NOT_FOUND`). The run completed through the approval exactly once.
+- **Access:** no token is `401` on `/runs`, and `/api/v0/admin/runs` over TCP is `404`. The CLI on the socket still works alongside.
+- **Schemas against real output:** every existing engine, CLI and end-to-end test now goes through validated responses on the socket.
+- **Totals:** `pnpm check` passed 154 tests (145 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
