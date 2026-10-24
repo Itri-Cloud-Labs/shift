@@ -15,13 +15,25 @@ import {
   validatePairingIssued,
   validateDeviceList,
   validateDeviceResponse,
+  validateProjectResponse,
+  validateProjectList,
+  validateWorkflowResponse,
+  validateWorkflowList,
+  validateRunResponse,
+  validateRunList,
+  validateExecutionPage,
+  validateInteractionResponse,
+  validateInteractionList,
+  validateWorkspaceResponse,
+  validateWorkspaceList,
+  validateCommandReceiptResponse,
   type ServerInfo,
   type ServerHealth,
   type ProtocolError,
 } from './protocol/index.js';
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
-import type { CommandResponse } from './persistence/receipts.js';
+import type { Actor, CommandReceipts, CommandResponse } from './persistence/receipts.js';
 import type { DeviceService } from './devices/service.js';
 import type { Device } from './devices/registry.js';
 import type { RunEngine } from './runs/engine.js';
@@ -30,6 +42,7 @@ import type { DefinitionRepository } from './workflows/repository.js';
 import type { DefinitionService } from './workflows/service.js';
 
 const admin = '/api/v0/admin';
+const cli = { kind: 'cli' as const, id: 'local' };
 
 export function createHttpServer(options: {
   store: Store;
@@ -42,6 +55,7 @@ export function createHttpServer(options: {
   definitions?: { service: DefinitionService; repository: DefinitionRepository };
   workspaces?: WorkspaceService;
   devices?: DeviceService;
+  receipts?: CommandReceipts;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -64,7 +78,8 @@ export function createHttpServer(options: {
         req.path !== `${admin}/shutdown`
       : req.method === 'POST' &&
         options.devices !== undefined &&
-        /^\/api\/v0\/(pair|pairing|devices\/[^/]+\/revoke)$/.test(req.path);
+        req.path.startsWith('/api/v0/') &&
+        !/^\/api\/v0\/(info|health|ready|admin(\/.*)?)$/.test(req.path);
     if (
       !acceptsBody &&
       (req.headers['transfer-encoding'] !== undefined ||
@@ -113,7 +128,7 @@ export function createHttpServer(options: {
       readiness: observedHealth.readiness,
       time: observedHealth.time,
       capabilities: {
-        commands: false,
+        commands: options.engine !== undefined && options.devices !== undefined,
         events: false,
         pairing: options.devices !== undefined,
         nodeTypes: [],
@@ -124,69 +139,94 @@ export function createHttpServer(options: {
       throw new ShiftError('INTERNAL_ERROR', 'Invalid server info response.');
     res.json(payload);
   });
-  if (options.administrative && options.engine && options.definitions) {
+  // Resources shared by the administrative socket and paired devices (specification 13.2). Each
+  // route runs `guard` first: an Origin check on the socket, bearer authentication on TCP. Commands
+  // are recorded for the caller's actor, and every response is checked against the shared schema.
+  // A replayed receipt is answered as stored, because an older server may have written it.
+  const resources = (
+    guard: express.RequestHandler,
+    actorOf: (res: Response) => Actor,
+    requireCommandId: boolean,
+  ): express.Router | null => {
     const engine = options.engine;
+    if (!engine || !options.definitions) return null;
     const { service, repository } = options.definitions;
-    const local = (req: express.Request) => {
-      if (req.headers.origin !== undefined)
-        throw new ShiftError(
-          'INVALID_REQUEST',
-          'Browser-origin administration is unavailable.',
-          403,
-        );
-    };
-    const reply = (res: Response, status: number, body: Record<string, unknown>) =>
-      res.status(status).json({ schemaVersion: 1, requestId: res.locals['requestId'], ...body });
-    // A replayed command answers with the status and body stored in its receipt.
-    const command = (res: Response, response: CommandResponse) =>
-      reply(res, response.status, response.body as Record<string, unknown>);
+    const router = express.Router();
     const json = express.json({ limit: '2mb', strict: true });
     const id = (req: express.Request) => String(req.params['id']);
-    app.post(`${admin}/projects`, json, async (req, res) => {
-      local(req);
-      command(res, await service.addProject(req.body));
+    const reply = (
+      res: Response,
+      status: number,
+      body: Record<string, unknown>,
+      validate: (value: unknown) => boolean,
+    ) => {
+      const payload = { schemaVersion: 1, requestId: res.locals['requestId'] as string, ...body };
+      if (!validate(payload)) throw new ShiftError('INTERNAL_ERROR', 'Invalid response.');
+      res.status(status).json(payload);
+    };
+    const command = (
+      res: Response,
+      response: CommandResponse,
+      validate: (value: unknown) => boolean,
+    ) =>
+      reply(
+        res,
+        response.status,
+        response.body as Record<string, unknown>,
+        response.replayed ? () => true : validate,
+      );
+    // Devices must name every mutation, so a lost response can be looked up or resent.
+    const body = (req: express.Request): unknown => {
+      const value = req.body ?? {};
+      if (
+        requireCommandId &&
+        typeof (value as { commandId?: unknown } | null)?.commandId !== 'string'
+      ) {
+        throw new ShiftError('INVALID_REQUEST', 'commandId is required.', 422, false, [
+          '/commandId',
+        ]);
+      }
+      return value;
+    };
+    const query = (req: express.Request, name: string) =>
+      typeof req.query[name] === 'string' ? (req.query[name] as string) : undefined;
+    router.post('/projects', guard, json, async (req, res) => {
+      command(res, await service.addProject(body(req), actorOf(res)), validateProjectResponse);
     });
-    app.get(`${admin}/projects`, (req, res) => {
-      local(req);
-      reply(res, 200, { projects: repository.projects() });
+    router.get('/projects', guard, (_req, res) => {
+      reply(res, 200, { projects: repository.projects() }, validateProjectList);
     });
-    app.post(`${admin}/workflows`, json, (req, res) => {
-      local(req);
-      command(res, service.createWorkflow(req.body));
+    router.post('/workflows', guard, json, (req, res) => {
+      command(res, service.createWorkflow(body(req), actorOf(res)), validateWorkflowResponse);
     });
-    app.get(`${admin}/workflows`, (req, res) => {
-      local(req);
-      const project =
-        typeof req.query['projectId'] === 'string' ? req.query['projectId'] : undefined;
-      reply(res, 200, { workflows: repository.workflows(project) });
+    router.get('/workflows', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { workflows: repository.workflows(query(req, 'projectId')) },
+        validateWorkflowList,
+      );
     });
-    app.get(`${admin}/workflows/:id`, (req, res) => {
-      local(req);
-      reply(res, 200, { workflow: repository.workflow(id(req)) });
+    router.get('/workflows/:id', guard, (req, res) => {
+      reply(res, 200, { workflow: repository.workflow(id(req)) }, validateWorkflowResponse);
     });
-    app.put(`${admin}/workflows/:id/draft`, json, (req, res) => {
-      local(req);
-      command(res, service.saveDraft(id(req), req.body));
+    router.put('/workflows/:id/draft', guard, json, (req, res) => {
+      command(res, service.saveDraft(id(req), body(req), actorOf(res)), validateWorkflowResponse);
     });
-    app.post(`${admin}/workflows/:id/publish`, json, (req, res) => {
-      local(req);
-      command(res, service.publish(id(req), req.body ?? {}));
+    router.post('/workflows/:id/publish', guard, json, (req, res) => {
+      command(res, service.publish(id(req), body(req), actorOf(res)), validateWorkflowResponse);
     });
-    app.post(`${admin}/runs`, json, async (req, res) => {
-      local(req);
-      command(res, await engine.startRun(req.body));
+    router.post('/runs', guard, json, async (req, res) => {
+      command(res, await engine.startRun(body(req), actorOf(res)), validateRunResponse);
     });
-    app.get(`${admin}/runs`, (req, res) => {
-      local(req);
-      reply(res, 200, { runs: engine.repository.runs() });
+    router.get('/runs', guard, (_req, res) => {
+      reply(res, 200, { runs: engine.repository.runs() }, validateRunList);
     });
-    app.get(`${admin}/runs/:id`, (req, res) => {
-      local(req);
-      reply(res, 200, { run: engine.repository.run(id(req)) });
+    router.get('/runs/:id', guard, (req, res) => {
+      reply(res, 200, { run: engine.repository.run(id(req)) }, validateRunResponse);
     });
     // A page of a run's history: `after` is a sequence number, `limit` at most 500.
-    app.get(`${admin}/runs/:id/executions`, (req, res) => {
-      local(req);
+    router.get('/runs/:id/executions', guard, (req, res) => {
       const number = (name: string, fallback: number, min: number, max: number) => {
         const raw = req.query[name];
         if (raw === undefined) return fallback;
@@ -204,45 +244,88 @@ export function createHttpServer(options: {
           number('after', 0, 0, Number.MAX_SAFE_INTEGER),
           number('limit', 100, 1, 500),
         ) as Record<string, unknown>,
+        validateExecutionPage,
       );
     });
     for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
-      app.post(`${admin}/runs/:id/${kind}`, json, (req, res) => {
-        local(req);
-        command(res, engine.controlRun(id(req), kind, req.body ?? {}));
+      router.post(`/runs/:id/${kind}`, guard, json, (req, res) => {
+        command(
+          res,
+          engine.controlRun(id(req), kind, body(req), actorOf(res)),
+          validateRunResponse,
+        );
       });
     }
-    app.get(`${admin}/interactions`, (req, res) => {
-      local(req);
-      reply(res, 200, {
-        interactions: engine.repository.interactions(req.query['all'] === 'true'),
-      });
+    router.get('/interactions', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { interactions: engine.repository.interactions(req.query['all'] === 'true') },
+        validateInteractionList,
+      );
     });
-    app.get(`${admin}/interactions/:id`, (req, res) => {
-      local(req);
-      reply(res, 200, { interaction: engine.repository.interaction(id(req)) });
+    router.get('/interactions/:id', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { interaction: engine.repository.interaction(id(req)) },
+        validateInteractionResponse,
+      );
     });
-    app.post(`${admin}/interactions/:id/respond`, json, (req, res) => {
-      local(req);
-      command(res, engine.respond(id(req), req.body ?? {}));
+    router.post('/interactions/:id/respond', guard, json, (req, res) => {
+      command(res, engine.respond(id(req), body(req), actorOf(res)), validateInteractionResponse);
     });
     const workspaces = options.workspaces;
     if (workspaces) {
-      app.get(`${admin}/workspaces`, (req, res) => {
-        local(req);
-        const project =
-          typeof req.query['projectId'] === 'string' ? req.query['projectId'] : undefined;
-        reply(res, 200, { workspaces: workspaces.workspaces.list(project) });
+      router.get('/workspaces', guard, (req, res) => {
+        reply(
+          res,
+          200,
+          { workspaces: workspaces.workspaces.list(query(req, 'projectId')) },
+          validateWorkspaceList,
+        );
       });
-      app.get(`${admin}/workspaces/:id`, (req, res) => {
-        local(req);
-        reply(res, 200, { workspace: workspaces.workspaces.get(id(req)) });
+      router.get('/workspaces/:id', guard, (req, res) => {
+        reply(
+          res,
+          200,
+          { workspace: workspaces.workspaces.get(id(req)) },
+          validateWorkspaceResponse,
+        );
       });
-      app.post(`${admin}/workspaces/:id/remove`, json, async (req, res) => {
-        local(req);
-        command(res, await workspaces.remove(id(req), req.body ?? {}));
+      router.post('/workspaces/:id/remove', guard, json, async (req, res) => {
+        command(
+          res,
+          await workspaces.remove(id(req), body(req), actorOf(res)),
+          validateWorkspaceResponse,
+        );
       });
     }
+    // The caller's own receipt after a lost response; another actor's receipt does not exist.
+    router.get('/commands/:commandId', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        {
+          receipt: options.receipts!.get(actorOf(res), String(req.params['commandId'])),
+        },
+        validateCommandReceiptResponse,
+      );
+    });
+    return router;
+  };
+  if (options.administrative) {
+    const local: express.RequestHandler = (req, _res, next) => {
+      if (req.headers.origin !== undefined) {
+        next(
+          new ShiftError('INVALID_REQUEST', 'Browser-origin administration is unavailable.', 403),
+        );
+        return;
+      }
+      next();
+    };
+    const router = resources(local, () => cli, false);
+    if (router) app.use(admin, router);
   }
   if (options.administrative) {
     app.post('/api/v0/admin/shutdown', (req, res) => {
@@ -278,7 +361,6 @@ export function createHttpServer(options: {
       res.status(status).json(payload);
     };
     if (options.administrative) {
-      const cli = { kind: 'cli' as const, id: 'local' };
       const local = (req: express.Request) => {
         if (req.headers.origin !== undefined)
           throw new ShiftError(
@@ -329,6 +411,8 @@ export function createHttpServer(options: {
         kind: 'device' as const,
         id: (res.locals['device'] as Device).id,
       });
+      const deviceResources = resources(authenticated, caller, true);
+      if (deviceResources) app.use('/api/v0', deviceResources);
       app.get('/api/v0/devices', authenticated, (_req, res) => {
         send(
           res,

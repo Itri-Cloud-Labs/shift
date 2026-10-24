@@ -460,3 +460,17 @@ Decided 2026-10-24 for the first part of M05 (prompt 10), following specificatio
 - **Protocol.** `Device`, `PairRequest`, `PairResponse`, `PairingIssued`, `DeviceList` and `DeviceResponse` join the shared schema. The validators are generated for both server and client, and `capabilities.pairing` is now true.
 
 The device API for runs, workflows and interactions follows next, with per-device receipt lookup; then events with snapshot, replay and SSE.
+
+## Device API
+
+Decided 2026-10-24 for the second part of M05 (prompt 10), following specification section 13.2.
+
+- **One set of routes.** The administrative routes became one Express router, which both listeners mount. The socket mounts it at `/api/v0/admin` with the Origin check and the `cli:local` actor. TCP mounts it at `/api/v0` with bearer authentication and the device as actor. Each route carries its guard, so an unknown TCP path is still `404`, and `/api/v0/admin/…` never exists on TCP. Services take the actor as a parameter that defaults to the local CLI, so application behaviour stays the same for both. Shutdown and device issuing stay socket-only.
+- **Command IDs.** Device mutations must carry a `commandId`, since a client that cannot tell commit from failure needs a receipt to recover. The CLI already always sends one. Receipts are keyed by actor kind, actor ID and command ID, so a device can neither read nor replay another's.
+- **Receipt lookup.** `GET /commands/{commandId}` (and `/admin/commands/…` on the socket) returns the stored status and body for the caller's own command. Failed commands store nothing and are not found. Resending the identical request gives the same answer, and a different body is `COMMAND_CONFLICT`, as before.
+- **Validated resources.** `Project`, `WorkflowSummary`/`Workflow`, `Run` (with `Execution`, `Attempt`, invocations and controls), `Interaction`, `Workspace`, `CommandReceipt`, their response envelopes, the lists and `ExecutionPage` joined the shared schema. Every response on both transports is validated before it is sent, so the whole existing suite now checks the schema against real output.
+  - Free-form values (outputs, errors, attention, waits, drafts, forms, payloads) are typed as JSON objects or any JSON value, not pinned.
+  - A replayed receipt is sent as stored, because an older server may have written it. A non-enumerable `replayed` marker says so, and leaves the response equal to the original.
+- **Capabilities.** `commands` is now true. `events` stays false until the stream exists.
+
+Events follow next: `epoch:sequence` cursors, a consistent snapshot with its high-water mark, replay and SSE.

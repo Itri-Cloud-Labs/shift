@@ -17,7 +17,7 @@
       "reason": "READY"
     },
     "capabilities": {
-      "commands": false,
+      "commands": true,
       "events": false,
       "pairing": true,
       "nodeTypes": [],
@@ -114,6 +114,226 @@
       "createdAt": 1790985600000,
       "lastSeenAt": 1790985660000,
       "revokedAt": 1790985700000
+    }
+  },
+  "workflowResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000035",
+    "workflow": {
+      "id": "00000000-0000-4000-8000-000000000033",
+      "projectId": "00000000-0000-4000-8000-000000000036",
+      "name": "Review",
+      "enabled": true,
+      "draftRevision": 0,
+      "draft": {
+        "formatVersion": 1,
+        "nodes": [],
+        "connections": []
+      },
+      "activeVersionId": "00000000-0000-4000-8000-000000000034",
+      "versions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000034",
+          "number": 1,
+          "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "createdAt": 1790985600000
+        }
+      ],
+      "createdAt": 1790985600000
+    }
+  },
+  "runResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000037",
+    "run": {
+      "id": "00000000-0000-4000-8000-000000000032",
+      "state": "COMPLETED",
+      "workflowId": "00000000-0000-4000-8000-000000000033",
+      "versionId": "00000000-0000-4000-8000-000000000034",
+      "versionNumber": 1,
+      "repository": "/home/me/repo",
+      "baseCommit": "9430d8648de4d1c543da75780b1a5eabd81d7d69",
+      "workspace": null,
+      "attention": null,
+      "wait": null,
+      "activeTime": {
+        "usedMs": 0,
+        "limitMs": 14400000
+      },
+      "cancelRequested": false,
+      "outcome": {
+        "data": {
+          "decision": "approved"
+        }
+      },
+      "createdAt": 1790985600000,
+      "finishedAt": 1790985660000,
+      "executions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000030",
+          "node": "review",
+          "type": "approval",
+          "sequence": 2,
+          "state": "COMPLETED",
+          "port": "approved",
+          "predecessorId": "00000000-0000-4000-8000-000000000031",
+          "connectionId": "c1",
+          "sources": {
+            "name": {
+              "kind": "trigger",
+              "executionId": "00000000-0000-4000-8000-000000000031",
+              "path": ["name"]
+            }
+          },
+          "output": {
+            "data": {
+              "input": {
+                "name": "v1"
+              },
+              "decision": "approved",
+              "response": {}
+            },
+            "references": {
+              "artifacts": []
+            },
+            "context": {
+              "handoffs": []
+            }
+          },
+          "error": null,
+          "attempts": [
+            {
+              "number": 1,
+              "state": "COMPLETED",
+              "error": null
+            }
+          ]
+        }
+      ],
+      "invocations": [],
+      "controls": []
+    }
+  },
+  "executionPage": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000038",
+    "executions": [
+      {
+        "id": "00000000-0000-4000-8000-000000000030",
+        "node": "review",
+        "type": "approval",
+        "sequence": 2,
+        "state": "COMPLETED",
+        "port": "approved",
+        "predecessorId": "00000000-0000-4000-8000-000000000031",
+        "connectionId": "c1",
+        "sources": {
+          "name": {
+            "kind": "trigger",
+            "executionId": "00000000-0000-4000-8000-000000000031",
+            "path": ["name"]
+          }
+        },
+        "output": {
+          "data": {
+            "input": {
+              "name": "v1"
+            },
+            "decision": "approved",
+            "response": {}
+          },
+          "references": {
+            "artifacts": []
+          },
+          "context": {
+            "handoffs": []
+          }
+        },
+        "error": null,
+        "attempts": [
+          {
+            "number": 1,
+            "state": "COMPLETED",
+            "error": null
+          }
+        ]
+      }
+    ],
+    "next": null
+  },
+  "interactionResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000039",
+    "interaction": {
+      "id": "00000000-0000-4000-8000-000000000040",
+      "runId": "00000000-0000-4000-8000-000000000032",
+      "executionId": "00000000-0000-4000-8000-000000000030",
+      "node": "review",
+      "kind": "approval",
+      "state": "RESPONDED",
+      "revision": 1,
+      "title": "Ship v1?",
+      "instructions": null,
+      "form": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "outcomes": ["approved", "rejected"],
+      "expiresAt": null,
+      "createdAt": 1790985600000,
+      "settledAt": 1790985660000,
+      "runState": "COMPLETED",
+      "response": {
+        "decision": "approved",
+        "data": {},
+        "actor": {
+          "kind": "device",
+          "id": "00000000-0000-4000-8000-000000000010"
+        },
+        "createdAt": 1790985660000
+      }
+    }
+  },
+  "commandReceiptResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000041",
+    "receipt": {
+      "commandId": "respond-command-1",
+      "status": 200,
+      "body": {
+        "interaction": {
+          "id": "00000000-0000-4000-8000-000000000040",
+          "runId": "00000000-0000-4000-8000-000000000032",
+          "executionId": "00000000-0000-4000-8000-000000000030",
+          "node": "review",
+          "kind": "approval",
+          "state": "RESPONDED",
+          "revision": 1,
+          "title": "Ship v1?",
+          "instructions": null,
+          "form": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "outcomes": ["approved", "rejected"],
+          "expiresAt": null,
+          "createdAt": 1790985600000,
+          "settledAt": 1790985660000,
+          "runState": "COMPLETED",
+          "response": {
+            "decision": "approved",
+            "data": {},
+            "actor": {
+              "kind": "device",
+              "id": "00000000-0000-4000-8000-000000000010"
+            },
+            "createdAt": 1790985660000
+          }
+        }
+      },
+      "createdAt": 1790985660000
     }
   }
 }

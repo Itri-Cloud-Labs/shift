@@ -40,6 +40,18 @@ const names = [
   'PairingIssued',
   'DeviceList',
   'DeviceResponse',
+  'ProjectResponse',
+  'WorkflowResponse',
+  'RunResponse',
+  'InteractionResponse',
+  'WorkspaceResponse',
+  'CommandReceiptResponse',
+  'ProjectList',
+  'WorkflowList',
+  'RunList',
+  'InteractionList',
+  'WorkspaceList',
+  'ExecutionPage',
 ];
 const definitions = Object.fromEntries(
   names.map((name) => [`validate${name}`, `${schema.$id}#/$defs/${name}`]),
@@ -54,6 +66,11 @@ for (const [name, value] of [
   ['PairingIssued', fixture.pairingIssued],
   ['DeviceList', fixture.deviceList],
   ['DeviceResponse', fixture.deviceResponse],
+  ['WorkflowResponse', fixture.workflowResponse],
+  ['RunResponse', fixture.runResponse],
+  ['ExecutionPage', fixture.executionPage],
+  ['InteractionResponse', fixture.interactionResponse],
+  ['CommandReceiptResponse', fixture.commandReceiptResponse],
 ]) {
   if (!ajv.getSchema(`${schema.$id}#/$defs/${name}`)(value))
     throw new Error(`Invalid ${name} fixture`);

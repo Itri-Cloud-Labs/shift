@@ -23,7 +23,7 @@ test('headless CLI preserves identity, rejects a second owner and recovers a cra
   assert(validateServerInfo(info));
   assert.equal(info.readiness.ready, true);
   assert.deepEqual(info.capabilities, {
-    commands: false,
+    commands: true,
     events: false,
     pairing: true,
     nodeTypes: [],

@@ -195,6 +195,7 @@ export async function startServer(
     const workspaces = new Workspaces(store.db, clock, join(state.path, 'workspaces'));
     const registry = new DeviceRegistry(store.db, clock, await SecretBox.open(state.path));
     const devices = new DeviceService(registry, receipts);
+    const workspaceService = new WorkspaceService(workspaces, receipts);
     // Enrollment delivery copies are cleared once their phrase's original expiry passes.
     registry.sweep();
     sweeper = setInterval(() => registry.sweep(), 60_000);
@@ -222,8 +223,9 @@ export async function startServer(
       stop: requestStop,
       engine,
       definitions: { service: definitionService, repository: definitions },
-      workspaces: new WorkspaceService(workspaces, receipts),
+      workspaces: workspaceService,
       devices,
+      receipts,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
@@ -235,6 +237,10 @@ export async function startServer(
       administrative: false,
       stop: requestStop,
       devices,
+      receipts,
+      engine,
+      definitions: { service: definitionService, repository: definitions },
+      workspaces: workspaceService,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {

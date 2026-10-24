@@ -3,7 +3,7 @@ import type { Logger } from 'pino';
 import type { Clock } from '../domain/clock.js';
 import { ShiftError } from '../domain/errors.js';
 import type { HarnessAdapter, Json, ModelRef } from '../harness/types.js';
-import type { CommandReceipts, CommandResponse } from '../persistence/receipts.js';
+import type { Actor, CommandReceipts, CommandResponse } from '../persistence/receipts.js';
 import type { Store } from '../persistence/store.js';
 import { parseDeadline, validateDocument } from '../workflows/document.js';
 import { defaultApprovalForm, defaultOutcomes, freezeForm } from '../workflows/forms.js';
@@ -180,7 +180,7 @@ export class RunEngine {
   // Starts the workflow's active version with trigger input. The base ref is resolved to a commit
   // first; the run, its first activation and the command receipt then commit together, so a
   // repeated command returns the same run without touching the repository again.
-  async startRun(input: unknown): Promise<CommandResponse> {
+  async startRun(input: unknown, actor: Actor = local): Promise<CommandResponse> {
     if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
     if (!validateStart(input)) {
       throw new ShiftError(
@@ -202,7 +202,7 @@ export class RunEngine {
     };
     const { definitions, receipts, workspaces } = this.#options;
     const request = { op: 'run.start', workflowId, triggerInput };
-    const stored = id === undefined ? null : receipts.lookup(local, id, request);
+    const stored = id === undefined ? null : receipts.lookup(actor, id, request);
     if (stored) return stored;
     const admitted = definitions.activeVersion(workflowId);
     const admittedProject = definitions.project(admitted.projectId);
@@ -210,7 +210,7 @@ export class RunEngine {
       admittedProject.repositoryPath,
       admittedProject.baseRef,
     );
-    const response = receipts.execute(local, id, request, () => {
+    const response = receipts.execute(actor, id, request, () => {
       const version = definitions.activeVersion(workflowId);
       // Recheck against this server's registry: a removed node type version fails the start.
       const document = validateDocument(version.document);
@@ -246,7 +246,12 @@ export class RunEngine {
 
   // Owner control commands on a run. Each commits with its receipt; a cancellation then stops
   // running attempts in the background, and the run shows CANCEL_REQUESTED until they stopped.
-  controlRun(runId: string, kind: RunControlKind, input: unknown): CommandResponse {
+  controlRun(
+    runId: string,
+    kind: RunControlKind,
+    input: unknown,
+    actor: Actor = local,
+  ): CommandResponse {
     if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
     const validate = validateControl[kind];
     if (!validate(input)) {
@@ -276,25 +281,25 @@ export class RunEngine {
     }
     let stops: Claim[] = [];
     const response = this.#options.receipts.execute(
-      local,
+      actor,
       id,
       { op: `run.${kind}`, runId, ...body } as Json,
       () => {
         switch (kind) {
           case 'cancel':
-            stops = this.repository.requestCancel(runId, local, id, body.reason);
+            stops = this.repository.requestCancel(runId, actor, id, body.reason);
             break;
           case 'retry':
-            this.repository.retry(runId, local, id);
+            this.repository.retry(runId, actor, id);
             break;
           case 'fail':
-            this.repository.fail(runId, local, id, body.reason);
+            this.repository.fail(runId, actor, id, body.reason);
             break;
           case 'complete':
-            this.repository.complete(runId, local, id, body.data as Json);
+            this.repository.complete(runId, actor, id, body.data as Json);
             break;
           case 'extend':
-            this.repository.extend(runId, local, id, {
+            this.repository.extend(runId, actor, id, {
               ...(body.executions === undefined ? {} : { executions: body.executions }),
               ...(body.activeMs === undefined ? {} : { activeMs: body.activeMs }),
             });
@@ -312,9 +317,10 @@ export class RunEngine {
     this.#stopAttempts(runId, claims, () => this.repository.settleCancellation(runId));
   }
 
-  // Answers a human request as the local owner. The response, its receipt, the event and the
-  // next step commit together; a repeated command returns the stored response.
-  respond(interactionId: string, input: unknown): CommandResponse {
+  // Answers a human request as `actor`, the local owner or a paired device. The response, its
+  // receipt, the event and the next step commit together; a repeated command returns the stored
+  // response.
+  respond(interactionId: string, input: unknown, actor: Actor = local): CommandResponse {
     if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
     if (!validateRespond(input)) {
       throw new ShiftError(
@@ -332,11 +338,11 @@ export class RunEngine {
       response?: Json;
     };
     const response = this.#options.receipts.execute(
-      local,
+      actor,
       id,
       { op: 'interaction.respond', interactionId, ...body } as Json,
       () => {
-        this.repository.respond(interactionId, local, id, body);
+        this.repository.respond(interactionId, actor, id, body);
         return { status: 200, body: { interaction: this.repository.interaction(interactionId) } };
       },
     );
