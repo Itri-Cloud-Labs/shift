@@ -89,13 +89,15 @@ export interface ExecutionError {
 }
 
 // Waiting for a durable wake-up, as shown on a WAITING run.
-export interface RunWait {
-  kind: 'retry';
-  executionId: string;
-  dueAt: number;
-  attempt: number;
-  error: { code: string; message: string };
-}
+export type RunWait =
+  | {
+      kind: 'retry';
+      executionId: string;
+      dueAt: number;
+      attempt: number;
+      error: { code: string; message: string };
+    }
+  | { kind: 'timer'; executionId: string; dueAt: number };
 
 export type ExecutionOutcome =
   | { kind: 'completed'; output: OutputEnvelope; port: string }
@@ -1012,13 +1014,17 @@ export class RunRepository {
         const now = this.clock.now();
         const due = this.db
           .prepare(
-            "SELECT id, run_id, execution_id FROM wakeups WHERE state = 'PENDING' AND due_at <= ? ORDER BY due_at, rowid",
+            "SELECT id, run_id, execution_id, reason FROM wakeups WHERE state = 'PENDING' AND due_at <= ? ORDER BY due_at, rowid",
           )
-          .all(now) as Array<{ id: string; run_id: string; execution_id: string }>;
+          .all(now) as Array<{ id: string; run_id: string; execution_id: string; reason: string }>;
         for (const wakeup of due) {
           this.db
             .prepare("UPDATE wakeups SET state = 'FIRED', settled_at = ? WHERE id = ?")
             .run(now, wakeup.id);
+          if (wakeup.reason === 'timer') {
+            this.#finishWait(wakeup.run_id, wakeup.execution_id);
+            continue;
+          }
           const reopened = this.db
             .prepare(
               "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ? AND state = 'WAITING' AND run_id IN (SELECT id FROM runs WHERE state = 'WAITING')",
@@ -1035,6 +1041,55 @@ export class RunRepository {
         return due.length;
       })
       .immediate();
+  }
+
+  // A Wait node holds its execution and run in WAITING until its deadline. Its attempt waits too,
+  // so it accrues no active time. The deadline was fixed when the execution was prepared.
+  startWait(claim: Claim, dueAt: number): void {
+    this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        const now = this.clock.now();
+        this.#charge(claim.runId, claim.attemptId);
+        this.db
+          .prepare("UPDATE node_attempts SET state = 'WAITING' WHERE id = ?")
+          .run(claim.attemptId);
+        this.db
+          .prepare(
+            "UPDATE node_executions SET state = 'WAITING', revision = revision + 1 WHERE id = ?",
+          )
+          .run(claim.executionId);
+        this.db
+          .prepare("UPDATE runs SET state = 'WAITING', revision = revision + 1 WHERE id = ?")
+          .run(claim.runId);
+        this.db
+          .prepare(
+            "INSERT INTO wakeups (id, run_id, execution_id, reason, due_at, state, payload_json, created_at) VALUES (?, ?, ?, 'timer', ?, 'PENDING', '{}', ?)",
+          )
+          .run(randomUUID(), claim.runId, claim.executionId, dueAt, now);
+        this.#event(
+          'execution.waiting',
+          { runId: claim.runId, executionId: claim.executionId },
+          { kind: 'timer', dueAt },
+        );
+      })
+      .immediate();
+  }
+
+  // A due timer passes the Wait node's input through and routes the run, once: only an execution
+  // and run that are still WAITING continue. Called inside the firing transaction.
+  #finishWait(runId: string, executionId: string): void {
+    const waiting = this.db
+      .prepare(
+        "SELECT a.id FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id JOIN runs r ON r.id = e.run_id WHERE a.execution_id = ? AND a.state = 'WAITING' AND e.state = 'WAITING' AND r.state = 'WAITING'",
+      )
+      .get(executionId) as { id: string } | undefined;
+    if (!waiting) return;
+    this.#resume(runId);
+    this.#finishExecution(
+      { runId, executionId, attemptId: waiting.id },
+      { kind: 'completed', output: this.execution(executionId).input, port: 'success' },
+    );
   }
 
   // When the earliest pending wake-up falls due, or null when nothing waits.
@@ -1558,6 +1613,11 @@ export class RunRepository {
       .run(now, runId);
     this.db
       .prepare(
+        "UPDATE node_attempts SET state = 'CANCELLED', finished_at = ? WHERE state = 'WAITING' AND execution_id IN (SELECT id FROM node_executions WHERE run_id = ?)",
+      )
+      .run(now, runId);
+    this.db
+      .prepare(
         "UPDATE wakeups SET state = 'CANCELLED', settled_at = ? WHERE run_id = ? AND state = 'PENDING'",
       )
       .run(now, runId);
@@ -1695,17 +1755,23 @@ export class RunRepository {
     }>;
     const wakeup = this.db
       .prepare(
-        "SELECT execution_id, due_at, payload_json FROM wakeups WHERE run_id = ? AND reason = 'retry' AND state = 'PENDING' ORDER BY due_at LIMIT 1",
+        "SELECT execution_id, reason, due_at, payload_json FROM wakeups WHERE run_id = ? AND state = 'PENDING' ORDER BY due_at LIMIT 1",
       )
-      .get(runId) as { execution_id: string; due_at: number; payload_json: string } | undefined;
-    const wait: RunWait | null = wakeup
-      ? {
-          kind: 'retry',
-          executionId: wakeup.execution_id,
-          dueAt: wakeup.due_at,
-          ...(JSON.parse(wakeup.payload_json) as Pick<RunWait, 'attempt' | 'error'>),
-        }
-      : null;
+      .get(runId) as
+      { execution_id: string; reason: string; due_at: number; payload_json: string } | undefined;
+    const wait: RunWait | null = !wakeup
+      ? null
+      : wakeup.reason === 'retry'
+        ? {
+            kind: 'retry',
+            executionId: wakeup.execution_id,
+            dueAt: wakeup.due_at,
+            ...(JSON.parse(wakeup.payload_json) as {
+              attempt: number;
+              error: { code: string; message: string };
+            }),
+          }
+        : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,

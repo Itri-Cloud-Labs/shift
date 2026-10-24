@@ -372,3 +372,14 @@ Decided 2026-10-24 to finish M04b, following specification section 6.7.
 - **Enforcement.** `#schedule` checks the budget before any other limit and stops in `NEEDS_HUMAN` with `ACTIVE_TIME_LIMIT`, the same way as `EXECUTION_LIMIT`, keeping the execution and port. A running attempt that crosses the budget is stopped by the cancellation path: the engine aborts its task, stops its invocation through the harness, and then the attempt goes to `INTERRUPTED` through `needsHuman` with `ACTIVE_TIME_LIMIT`. This makes it a stuck step, which `fail`, `complete` and `cancel` already handle. The run is not cancelled, so the owner can decide. A stop that cannot be confirmed says so in the explanation.
 - **Extension.** `extend` takes `activeMs` for this attention and `executions` for the other. The new limit is the time used plus `activeMs`, not the old limit plus it, because a running attempt may have overshot by up to one checkpoint. A limit hit between steps continues from its port. One hit during a turn reopens the execution for a new attempt in the same session. The CLI takes `--active-minutes`.
 - **Granularity.** A turn can overrun the budget by up to one checkpoint interval plus the time it takes to stop. The budget guards against runaway runs; it is not a precise meter.
+
+## Wait nodes
+
+Decided 2026-10-24 as the first half of M04c, following specification section 8 and the owner-approved plan.
+
+- **Configuration.** A `wait` node takes exactly one of two settings. `durationMs` runs from activation, up to 366 days. `until` is an ISO 8601 time with an explicit offset and may use `{{name}}` bindings. A literal `until` without an offset is refused at publish, so a deadline never depends on the server's time zone. A bound value that doesn't parse fails the node with `INVALID_DEADLINE`, an `input` error that an `error` connection can route.
+- **Freezing.** The deadline is resolved once, when the execution is prepared, and stored in its frozen configuration as `dueAt`. A crash between preparing and waiting reuses it, so recovery never moves the deadline.
+- **Waiting.** In one transaction, the attempt, the execution and the run go to `WAITING`, and a `timer` row is inserted in `wakeups`. The attempt is `WAITING` rather than `RUNNING`, so it accrues no active time. A deadline that has already passed completes inline instead.
+- **Firing.** A due timer completes the execution in the firing transaction. Its input passes through on `success`, and the run is routed in that same transaction. The node does not go back through a claim, unlike a retry. It completes only if the attempt, the execution and the run are all still `WAITING`, so a timer fires exactly once, and a cancelled run's timer settles without effect. Cancellation also marks waiting attempts `CANCELLED`.
+
+Human Input and Approval nodes, the second half of M04c, use the same `WAITING` states and the `deadline` wake-up reason.

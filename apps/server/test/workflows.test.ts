@@ -131,6 +131,22 @@ test('validation rejects graphs the executor cannot run', () => {
     ],
     ['overlap policy', (d) => (d.execution = { overlap: 'skip' }), /M12/],
     [
+      'wait without a deadline',
+      (d) => d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: {} }),
+      /either durationMs or until/,
+    ],
+    [
+      'wait until a local time',
+      (d) =>
+        d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: { until: '2026-11-01T09:00' } }),
+      /UTC offset/,
+    ],
+    [
+      'wait until an undeclared binding',
+      (d) => d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: { until: '{{when}}' } }),
+      /undeclared binding when/,
+    ],
+    [
       'invalid agent schema',
       (d) =>
         d.nodes.splice(1, 1, {

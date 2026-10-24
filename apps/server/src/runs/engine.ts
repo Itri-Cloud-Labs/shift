@@ -5,7 +5,7 @@ import { ShiftError } from '../domain/errors.js';
 import type { HarnessAdapter, Json, ModelRef } from '../harness/types.js';
 import type { CommandReceipts, CommandResponse } from '../persistence/receipts.js';
 import type { Store } from '../persistence/store.js';
-import { validateDocument } from '../workflows/document.js';
+import { parseDeadline, validateDocument } from '../workflows/document.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
@@ -398,6 +398,18 @@ export class RunEngine {
           output: envelope(data, context.input),
           port: 'success',
         });
+      } else if (context.node.type === 'wait') {
+        // A deadline that has passed, including one reached while Shift was down, passes at once.
+        const { dueAt } = context.config as { dueAt: number };
+        if (dueAt <= this.#options.clock.now()) {
+          this.repository.completeExecution(claim, {
+            kind: 'completed',
+            output: context.input,
+            port: 'success',
+          });
+        } else {
+          this.repository.startWait(claim, dueAt);
+        }
       } else if (context.node.type === 'end') {
         // End passes its input through; the run takes the node's declared outcome.
         this.repository.completeExecution(claim, {
@@ -433,6 +445,23 @@ export class RunEngine {
       chain: context.chain,
     });
     let config: Json = node.config;
+    if (node.type === 'wait') {
+      // The deadline is fixed now, in UTC, so recovery and restarts wait for the same instant.
+      const authored = node.config as { durationMs?: number; until?: string };
+      const until = authored.until === undefined ? undefined : renderText(authored.until, bindings);
+      const dueAt =
+        authored.durationMs !== undefined
+          ? this.#options.clock.now() + authored.durationMs
+          : parseDeadline(until!);
+      if (dueAt === null) {
+        throw new ShiftError(
+          'INVALID_DEADLINE',
+          `The wait's until value ${JSON.stringify(until!.slice(0, 100))} is not an ISO 8601 time with a UTC offset.`,
+          422,
+        );
+      }
+      config = { ...authored, dueAt };
+    }
     if (node.type === 'agent') {
       const authored = node.config as {
         goal: string;

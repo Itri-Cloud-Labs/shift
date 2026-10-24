@@ -109,11 +109,12 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     return value;
   };
   const waitFor = async (run: Record<string, unknown>) => {
-    // A retry backoff is still progress; other waits need someone to act.
+    // Retry backoffs and timers end on their own; other waits need someone to act.
     const busy = (state: unknown, wait: unknown) =>
       state === 'RUNNING' ||
       state === 'CANCEL_REQUESTED' ||
-      (state === 'WAITING' && (wait as { kind?: string } | null)?.kind === 'retry');
+      (state === 'WAITING' &&
+        ['retry', 'timer'].includes((wait as { kind?: string } | null)?.kind ?? ''));
     while (busy(run['state'], run['wait'])) {
       await new Promise((done) => setTimeout(done, 1_000));
       run = (await get(`/api/v0/admin/runs/${String(run['id'])}`))['run'] as Record<
