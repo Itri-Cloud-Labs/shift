@@ -7,6 +7,7 @@ import type { CommandReceipts, CommandResponse } from '../persistence/receipts.j
 import type { Store } from '../persistence/store.js';
 import { parseDeadline, validateDocument } from '../workflows/document.js';
 import { defaultApprovalForm, defaultOutcomes, freezeForm } from '../workflows/forms.js';
+import { evaluateRule, type Rule } from '../workflows/rules.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
@@ -442,6 +443,22 @@ export class RunEngine {
           kind: 'completed',
           output: envelope(data, context.input),
           port: 'success',
+        });
+      } else if (context.node.type === 'condition' || context.node.type === 'switch') {
+        // Control nodes pass their input through and only choose the port.
+        const config = context.config as {
+          when?: Rule;
+          cases?: Array<{ port: string; when: Rule }>;
+        };
+        const port =
+          context.node.type === 'condition'
+            ? String(evaluateRule(config.when!, bindings))
+            : (config.cases!.find((entry) => evaluateRule(entry.when, bindings))?.port ??
+              'default');
+        this.repository.completeExecution(claim, {
+          kind: 'completed',
+          output: context.input,
+          port,
         });
       } else if (context.node.type === 'wait') {
         // A deadline that has passed, including one reached while Shift was down, passes at once.

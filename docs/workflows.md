@@ -71,6 +71,8 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | `manual_trigger` | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                                                                                                                | `success`                           |
 | `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value.                                                                                                             | `success`, `error`                  |
 | `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema` and `limits`. See [agent nodes](#agent-nodes).                                                                                       | `success`, `error`                  |
+| `condition`      | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
+| `switch`         | Required `cases`: up to 20 `{"port", "when"}` in order. The first case whose rule holds selects its `port`; none selects `default`. Passes its input through.                                                                    | one per case, `default`, `error`    |
 | `wait`           | Exactly one of `durationMs` (up to 366 days) or `until`, an ISO 8601 time with an offset such as `2026-11-01T09:00:00Z`; `until` can use `{{name}}` bindings. Passes its input through when the time comes. See [waits](#waits). | `success`, `error`                  |
 | `human_input`    | Required `title` and `form`; optional `instructions` and `timeoutMs`. `title` and `instructions` can use `{{name}}` bindings. See [human requests](#human-requests).                                                             | `success`, `timeout`, `error`       |
 | `approval`       | Required `title`; optional `instructions`, `outcomes` (default `["approved", "rejected"]`), `form` (default: an optional `comment`) and `timeoutMs`.                                                                             | one per outcome, `timeout`, `error` |
@@ -200,6 +202,40 @@ Runs started before workspaces existed keep working in the repository itself.
 | `CANCELLED`        | The run was cancelled. Work completed before cancellation is kept; nothing is rolled back.                                                                                                                                                  |
 | `COMPLETED`        | The run reached an `end` node or an unconnected port. `outcome` holds the final data.                                                                                                                                                       |
 | `FAILED`           | A node failed without an `error` connection, or an `end` node declared `FAILED`.                                                                                                                                                            |
+
+## Conditions and switches
+
+`condition` and `switch` nodes choose a branch from a rule, and pass their input on unchanged. A rule is either a comparison or a group of rules:
+
+```json
+{
+  "id": "check",
+  "type": "condition",
+  "config": {
+    "when": {
+      "all": [
+        { "op": "exists", "left": { "binding": "count" } },
+        { "op": "lt", "left": { "binding": "count" }, "right": { "value": 3 } }
+      ]
+    }
+  },
+  "bindings": { "count": { "kind": "input", "path": ["data", "count"] } }
+}
+```
+
+- **Groups:** `{"all": [...]}` holds when every rule holds, and `{"any": [...]}` when at least one does. Groups nest up to 4 deep.
+- **Operands:** `{"binding": "<name>"}` reads one of the node's declared bindings. `{"value": ...}` is a literal.
+- **Operators:**
+
+| `op`                     | Holds when                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `eq`, `ne`               | The two values are equal, or not equal, as JSON (objects and arrays compared deeply).   |
+| `lt`, `lte`, `gt`, `gte` | Both are numbers or both are strings (compared by code unit), and the comparison holds. |
+| `contains`               | The left string contains the right string, or the left array contains the right value.  |
+| `in`                     | The right array contains the left value.                                                |
+| `exists`                 | The left value is present and not `null`. Takes no `right`.                             |
+
+Comparing values of the wrong types fails the node with `CONDITION_TYPE`, an `input` error that an `error` connection can route. A rule never quietly evaluates to `false` because a binding held something unexpected. A `switch` checks its cases in order and takes the first that holds, even when later cases hold too. A node that several branches lead to runs whenever one of them reaches it, with that branch's output; it never waits for the others.
 
 ## Human requests
 

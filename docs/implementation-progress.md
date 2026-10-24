@@ -343,3 +343,18 @@ Acceptance coverage:
 - **Publish:** unsupported form keywords and formats, an outcome named `timeout`, a connection from a missing outcome and an undeclared title binding are refused. An approval with custom outcomes, a timeout route and every form widget validates.
 - **End-to-end CLI:** start, draft, then review. A `rejected` answer with a comment file loops back to draft and asks again. The server restarts while the second request is pending. `interaction respond --decision approved --wait` completes the run with executions start, draft, review, draft, review, end. Repeating that command returns the stored response, and a conflicting answer exits with `INTERACTION_CONFLICT`.
 - **Totals:** `pnpm check` passed 141 tests (132 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Condition and Switch
+
+Status: complete for the branching half of prompt 06. Execution selectors, provenance and paginated history are next. Date: 2026-10-24.
+
+Changed files: the rule dialect and evaluator (`workflows/rules.ts`); the `condition` and `switch` node types with case ports and publish checks; inline execution in the engine; engine and workflow tests; the workflow guide, API reference and decision log.
+
+Acceptance coverage:
+
+- **Converging branches:** a condition (`exists` and `gt` in an `all` group) sends 7 through `big` and 2 through `small`. Both reach the same end through the chosen branch only, and the condition's output is its input.
+- **First match:** a switch with `high` (`n > 9`), `mid` (`n > 4`) and `tagged` (`contains`) picks `high` for 12 even though `mid` also holds. It picks `mid` for 7 even when tagged, `tagged` for a tagged 1, and `default` otherwise.
+- **Types:** comparing `"seven"` with a number fails the run with `CONDITION_TYPE`.
+- **Loop across a restart:** agent, condition and a 60-second wait loop until the agent reports 3. The server restarts during the first pause. The run records three agent executions with outputs 1, 2 and 3, the condition's `true`, `true` and `false` ports, and completes once.
+- **Publish:** undeclared rule bindings, a missing right operand, groups nested 5 deep, a case named `default`, duplicate case ports and a connection from a missing case port are refused.
+- **Totals:** `pnpm check` passed 145 tests (136 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

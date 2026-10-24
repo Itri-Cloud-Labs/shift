@@ -406,3 +406,14 @@ Decided 2026-10-24 to finish M04c, following specification sections 4.4, 6.6 and
 
 - **Races.** Every path settles only a `PENDING` interaction of a `WAITING` run, in one transaction: a response, the deadline wake-up, and cancellation, which retires pending requests in `#cancelIdle`. The first to commit wins, and the others find the request already settled.
 - **Not done.** Holds come with manual intervention. Until then, a held run accepting a response but not advancing cannot be built. The desktop attention inbox comes with the connected client (M06). Local CLI responses are recorded as actor `cli:local`.
+
+## Condition and Switch
+
+Decided 2026-10-24 for the branching half of prompt 06 (M04), following specification sections 6.2 and 8 and the plan the owner approved.
+
+- **Rules.** A rule is a comparison or an `all`/`any` group, nested at most 4 deep. Operands are a declared binding (`{"binding": name}`) or a literal (`{"value": …}`), so a rule reads only values its execution froze. Publish refuses undeclared bindings, comparisons without a right operand, and `exists` with one. The schema lives in `workflows/rules.ts` and is shared by both nodes. JSON Schema `$ref` resolves at the config schema's root, so node schemas embed the rule `$defs` at their root.
+- **Typed comparisons.** `eq` and `ne` compare JSON deeply. `lt`, `lte`, `gt` and `gte` need two numbers or two strings. `contains` takes a string and a substring, or an array and a value, and `in` takes a value and an array. Any other pairing fails the node with `CONDITION_TYPE` (`input`) instead of evaluating to `false`, so a mistyped binding cannot silently pick a branch.
+- **Ports.** `condition` selects `true` or `false`. `switch` checks its ordered `cases` and selects the first match's `port`, or `default`. Case ports use `portsFor`, as approval outcomes do, and `default` and `error` are reserved. Both nodes pass their input envelope through unchanged and run inline, so choosing a branch and scheduling it are one transaction.
+- **Joins.** None. A node with several incoming connections runs whenever the path reaches it, with that connection's output, as specification 6.2 says.
+
+The second half of prompt 06 follows next: selecting earlier executions by sequence or ID, binding provenance, and paginated execution history.
