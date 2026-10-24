@@ -7,6 +7,7 @@
 //   [fake-result {…}] submit this envelope through the Shift plugin endpoint
 //   [fake-no-result]  end the turn without submitting
 //   [fake-hang-interrupt] never answer an interrupt request, and ignore SIGTERM, during this turn
+//   [fake-provider-error N] fail the session's first N turns with a provider error (HTTP 503)
 // A turn interrupted by a crash keeps its running tool and no idle record, as OpenCode does.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -58,6 +59,12 @@ async function runTurn(session, prompt) {
   const assistant = { id: id('msg'), type: 'assistant', content: [] };
   session.messages.push(assistant);
   save();
+  const providerErrors = Number(/\[fake-provider-error (\d+)\]/.exec(text)?.[1] ?? 0);
+  if (session.messages.filter((message) => message.type === 'user').length <= providerErrors) {
+    assistant.finish = 'error';
+    assistant.error = { type: 'provider.unavailable', status: 503 };
+    return finish('failed');
+  }
   if (work > 0) {
     const part = { type: 'tool', name: 'shell', state: { status: 'running' } };
     assistant.content.push(part);

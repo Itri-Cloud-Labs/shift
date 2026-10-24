@@ -71,7 +71,7 @@ async function setup() {
   };
   // Registers the repository once, then publishes a start -> agent -> end workflow per run.
   let projectId: string | undefined;
-  const start = async (goal: string) => {
+  const start = async (goal: string, agent: Record<string, unknown> = {}) => {
     projectId ??= ((await shift('project', 'add', '--path', repo)) as { id: string }).id;
     const file = join(state.path, `workflow-${Date.now()}.json`);
     await writeFile(
@@ -79,7 +79,7 @@ async function setup() {
       JSON.stringify({
         nodes: [
           { id: 'start', type: 'manual_trigger' },
-          { id: 'agent', type: 'agent', config: { goal } },
+          { ...agent, id: 'agent', type: 'agent', config: { goal } },
           { id: 'end', type: 'end' },
         ],
         connections: [
@@ -180,6 +180,38 @@ test('a manual run completes with the agent result', { skip, timeout: 120_000 },
     await env.state.remove();
   }
 });
+
+test(
+  'a provider error is retried automatically, and run show --wait waits through the backoff',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    const server = await env.serve();
+    try {
+      const run = await env.start(
+        'Count. [fake-provider-error 2] [fake-result {"status":"completed","data":{"count":5}}]',
+        { retry: { maxAttempts: 3, initialDelayMs: 300, maxDelayMs: 300 } },
+      );
+      const finished = (await env.shift('run', 'show', run.id, '--wait')) as Run & {
+        executions: Array<{ attempts: Array<{ state: string; error: { code: string } | null }> }>;
+      };
+      assert.equal(finished.state, 'COMPLETED');
+      assert.deepEqual(finished.outcome, { data: { count: 5 } });
+      assert.deepEqual(
+        finished.executions[1]!.attempts.map((attempt) => [attempt.state, attempt.error?.code]),
+        [
+          ['FAILED', 'PROVIDER_ERROR'],
+          ['FAILED', 'PROVIDER_ERROR'],
+          ['COMPLETED', undefined],
+        ],
+      );
+      assert.equal(await env.userMessages(), 3, 'one prompt per attempt, in one session');
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
 
 test(
   'killing Shift during tool work kills the tool and reports the outcome as unknown',

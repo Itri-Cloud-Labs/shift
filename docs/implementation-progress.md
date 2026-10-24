@@ -265,3 +265,20 @@ Acceptance coverage:
 - **Totals:** `pnpm check` passed 116 tests (107 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
 
 CI follow-up, 2026-10-18: one of the two server runs on the rebased commit failed in "a runtime that cannot start fails cleanly and leaves no scope". The failed start's scope was still listed right after it was killed. `SystemdScopes.kill` returned once the scope had no processes, but systemd keeps an emptied scope `active` until it handles the cgroup-empty notification. `kill` now also waits, within the same deadline, until the unit reports `inactive`, `failed` or unloaded. The containment guarantee (no processes remain) is unchanged; the next listing just agrees with it. Five consecutive supervisor runs passed.
+
+## Automatic retries
+
+Status: complete for the retry half of M04b. The active-time budget remains. Date: 2026-10-24.
+
+Changed files: migration 0005 (`wakeups`) and its journal entry; the run repository (retry disposition on execution errors, retry scheduling inside the completing transaction, wake-up firing, cancellation of pending wake-ups, the run view's `wait` and per-execution `attempts`, the previous-attempt lookup); the engine (wake-ups fired on every pump, one timer for the earliest due row); AgentService (which failures are safe to retry, the retry prompt naming the error); the workflow validator (retries accepted, delays capped at 24 hours and ordered); `run show --wait` through a backoff; the fake OpenCode agent's `[fake-provider-error N]`; engine, workflow, storage and end-to-end tests; the workflow guide, API reference, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Retry:** a provider error waits in `WAITING` with `wait: {kind: retry, attempt: 2, dueAt}` inside the jittered window, sends nothing until the wake-up is due, then retries in the same session with a prompt naming `PROVIDER_ERROR` and the frozen goal. Attempts read `FAILED (PROVIDER_ERROR)`, `COMPLETED`.
+- **Exhaustion:** three provider errors with `maxAttempts: 3` fail the run with the last error after exactly three turns.
+- **Never retried:** `PROVIDER_AUTH` fails after one attempt even with retries allowed. Unknown outcomes still wait in `NEEDS_HUMAN` (existing test).
+- **Harness start failure:** a session that cannot be created is retried, and the next attempt sends the plain goal because nothing was prompted before.
+- **Restart:** a server stopped during a 60-second backoff and restarted after the due time retries once at startup; one wake-up row ends `FIRED` and exactly two turns exist.
+- **Cancel:** cancelling during a backoff ends `CANCELLED` at once, owner `retry` is refused while waiting, the wake-up ends `CANCELLED`, and advancing past its due time sends nothing.
+- **End-to-end:** `shift run show --wait` follows a real server through two provider errors (HTTP 503 from the fake agent) and returns the completed run with three attempts and three prompts in one session.
+- **Totals:** `pnpm check` passed 123 tests (114 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

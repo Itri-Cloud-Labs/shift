@@ -19,6 +19,7 @@ import type {
   ResultHandler,
   SubmissionReceipt,
 } from '../src/harness/types.js';
+import { ShiftError } from '../src/domain/errors.js';
 import { createLogger } from '../src/logging.js';
 import { openStore, type Store } from '../src/persistence/store.js';
 import type { Json } from '../src/harness/types.js';
@@ -50,6 +51,8 @@ class FakeHarness implements HarnessAdapter {
   readonly submits: string[] = [];
   cancels = 0;
   creates = 0;
+  // Session creations that fail as if the runtime could not start.
+  failCreates = 0;
   confirmCancel = true;
   handler!: ResultHandler;
   #calls = 0;
@@ -71,6 +74,10 @@ class FakeHarness implements HarnessAdapter {
   }
 
   async createSession(request: HarnessCreateRequest): Promise<HarnessSessionHandle> {
+    if (this.failCreates > 0) {
+      this.failCreates--;
+      throw new ShiftError('HARNESS_START_FAILED', 'The harness runtime did not start.', 503);
+    }
     this.creates++;
     return {
       shiftSessionId: request.shiftSessionId,
@@ -187,12 +194,14 @@ interface Harnessed {
   fake: FakeHarness;
   repository: string;
   state: string;
+  // The engine's clock, which decides when wake-ups fall due.
+  clock: FakeClock;
   close(): Promise<void>;
 }
 
 async function engineFor(
   behave: Behaviour,
-  existing?: { state: string; fake?: FakeHarness },
+  existing?: { state: string; fake?: FakeHarness; clock?: FakeClock },
 ): Promise<Harnessed> {
   const state = existing?.state ?? (await temporaryState()).path;
   const repository = join(state, 'repo');
@@ -210,12 +219,13 @@ async function engineFor(
   const fake = existing?.fake ?? new FakeHarness(behave);
   fake.behave = behave;
   const definitions = new DefinitionRepository(store.db, new FakeClock());
+  const clock = existing?.clock ?? new FakeClock();
   const engine = new RunEngine({
     store,
     definitions,
     receipts: new CommandReceipts(store.db, new FakeClock()),
     workspaces,
-    clock: new FakeClock(),
+    clock,
     logger: createLogger('silent'),
     adapter: fake,
     artifactRoot: join(state, 'artifacts'),
@@ -231,6 +241,7 @@ async function engineFor(
     fake,
     repository,
     state,
+    clock,
     async close() {
       await engine.stop(5_000);
       store.close();
@@ -243,12 +254,20 @@ type RunView = {
   state: string;
   outcome: unknown;
   attention: { code: string } | null;
+  wait: {
+    kind: string;
+    executionId: string;
+    dueAt: number;
+    attempt: number;
+    error: { code: string; message: string };
+  } | null;
   executions: Array<{
     id: string;
     node: string;
     state: string;
     output: unknown;
     error: { code?: string; category?: string } | null;
+    attempts: Array<{ number: number; state: string; error: { code?: string } | null }>;
   }>;
   invocations: Array<{
     kind: string;
@@ -265,7 +284,10 @@ const view = (harnessed: Harnessed, id: string) =>
 async function settled(harnessed: Harnessed, id: string): Promise<RunView> {
   return eventually(() => {
     const run = view(harnessed, id);
-    return run.state === 'RUNNING' ? undefined : run;
+    // A retry backoff keeps going on its own; tests that need it advance the clock first.
+    return run.state === 'RUNNING' || (run.state === 'WAITING' && run.wait?.kind === 'retry')
+      ? undefined
+      : run;
   });
 }
 
@@ -291,11 +313,15 @@ async function publish(
   return workflow.id;
 }
 
-const agentWorkflow = (agent: Record<string, unknown> = {}): Json =>
+const agentWorkflow = (
+  agent: Record<string, unknown> = {},
+  node: Record<string, unknown> = {},
+): Json =>
   ({
     nodes: [
       { id: 'start', type: 'manual_trigger' },
       {
+        ...node,
         id: 'agent',
         type: 'agent',
         config: {
@@ -317,8 +343,12 @@ const agentWorkflow = (agent: Record<string, unknown> = {}): Json =>
     ],
   }) as Json;
 
-async function start(harnessed: Harnessed, agent: Record<string, unknown> = {}): Promise<string> {
-  const workflowId = await publish(harnessed, agentWorkflow(agent));
+async function start(
+  harnessed: Harnessed,
+  agent: Record<string, unknown> = {},
+  node: Record<string, unknown> = {},
+): Promise<string> {
+  const workflowId = await publish(harnessed, agentWorkflow(agent, node));
   const response = await harnessed.engine.startRun({ workflowId });
   return (response.body as { run: { id: string } }).run.id;
 }
@@ -1586,6 +1616,173 @@ test('control commands check the run state and their input', async () => {
     await assert.rejects(async () => control(harnessed, id, 'complete', {}), {
       code: 'INVALID_REQUEST',
     });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// ---- Automatic retries (specification 6.6) ----
+
+// Fails the first `failures` turns with a provider error, then completes.
+const providerErrorsThenComplete = (failures: number, code = 'PROVIDER_ERROR'): Behaviour => {
+  let turns = 0;
+  return async (turn, fake) => {
+    if (++turns <= failures) {
+      turn.status = 'ended';
+      turn.outcome = 'failed';
+      turn.failure = { code: code as HarnessFailure['code'], message: 'The provider failed.' };
+      return;
+    }
+    await complete({ count: 4 })(turn, fake);
+  };
+};
+
+const retrying = (maxAttempts: number, initialDelayMs = 0, maxDelayMs = initialDelayMs) => ({
+  retry: { maxAttempts, initialDelayMs, maxDelayMs },
+});
+
+const attemptsOf = (run: RunView) =>
+  run.executions[1]!.attempts.map((attempt) => [attempt.state, attempt.error?.code ?? null]);
+
+test('a provider error waits out its backoff, then retries in the same session', async () => {
+  const harnessed = await engineFor(providerErrorsThenComplete(1));
+  try {
+    const startedAt = harnessed.clock.now();
+    const id = await start(harnessed, {}, retrying(3, 10_000, 60_000));
+    const waiting = await until(harnessed, id, (run) => run.state === 'WAITING');
+    assert.equal(waiting.wait?.kind, 'retry');
+    assert.equal(waiting.wait?.attempt, 2);
+    assert.equal(waiting.wait?.error.code, 'PROVIDER_ERROR');
+    assert.ok(
+      waiting.wait!.dueAt >= startedAt + 5_000 && waiting.wait!.dueAt <= startedAt + 10_000,
+      'the first delay is between half and all of the initial delay',
+    );
+    assert.deepEqual(attemptsOf(waiting), [['FAILED', 'PROVIDER_ERROR']]);
+    assert.equal(waiting.executions[1]!.state, 'WAITING');
+    await delay(50);
+    assert.equal(harnessed.fake.turns.size, 1, 'nothing is sent before the wake-up is due');
+
+    harnessed.clock.advance(10_000);
+    const run = await settled(harnessed, id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.equal(run.wait, null);
+    assert.deepEqual(attemptsOf(run), [
+      ['FAILED', 'PROVIDER_ERROR'],
+      ['COMPLETED', null],
+    ]);
+    assert.deepEqual(
+      run.invocations.map((invocation) => [invocation.kind, invocation.state]),
+      [
+        ['goal', 'FAILED'],
+        ['continuation', 'COMPLETED'],
+      ],
+    );
+    const [first, second] = [...harnessed.fake.turns.values()];
+    assert.equal(second!.handle.harnessSessionId, first!.handle.harnessSessionId, 'same session');
+    assert.equal(harnessed.fake.creates, 1);
+    assert.match(second!.prompt, /failed before it finished \(PROVIDER_ERROR: /);
+    assert.match(second!.prompt, /Task: Count the words\./, 'the frozen goal is sent again');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('retries stop at the attempt limit, and the last failure fails the run', async () => {
+  const harnessed = await engineFor(providerErrorsThenComplete(10));
+  try {
+    const run = await settled(harnessed, await start(harnessed, {}, retrying(3)));
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(attemptsOf(run), [
+      ['FAILED', 'PROVIDER_ERROR'],
+      ['FAILED', 'PROVIDER_ERROR'],
+      ['FAILED', 'PROVIDER_ERROR'],
+    ]);
+    assert.equal(run.executions[1]!.error?.code, 'PROVIDER_ERROR');
+    assert.equal(harnessed.fake.turns.size, 3);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('failures that would repeat are not retried automatically', async () => {
+  const harnessed = await engineFor(providerErrorsThenComplete(10, 'PROVIDER_AUTH'));
+  try {
+    const run = await settled(harnessed, await start(harnessed, {}, retrying(3)));
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(attemptsOf(run), [['FAILED', 'PROVIDER_AUTH']]);
+    assert.equal(harnessed.fake.turns.size, 1);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a harness that cannot start is retried before any prompt is sent', async () => {
+  const harnessed = await engineFor(complete({ count: 2 }));
+  harnessed.fake.failCreates = 1;
+  try {
+    const run = await settled(harnessed, await start(harnessed, {}, retrying(2)));
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(attemptsOf(run), [
+      ['FAILED', 'HARNESS_START_FAILED'],
+      ['COMPLETED', null],
+    ]);
+    assert.deepEqual(
+      run.invocations.map((invocation) => invocation.kind),
+      ['goal'],
+      'the first prompt is the goal: no earlier attempt sent one',
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a backoff survives a restart, and a wake-up due at startup fires once', async () => {
+  const first = await engineFor(providerErrorsThenComplete(1));
+  const id = await start(first, {}, retrying(3, 60_000));
+  const waiting = await until(first, id, (run) => run.state === 'WAITING');
+  await first.close();
+  // The server comes back after the deadline passed.
+  const clock = new FakeClock(waiting.wait!.dueAt + 1);
+  const second = await engineFor(providerErrorsThenComplete(0), {
+    state: first.state,
+    fake: first.fake,
+    clock,
+  });
+  try {
+    const run = await settled(second, id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(attemptsOf(run), [
+      ['FAILED', 'PROVIDER_ERROR'],
+      ['COMPLETED', null],
+    ]);
+    assert.equal(second.fake.turns.size, 2, 'exactly one retry was sent');
+    const wakeups = second.store.db.prepare('SELECT state FROM wakeups').all();
+    assert.deepEqual(wakeups, [{ state: 'FIRED' }]);
+  } finally {
+    await second.close();
+  }
+});
+
+test('cancelling during a backoff cancels the run and its wake-up', async () => {
+  const harnessed = await engineFor(providerErrorsThenComplete(1));
+  try {
+    const id = await start(harnessed, {}, retrying(3, 60_000));
+    await until(harnessed, id, (run) => run.state === 'WAITING');
+    await assert.rejects(async () => control(harnessed, id, 'retry'), {
+      code: 'RUN_STATE_CONFLICT',
+    });
+    const cancelled = control(harnessed, id, 'cancel', { reason: 'not needed' });
+    assert.equal(cancelled.state, 'CANCELLED');
+    assert.equal(cancelled.wait, null);
+    harnessed.clock.advance(60_000);
+    await delay(100);
+    const run = view(harnessed, id);
+    assert.equal(run.state, 'CANCELLED');
+    assert.equal(run.executions[1]!.state, 'CANCELLED');
+    assert.equal(harnessed.fake.turns.size, 1, 'the retry never ran');
+    assert.deepEqual(harnessed.store.db.prepare('SELECT state FROM wakeups').all(), [
+      { state: 'CANCELLED' },
+    ]);
   } finally {
     await harnessed.close();
   }

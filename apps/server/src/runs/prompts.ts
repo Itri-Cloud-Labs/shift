@@ -49,11 +49,18 @@ export function continuationPrompt(task: AgentTask, artifactDirectory: string): 
   ].join('\n');
 }
 
-// After an owner retry. The earlier attempt stopped without evidence of what it did, so the agent
-// must establish the current state before acting again.
-export function retryPrompt(task: AgentTask, artifactDirectory: string): string {
+// Starts a later attempt. After an owner retry the earlier attempt stopped without evidence of
+// what it did; after an automatic retry it failed with `failure`, possibly midway. Either way the
+// agent must establish the current state before acting again.
+export function retryPrompt(
+  task: AgentTask,
+  artifactDirectory: string,
+  failure?: { code: string; message: string },
+): string {
   return [
-    'An earlier attempt at this task stopped unexpectedly, and what it changed is unknown. Its tools may have completed some steps. First inspect the working directory to establish what was already done, then finish the original task without repeating completed steps.',
+    failure
+      ? `An earlier attempt at this task failed before it finished (${failure.code}: ${failure.message}). Shift is retrying it. Its tools may have completed some steps. First inspect the working directory to establish what was already done, then finish the original task without repeating completed steps.`
+      : 'An earlier attempt at this task stopped unexpectedly, and what it changed is unknown. Its tools may have completed some steps. First inspect the working directory to establish what was already done, then finish the original task without repeating completed steps.',
     '',
     goalPrompt(task, artifactDirectory),
   ].join('\n');
