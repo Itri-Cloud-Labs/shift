@@ -66,12 +66,13 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 
 ## Node types
 
-| Type             | Config                                                                                                                                     | Ports              |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
-| `manual_trigger` | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                          | `success`          |
-| `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value.                       | `success`, `error` |
-| `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema` and `limits`. See [agent nodes](#agent-nodes). | `success`, `error` |
-| `end`            | Optional `outcome` (`COMPLETED` or `FAILED`, default `COMPLETED`) and `reason`.                                                            | none               |
+| Type             | Config                                                                                                                                                                                                                           | Ports              |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| `manual_trigger` | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                                                                                                                | `success`          |
+| `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value.                                                                                                             | `success`, `error` |
+| `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema` and `limits`. See [agent nodes](#agent-nodes).                                                                                       | `success`, `error` |
+| `wait`           | Exactly one of `durationMs` (up to 366 days) or `until`, an ISO 8601 time with an offset such as `2026-11-01T09:00:00Z`; `until` can use `{{name}}` bindings. Passes its input through when the time comes. See [waits](#waits). | `success`, `error` |
+| `end`            | Optional `outcome` (`COMPLETED` or `FAILED`, default `COMPLETED`) and `reason`.                                                                                                                                                  | none               |
 
 The trigger's output is the run input. A transform's output is its rendered template, at most 1 MiB. An `end` node passes its input through and finishes the run with its declared outcome.
 
@@ -191,12 +192,18 @@ Runs started before workspaces existed keep working in the repository itself.
 | State              | Meaning                                                                                                                                                                                            |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RUNNING`          | Nodes are executing or about to.                                                                                                                                                                   |
-| `WAITING`          | A step failed temporarily and waits to be retried. `wait` says when; see [automatic retries](#automatic-retries).                                                                                  |
+| `WAITING`          | A Wait node waits for its time, or a step failed temporarily and waits to be retried. `wait` says which and when; see [waits](#waits) and [automatic retries](#automatic-retries).                 |
 | `NEEDS_HUMAN`      | The run stopped because it can't continue safely. `attention` says why. Continue it with `shift run retry`, `fail`, `complete` or `extend`, or cancel it; see [owner decisions](#owner-decisions). |
 | `CANCEL_REQUESTED` | `shift run cancel` was accepted, and Shift is stopping the running agent.                                                                                                                          |
 | `CANCELLED`        | The run was cancelled. Work completed before cancellation is kept; nothing is rolled back.                                                                                                         |
 | `COMPLETED`        | The run reached an `end` node or an unconnected port. `outcome` holds the final data.                                                                                                              |
 | `FAILED`           | A node failed without an `error` connection, or an `end` node declared `FAILED`.                                                                                                                   |
+
+## Waits
+
+A `wait` node fixes its deadline in UTC when it starts: now plus `durationMs`, or `until` once its bindings are filled in. An `until` without an offset is refused at publish, and one that a binding turns into something else fails the node with `INVALID_DEADLINE`. A deadline that has already passed lets the input straight through.
+
+While it waits, the run is `WAITING` with `wait: {kind: "timer", executionId, dueAt}`. Waiting costs no [active time](#active-time). The deadline is stored, so a restart keeps waiting, and a deadline that passed while Shift was stopped fires as soon as it starts, exactly once. Cancelling the run cancels the wait. `shift run show --wait` keeps waiting until the time comes.
 
 ## Automatic retries
 
@@ -277,4 +284,4 @@ Publishing refuses these, so a document never silently ignores them:
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 
-Human and timer waits, Git and GitHub nodes, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
+Human input and approval nodes, Git and GitHub nodes, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).

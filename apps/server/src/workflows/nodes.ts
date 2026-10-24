@@ -64,6 +64,21 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
     },
   },
   {
+    // Waits for `durationMs` or until `until`, an ISO 8601 time with an offset that may use
+    // `{{name}}` bindings, then passes its input through. The deadline is fixed when it starts.
+    type: 'wait',
+    version: 1,
+    ports: ['success', 'error'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        durationMs: { type: 'integer', minimum: 0, maximum: 366 * 24 * 60 * 60 * 1000 },
+        until: { type: 'string', minLength: 1, maxLength: 200 },
+      },
+    },
+  },
+  {
     type: 'end',
     version: 1,
     ports: [],

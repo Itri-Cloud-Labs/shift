@@ -244,6 +244,16 @@ function depth(value: unknown, level = 0): number {
 }
 
 // `{{name}}` placeholders in strings and `{"$binding": "name"}` objects in templates.
+// An ISO 8601 date and time with an explicit offset, as milliseconds since the epoch. Times without
+// an offset are refused, so a deadline never depends on the server's time zone.
+export function parseDeadline(text: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/.test(text)) {
+    return null;
+  }
+  const time = Date.parse(text);
+  return Number.isNaN(time) ? null : time;
+}
+
 export function templateBindings(value: unknown): string[] {
   if (typeof value === 'string')
     return [...value.matchAll(/\{\{\s*([A-Za-z][\w-]*)\s*\}\}/g)].map((m) => m[1]!);
@@ -324,6 +334,21 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(`${at}/config/${field}`, 'Not a valid JSON Schema 2020-12 document.');
       }
     }
+    if (
+      node.type === 'wait' &&
+      (config['durationMs'] === undefined) === (config['until'] === undefined)
+    ) {
+      add(`${at}/config`, 'A wait needs either durationMs or until.');
+    } else if (
+      typeof config['until'] === 'string' &&
+      templateBindings(config['until']).length === 0 &&
+      parseDeadline(config['until']) === null
+    ) {
+      add(
+        `${at}/config/until`,
+        'Not an ISO 8601 time with a UTC offset, such as 2026-11-01T09:00:00Z.',
+      );
+    }
     if (node.retry.maxDelayMs < node.retry.initialDelayMs) {
       add(`${at}/retry/maxDelayMs`, 'The maximum delay is shorter than the initial delay.');
     }
@@ -341,7 +366,9 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(`${at}/bindings/${name}/fallback`, 'An optional binding needs an explicit fallback.');
       }
     }
-    for (const name of templateBindings(config['goal'] ?? config['data'] ?? null)) {
+    for (const name of templateBindings(
+      config['goal'] ?? config['data'] ?? config['until'] ?? null,
+    )) {
       if (!(name in node.bindings))
         add(`${at}/config`, `The template uses undeclared binding ${name}.`);
     }

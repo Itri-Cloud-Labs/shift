@@ -284,8 +284,9 @@ const view = (harnessed: Harnessed, id: string) =>
 async function settled(harnessed: Harnessed, id: string): Promise<RunView> {
   return eventually(() => {
     const run = view(harnessed, id);
-    // A retry backoff keeps going on its own; tests that need it advance the clock first.
-    return run.state === 'RUNNING' || (run.state === 'WAITING' && run.wait?.kind === 'retry')
+    // Backoffs and timers end on their own; tests that need them advance the clock first.
+    return run.state === 'RUNNING' ||
+      (run.state === 'WAITING' && ['retry', 'timer'].includes(run.wait?.kind ?? ''))
       ? undefined
       : run;
   });
@@ -1936,5 +1937,125 @@ test('after a restart, time a running attempt cannot account for is charged and 
     assert.match(payload.explanation, /charged in full/);
   } finally {
     await second.close();
+  }
+});
+
+// ---- Wait nodes (specification 8) ----
+
+// start -> wait -> end, with the wait's config and bindings.
+const waitWorkflow = (config: Record<string, unknown>, bindings: Record<string, unknown> = {}) =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'pause', type: 'wait', config, bindings },
+      { id: 'end', type: 'end' },
+    ],
+    connections: [connect('c1', 'start', 'pause'), connect('c2', 'pause', 'end')],
+  }) as Json;
+
+const wakeupStates = (harnessed: Harnessed) =>
+  harnessed.store.db.prepare('SELECT reason, state FROM wakeups ORDER BY rowid').all();
+
+test('a wait holds the run until its deadline, then passes its input through once', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const workflowId = await publish(harnessed, waitWorkflow({ durationMs: 60_000 }));
+    const waiting = (await startNow(harnessed, workflowId, { input: { n: 1 } })) as TimedRun;
+    assert.equal(waiting.state, 'WAITING');
+    assert.deepEqual(waiting.wait, {
+      kind: 'timer',
+      executionId: waiting.executions[1]!.id,
+      dueAt: clock.now() + 60_000,
+    });
+    assert.equal(waiting.executions[1]!.state, 'WAITING');
+    await delay(50);
+    clock.advance(59_999);
+    await delay(50);
+    assert.equal(view(harnessed, waiting.id).state, 'WAITING', 'not due yet');
+
+    clock.advance(1);
+    const run = (await settled(harnessed, waiting.id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { n: 1 } });
+    assert.equal(run.wait, null);
+    assert.deepEqual(attemptsOf(run), [['COMPLETED', null]]);
+    assert.equal(run.activeTime.usedMs, 0, 'waiting costs no active time');
+    assert.deepEqual(wakeupStates(harnessed), [{ reason: 'timer', state: 'FIRED' }]);
+    const completions = harnessed.store.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM events WHERE type = 'execution.completed' AND execution_id = ?",
+      )
+      .get(run.executions[1]!.id) as { count: number };
+    assert.equal(completions.count, 1);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a timer survives a restart and fires once when it fell due while Shift was down', async () => {
+  const first = await engineFor(() => {});
+  const workflowId = await publish(first, waitWorkflow({ durationMs: 3_600_000 }));
+  const { id, wait } = (await startNow(first, workflowId)) as TimedRun;
+  await first.close();
+  const second = await engineFor(() => {}, {
+    state: first.state,
+    clock: new FakeClock(wait!.dueAt + 5_000),
+  });
+  try {
+    const run = await settled(second, id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(wakeupStates(second), [{ reason: 'timer', state: 'FIRED' }]);
+  } finally {
+    await second.close();
+  }
+});
+
+test('a wait until a past time passes at once, and an until from a binding is resolved once', async () => {
+  const clock = new FakeClock(Date.parse('2026-10-24T12:00:00Z'));
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const past = await publish(harnessed, waitWorkflow({ until: '2026-10-24T11:00:00Z' }));
+    const passed = await startNow(harnessed, past);
+    assert.equal(passed.state, 'COMPLETED');
+    assert.deepEqual(wakeupStates(harnessed), []);
+
+    const bound = await publish(
+      harnessed,
+      waitWorkflow({ until: '{{at}}' }, { at: { kind: 'trigger', path: ['at'] } }),
+    );
+    const waiting = (await startNow(harnessed, bound, {
+      input: { at: '2026-10-24T15:00:00+02:00' },
+    })) as TimedRun;
+    assert.equal(waiting.state, 'WAITING');
+    assert.equal(waiting.wait?.dueAt, Date.parse('2026-10-24T13:00:00Z'), 'the offset is applied');
+    clock.advance(3_600_000);
+    const run = await settled(harnessed, waiting.id);
+    assert.equal(run.state, 'COMPLETED');
+
+    const invalid = await startNow(harnessed, bound, { input: { at: 'tomorrow' } });
+    assert.equal(invalid.state, 'FAILED');
+    assert.equal((invalid.outcome as { code: string }).code, 'INVALID_DEADLINE');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('cancelling a waiting run cancels its timer', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const workflowId = await publish(harnessed, waitWorkflow({ durationMs: 60_000 }));
+    const { id } = await startNow(harnessed, workflowId);
+    const cancelled = control(harnessed, id, 'cancel');
+    assert.equal(cancelled.state, 'CANCELLED');
+    clock.advance(120_000);
+    await delay(100);
+    const run = view(harnessed, id);
+    assert.equal(run.state, 'CANCELLED');
+    assert.deepEqual(attemptsOf(run), [['CANCELLED', null]]);
+    assert.deepEqual(wakeupStates(harnessed), [{ reason: 'timer', state: 'CANCELLED' }]);
+  } finally {
+    await harnessed.close();
   }
 });

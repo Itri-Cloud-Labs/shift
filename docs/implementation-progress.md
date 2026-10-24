@@ -297,3 +297,19 @@ Acceptance coverage:
 - **Recovery:** an attempt left running across a 2-minute outage is charged 120 seconds at restart, with one `run.active_time_charged` event that explains it.
 - **End-to-end:** with a 3-second budget, the fake agent's 8-second tool is stopped and dies. `shift run extend --active-minutes 1` continues the run to `COMPLETED`, and both attempts are charged.
 - **Totals:** `pnpm check` passed 128 tests (119 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Wait nodes
+
+Status: complete for the timer half of M04c. Human input and approval are next. Date: 2026-10-24.
+
+Changed files: the `wait` node type and its publish checks (`durationMs` or `until`, offsets required, bindings declared); the engine (deadline frozen when preparing, pass-through when due, waiting otherwise); the run repository (`startWait`, timer firing that completes and routes in one transaction, cancellation of waiting attempts, `wait` for timers in the run view); `run show --wait` through a timer; engine, workflow and end-to-end tests; the workflow guide, API reference, prompts status and decision log. The active-time end-to-end test from the previous change gets a 6-second budget, because a slow OpenCode start under full-suite load used up its 3 seconds before the tool began.
+
+Acceptance coverage:
+
+- **Fake clock:** a 60-second wait stays `WAITING` at 59.999 seconds and completes at 60 seconds with its input passed through. One `execution.completed` event, one `FIRED` timer, no active time.
+- **Restart:** a 1-hour wait whose deadline passed while the server was down completes once on the next start.
+- **Deadlines:** a past `until` passes at once without a wake-up. An `until` from a trigger binding with a `+02:00` offset resolves to the right UTC instant. An unparseable bound value fails the run with `INVALID_DEADLINE`.
+- **Cancel:** cancelling a waiting run marks the attempt and the timer `CANCELLED`, and the run stays cancelled past the deadline.
+- **Publish:** a wait with neither setting, with a local time, or with an undeclared binding is refused.
+- **End-to-end:** `shift run show --wait` returns a run completed by a real server's 1.5-second wait.
+- **Totals:** `pnpm check` passed 133 tests (124 server, 9 app) with zero skips. The active-time end-to-end test passed 3 more runs in a row. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.

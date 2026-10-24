@@ -81,7 +81,6 @@ async function setup() {
     await writeFile(
       file,
       JSON.stringify({
-        ...document,
         nodes: [
           { id: 'start', type: 'manual_trigger' },
           { ...agent, id: 'agent', type: 'agent', config: { goal } },
@@ -97,6 +96,8 @@ async function setup() {
           },
           { id: 'c2', fromNodeId: 'agent', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
         ],
+        // Replaces any of the above, including the graph itself.
+        ...document,
       }),
     );
     const workflow = (await shift(
@@ -226,9 +227,10 @@ test(
     const server = await env.serve();
     try {
       const run = await env.start(
-        'Work. [fake-work 8000] [fake-result {"status":"completed","data":{"done":true}}]',
+        'Work. [fake-work 12000] [fake-result {"status":"completed","data":{"done":true}}]',
         {},
-        { execution: { limits: { maxExecutions: 1000, maxActiveMs: 3000 } } },
+        // Attempt time includes starting OpenCode, so the budget leaves room for a slow start.
+        { execution: { limits: { maxExecutions: 1000, maxActiveMs: 6000 } } },
       );
       const tool = await env.toolStarted();
       const stopped = await env.until(run.id, (candidate) => candidate.state === 'NEEDS_HUMAN');
@@ -242,7 +244,44 @@ test(
       assert.equal(finished.state, 'COMPLETED');
       assert.deepEqual(finished.outcome, { data: { done: true } });
       assert.ok(finished.activeTime.limitMs >= 61_000);
-      assert.ok(finished.activeTime.usedMs >= 11_000, 'both attempts were charged');
+      assert.ok(finished.activeTime.usedMs >= 18_000, 'both attempts were charged');
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
+  'run show --wait waits through a Wait node and returns the passed-through input',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    const server = await env.serve();
+    try {
+      const run = await env.start(
+        'unused',
+        {},
+        {
+          nodes: [
+            { id: 'start', type: 'manual_trigger' },
+            { id: 'pause', type: 'wait', config: { durationMs: 1500 } },
+          ],
+          connections: [
+            {
+              id: 'c1',
+              fromNodeId: 'start',
+              fromPort: 'success',
+              toNodeId: 'pause',
+              toPort: 'input',
+            },
+          ],
+        },
+      );
+      assert.equal((await env.show(run.id)).state, 'WAITING');
+      const finished = (await env.shift('run', 'show', run.id, '--wait')) as Run;
+      assert.equal(finished.state, 'COMPLETED');
+      assert.deepEqual(finished.outcome, { data: {} });
     } finally {
       await stopped(server);
       await env.state.remove();
