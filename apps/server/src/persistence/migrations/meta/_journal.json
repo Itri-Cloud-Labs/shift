@@ -50,6 +50,13 @@
       "when": 1792627200000,
       "tag": "0006_active_time",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1792713600000,
+      "tag": "0007_human_interactions",
+      "breakpoints": true
     }
   ]
 }

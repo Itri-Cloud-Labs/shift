@@ -142,6 +142,64 @@ test('validation rejects graphs the executor cannot run', () => {
       /UTC offset/,
     ],
     [
+      'form with an unsupported keyword',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'ask',
+          type: 'human_input',
+          config: {
+            title: 'Why?',
+            form: { type: 'object', properties: { why: { oneOf: [{ type: 'string' }] } } },
+          },
+        }),
+      /Use string, number, integer, boolean, object or array/,
+    ],
+    [
+      'form field with an unsupported format',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'ask',
+          type: 'human_input',
+          config: {
+            title: 'When?',
+            form: { type: 'object', properties: { at: { type: 'string', format: 'ipv4' } } },
+          },
+        }),
+      /Use date, date-time, email or uri/,
+    ],
+    [
+      'approval outcome named like a reserved port',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'ask',
+          type: 'approval',
+          config: { title: 'Ship?', outcomes: ['approved', 'timeout'] },
+        }),
+      /must NOT be valid/,
+    ],
+    [
+      'connection from an approval outcome it does not have',
+      (d) => {
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'approval',
+          config: { title: 'Ship?', outcomes: ['ship', 'hold'] },
+        });
+        d.connections[1].fromPort = 'approved';
+      },
+      /Node shape has no port approved/,
+    ],
+    [
+      'undeclared binding in a request title',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'approval',
+          config: { title: 'Ship {{version}}?' },
+        }),
+      /undeclared binding version/,
+    ],
+    [
       'wait until an undeclared binding',
       (d) => d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: { until: '{{when}}' } }),
       /undeclared binding when/,
@@ -170,6 +228,39 @@ test('validation rejects graphs the executor cannot run', () => {
     );
   }
   assert.match(problems({ ...base(), padding: 'x'.repeat(1024 * 1024) })[0]!, /exceeds 1 MiB/);
+});
+
+test('approval outcomes become ports, and a form request with every widget validates', () => {
+  const document = variant((d) => {
+    d.nodes.splice(1, 1, {
+      id: 'shape',
+      type: 'approval',
+      config: {
+        title: 'Ship?',
+        outcomes: ['ship', 'hold'],
+        timeoutMs: 60_000,
+        form: {
+          type: 'object',
+          required: ['notes'],
+          properties: {
+            notes: { type: 'string', maxLength: 100, title: 'Notes' },
+            risk: { type: 'string', enum: ['low', 'high'] },
+            count: { type: 'integer', minimum: 0 },
+            urgent: { type: 'boolean', default: false },
+            due: { type: 'string', format: 'date' },
+            owners: { type: 'array', maxItems: 3, items: { type: 'string' } },
+            contact: { type: 'object', properties: { email: { type: 'string', format: 'email' } } },
+          },
+        },
+      },
+    });
+    d.connections[1].fromPort = 'ship';
+    d.connections.push(
+      { id: 'c3', fromNodeId: 'shape', fromPort: 'hold', toNodeId: 'end', toPort: 'input' },
+      { id: 'c4', fromNodeId: 'shape', fromPort: 'timeout', toNodeId: 'end', toPort: 'input' },
+    );
+  });
+  assert.deepEqual(problems(document), []);
 });
 
 test('equal documents hash equally regardless of key order', () => {

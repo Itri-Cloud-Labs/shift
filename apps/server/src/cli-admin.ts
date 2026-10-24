@@ -22,6 +22,8 @@ const options = {
   reason: { type: 'string' },
   executions: { type: 'string' },
   'active-minutes': { type: 'string' },
+  decision: { type: 'string' },
+  all: { type: 'boolean' },
 } as const;
 
 type Values = {
@@ -264,6 +266,36 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
           )
         )['workspace'],
       );
+    case 'interaction list':
+      return print(
+        (await get(`/api/v0/admin/interactions${values.all ? '?all=true' : ''}`))['interactions'],
+      );
+    case 'interaction show':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/interactions/${encodeURIComponent(need(target, 'INTERACTION_ID'))}`,
+          )
+        )['interaction'],
+      );
+    case 'interaction respond': {
+      const path = `/api/v0/admin/interactions/${encodeURIComponent(need(target, 'INTERACTION_ID'))}`;
+      // Without --revision the response is checked against the request as it is now.
+      const expected =
+        revision(values.revision) ??
+        ((await get(path))['interaction'] as { revision: number }).revision;
+      const body: Record<string, unknown> = { revision: expected };
+      if (values.decision !== undefined) body['decision'] = values.decision;
+      if (values.file !== undefined) body['response'] = await file(values.file);
+      const interaction = (await send('POST', `${path}/respond`, body))['interaction'] as {
+        runId: string;
+      };
+      if (!values.wait) return print(interaction);
+      const run = (await get(`/api/v0/admin/runs/${encodeURIComponent(interaction.runId)}`))[
+        'run'
+      ] as Record<string, unknown>;
+      return print(await waitFor(run));
+    }
     default:
       throw invalid('Unknown command. Run shift help.');
   }

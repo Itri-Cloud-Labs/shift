@@ -9,7 +9,7 @@ The specifications are approved as working documents. Instruct an agent to execu
 Work has followed the roadmap in risk order rather than strictly by prompt number; [implementation progress](../implementation-progress.md) records each change and its verification.
 
 - Done: 00, 01, 02, 03, 04 (definitions), 05 (linear execution) and 15 (one workspace per run, without reuse).
-- Partly done: 06 (error routing, loops and node references; no branching or fan-out), 08 (owner controls, automatic retries and the active-time budget; an explicit retry cannot reopen a `FAILED` run yet), 09 (Wait nodes; human input and approval are next), 17 (OpenCode supervision and the adapter, without client UI), 18 (result contract, schemas and corrections; no reports or handoff content), and 19 (crash and interruption recovery; reconciliation commands are open).
+- Partly done: 06 (error routing, loops and node references; no branching or fan-out), 08 (owner controls, automatic retries and the active-time budget; an explicit retry cannot reopen a `FAILED` run yet), 09 (Wait, Human Input and Approval nodes; held runs come with manual intervention), 17 (OpenCode supervision and the adapter, without client UI), 18 (result contract, schemas and corrections; no reports or handoff content), and 19 (crash and interruption recovery; reconciliation commands are open).
 
 ## Give an agent one task
 

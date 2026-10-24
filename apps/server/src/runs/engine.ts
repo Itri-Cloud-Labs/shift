@@ -6,6 +6,7 @@ import type { HarnessAdapter, Json, ModelRef } from '../harness/types.js';
 import type { CommandReceipts, CommandResponse } from '../persistence/receipts.js';
 import type { Store } from '../persistence/store.js';
 import { parseDeadline, validateDocument } from '../workflows/document.js';
+import { defaultApprovalForm, defaultOutcomes, freezeForm } from '../workflows/forms.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
@@ -18,6 +19,7 @@ import {
   type AgentConfig,
   type Claim,
   type ExecutionContext,
+  type FrozenInteraction,
   type RunSnapshot,
 } from './repository.js';
 
@@ -58,6 +60,17 @@ const controlSchemas = {
   },
 } as const;
 export type RunControlKind = keyof typeof controlSchemas;
+const validateRespond = ajv.compile({
+  type: 'object',
+  additionalProperties: false,
+  required: ['revision'],
+  properties: {
+    revision: { type: 'integer', minimum: 0 },
+    decision: { type: 'string', maxLength: 40 },
+    response: {},
+    commandId,
+  },
+});
 const validateControl = Object.fromEntries(
   Object.entries(controlSchemas).map(([kind, schema]) => [
     kind,
@@ -298,6 +311,38 @@ export class RunEngine {
     this.#stopAttempts(runId, claims, () => this.repository.settleCancellation(runId));
   }
 
+  // Answers a human request as the local owner. The response, its receipt, the event and the
+  // next step commit together; a repeated command returns the stored response.
+  respond(interactionId: string, input: unknown): CommandResponse {
+    if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
+    if (!validateRespond(input)) {
+      throw new ShiftError(
+        'INVALID_REQUEST',
+        'Invalid response.',
+        422,
+        false,
+        (validateRespond.errors ?? []).map((error) => error.instancePath || '/'),
+      );
+    }
+    const { commandId: id, ...body } = input as {
+      commandId?: string;
+      revision: number;
+      decision?: string;
+      response?: Json;
+    };
+    const response = this.#options.receipts.execute(
+      local,
+      id,
+      { op: 'interaction.respond', interactionId, ...body } as Json,
+      () => {
+        this.repository.respond(interactionId, local, id, body);
+        return { status: 200, body: { interaction: this.repository.interaction(interactionId) } };
+      },
+    );
+    this.#pump();
+    return response;
+  }
+
   // Aborts the attempts' running tasks, stops whatever is still active through the harness, then
   // settles. Cancellation and the active-time limit stop work the same way.
   #stopAttempts(
@@ -410,6 +455,8 @@ export class RunEngine {
         } else {
           this.repository.startWait(claim, dueAt);
         }
+      } else if (context.node.type === 'human_input' || context.node.type === 'approval') {
+        this.repository.startInteraction(claim, context.config as unknown as FrozenInteraction);
       } else if (context.node.type === 'end') {
         // End passes its input through; the run takes the node's declared outcome.
         this.repository.completeExecution(claim, {
@@ -461,6 +508,27 @@ export class RunEngine {
         );
       }
       config = { ...authored, dueAt };
+    }
+    if (node.type === 'human_input' || node.type === 'approval') {
+      // The request is frozen here: later draft or default edits never change what is asked.
+      const authored = node.config as {
+        title: string;
+        instructions?: string;
+        form?: Json;
+        outcomes?: string[];
+        timeoutMs?: number;
+      };
+      const frozen: FrozenInteraction = {
+        kind: node.type === 'approval' ? 'approval' : 'input',
+        title: renderText(authored.title, bindings),
+        instructions:
+          authored.instructions === undefined ? null : renderText(authored.instructions, bindings),
+        form: freezeForm(authored.form ?? defaultApprovalForm),
+        outcomes: node.type === 'approval' ? (authored.outcomes ?? [...defaultOutcomes]) : null,
+        expiresAt:
+          authored.timeoutMs === undefined ? null : this.#options.clock.now() + authored.timeoutMs,
+      };
+      config = frozen as unknown as Json;
     }
     if (node.type === 'agent') {
       const authored = node.config as {

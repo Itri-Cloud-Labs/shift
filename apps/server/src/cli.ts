@@ -38,13 +38,19 @@ shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
+shift interaction list [--all]
+shift interaction show INTERACTION_ID
+shift interaction respond INTERACTION_ID [--decision OUTCOME] [--file RESPONSE.json]
+            [--revision N] [--wait]
 
-Project, workflow, run and workspace commands accept --state-dir PATH; changes accept
+Project, workflow, run, workspace and interaction commands accept --state-dir PATH; changes accept
 --command-id ID, which makes repeating the same command return its first result.
 A run in NEEDS_HUMAN continues with retry (run the stuck step again; its agent is
 told earlier effects are unknown), fail (abandon the step), complete (record a
 result you verified, as JSON matching the step's result schema) or extend (raise
 the execution or active-time limit it reached). cancel stops a run at any point.
+A run WAITING for a human form or approval continues with interaction respond:
+--decision picks an approval outcome, and --file holds the form response as JSON.
 Each run works in its own detached worktree of the project, under the state
 directory, at the commit its base ref had when the run started. Worktrees are
 kept after runs finish; remove refuses one with uncommitted changes unless
@@ -77,7 +83,7 @@ async function main(): Promise<void> {
     process.stdout.write(usage);
     return;
   }
-  if (['project', 'workflow', 'run', 'workspace'].includes(command)) {
+  if (['project', 'workflow', 'run', 'workspace', 'interaction'].includes(command)) {
     const { adminCommand } = await import('./cli-admin.js');
     return adminCommand(command, args.slice(1));
   }

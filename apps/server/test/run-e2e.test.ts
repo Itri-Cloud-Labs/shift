@@ -290,6 +290,125 @@ test(
 );
 
 test(
+  'a looping approval graph waits across a restart and resumes exactly once from the CLI',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    let server = await env.serve();
+    const edge = (id: string, from: string, to: string, port = 'success') => ({
+      id,
+      fromNodeId: from,
+      fromPort: port,
+      toNodeId: to,
+      toPort: 'input',
+    });
+    try {
+      const run = await env.start(
+        'unused',
+        {},
+        {
+          nodes: [
+            { id: 'start', type: 'manual_trigger' },
+            { id: 'draft', type: 'transform', config: { data: { plan: 'ship it' } } },
+            { id: 'review', type: 'approval', config: { title: 'Approve the plan?' } },
+            { id: 'end', type: 'end' },
+          ],
+          connections: [
+            edge('c1', 'start', 'draft'),
+            edge('c2', 'draft', 'review'),
+            edge('c3', 'review', 'end', 'approved'),
+            edge('c4', 'review', 'draft', 'rejected'),
+          ],
+        },
+      );
+      type Pending = { id: string; runId: string; title: string; revision: number };
+      const pending = async () => (await env.shift('interaction', 'list')) as Pending[];
+      const [first] = await pending();
+      assert.equal(first!.runId, run.id);
+      assert.equal(first!.title, 'Approve the plan?');
+      const comment = join(env.state.path, 'comment.json');
+      await writeFile(comment, JSON.stringify({ comment: 'Try again.' }));
+      await env.shift(
+        'interaction',
+        'respond',
+        first!.id,
+        '--decision',
+        'rejected',
+        '--file',
+        comment,
+      );
+
+      // The rejection loops back to draft, which asks again; the server then restarts.
+      const second = await (async () => {
+        for (let attempt = 0; attempt < 50; attempt++) {
+          const [next] = await pending();
+          if (next && next.id !== first!.id) return next;
+          await delay(100);
+        }
+        throw new Error('The second request never appeared.');
+      })();
+      await server.terminate();
+      server = await env.serve();
+      assert.deepEqual(
+        (await pending()).map((request) => request.id),
+        [second.id],
+      );
+
+      const answer = ['interaction', 'respond', second.id, '--decision', 'approved'];
+      const finished = (await env.shift(
+        ...answer,
+        '--command-id',
+        'approve-1',
+        '--wait',
+      )) as Run & {
+        executions: Array<{ node: string }>;
+      };
+      assert.equal(finished.state, 'COMPLETED');
+      assert.deepEqual(
+        finished.executions.map((execution) => execution.node),
+        ['start', 'draft', 'review', 'draft', 'review', 'end'],
+      );
+      // The same command is answered from its receipt; another answer conflicts.
+      const repeated = (await env.shift(
+        ...answer,
+        '--command-id',
+        'approve-1',
+        '--revision',
+        '0',
+      )) as {
+        state: string;
+      };
+      assert.equal(repeated.state, 'RESPONDED');
+      const conflicting = await runCli([
+        'interaction',
+        'respond',
+        second.id,
+        '--decision',
+        'rejected',
+        '--revision',
+        '1',
+        '--state-dir',
+        env.state.path,
+      ]);
+      assert.equal(conflicting.code, 1);
+      assert.equal(
+        (JSON.parse(conflicting.errors) as { code: string }).code,
+        'INTERACTION_CONFLICT',
+      );
+      assert.equal((await env.show(run.id)).state, 'COMPLETED');
+      const all = (await env.shift('interaction', 'list', '--all')) as Array<{ state: string }>;
+      assert.deepEqual(
+        all.map((request) => request.state),
+        ['RESPONDED', 'RESPONDED'],
+      );
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
   'killing Shift during tool work kills the tool and reports the outcome as unknown',
   { skip, timeout: 120_000 },
   async () => {

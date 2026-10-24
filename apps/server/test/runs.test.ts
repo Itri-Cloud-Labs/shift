@@ -2059,3 +2059,301 @@ test('cancelling a waiting run cancels its timer', async () => {
     await harnessed.close();
   }
 });
+
+// ---- Human input and approval (specification 6.6) ----
+
+type InteractionView = {
+  id: string;
+  runId: string;
+  kind: string;
+  state: string;
+  revision: number;
+  title: string;
+  instructions: string | null;
+  form: unknown;
+  outcomes: string[] | null;
+  expiresAt: number | null;
+  response: { decision: string | null; data: unknown; actor: unknown; createdAt: number } | null;
+};
+
+const respond = (harnessed: Harnessed, id: string, body: Record<string, unknown>) =>
+  (harnessed.engine.respond(id, body).body as { interaction: InteractionView }).interaction;
+const pendingInteractions = (harnessed: Harnessed) =>
+  harnessed.engine.repository.interactions() as unknown as InteractionView[];
+const interactionOf = (harnessed: Harnessed, id: string) =>
+  harnessed.engine.repository.interaction(id) as unknown as InteractionView;
+
+// start -> ask (approval) -> approved: done, rejected: refused (a failed end).
+const approvalWorkflow = (config: Record<string, unknown> = {}) =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      {
+        id: 'ask',
+        type: 'approval',
+        config: {
+          title: 'Ship {{name}}?',
+          instructions: 'Check the notes for {{name}}.',
+          ...config,
+        },
+        bindings: { name: { kind: 'trigger', path: ['name'] } },
+      },
+      { id: 'done', type: 'end' },
+      { id: 'refused', type: 'end', config: { outcome: 'FAILED', reason: 'rejected' } },
+    ],
+    connections: [
+      connect('c1', 'start', 'ask'),
+      connect('c2', 'ask', 'done', 'approved'),
+      connect('c3', 'ask', 'refused', 'rejected'),
+    ],
+  }) as Json;
+
+test('an approval waits with its frozen request, and the first response routes its outcome', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, approvalWorkflow());
+    const waiting = (await startNow(harnessed, workflowId, { input: { name: 'v1' } })) as TimedRun;
+    assert.equal(waiting.state, 'WAITING');
+    const [request] = pendingInteractions(harnessed);
+    assert.deepEqual(waiting.wait, {
+      kind: 'human',
+      executionId: waiting.executions[1]!.id,
+      interactionId: request!.id,
+      expiresAt: null,
+    });
+    assert.equal(request!.title, 'Ship v1?');
+    assert.equal(request!.instructions, 'Check the notes for v1.');
+    assert.deepEqual(request!.outcomes, ['approved', 'rejected']);
+    assert.deepEqual(request!.form, {
+      type: 'object',
+      additionalProperties: false,
+      properties: { comment: { type: 'string', maxLength: 4000, title: 'Comment' } },
+    });
+    assert.equal(request!.revision, 0);
+
+    // Publishing a changed workflow leaves the pending request as it was frozen.
+    const workflow = harnessed.definitions.workflow(workflowId) as { draftRevision: number };
+    harnessed.definitions.saveDraft(
+      workflowId,
+      workflow.draftRevision,
+      normalizeDocument(approvalWorkflow({ title: 'Something else' })) as Json,
+    );
+    harnessed.definitions.publish(workflowId);
+    assert.equal(interactionOf(harnessed, request!.id).title, 'Ship v1?');
+
+    for (const [body, code] of [
+      [{ revision: 0, decision: 'maybe' }, 'INVALID_RESPONSE'],
+      [{ revision: 0, decision: 'approved', response: { comment: 5 } }, 'INVALID_RESPONSE'],
+      [{ revision: 0, decision: 'approved', response: { extra: true } }, 'INVALID_RESPONSE'],
+      [{ revision: 3, decision: 'approved' }, 'REVISION_CONFLICT'],
+    ] as const) {
+      assert.throws(() => respond(harnessed, request!.id, body), { code });
+    }
+    assert.equal(view(harnessed, waiting.id).state, 'WAITING', 'refused responses change nothing');
+
+    const answer = { revision: 0, decision: 'approved', response: { comment: 'ok' } };
+    const answered = respond(harnessed, request!.id, { ...answer, commandId: 'respond-1' });
+    assert.equal(answered.state, 'RESPONDED');
+    assert.deepEqual(answered.response, {
+      decision: 'approved',
+      data: { comment: 'ok' },
+      actor: { kind: 'cli', id: 'local' },
+      createdAt: answered.response!.createdAt,
+    });
+    assert.deepEqual(
+      respond(harnessed, request!.id, { ...answer, commandId: 'respond-1' }),
+      answered,
+      'a repeated command returns its stored response',
+    );
+    assert.throws(() => respond(harnessed, request!.id, { revision: 1, decision: 'rejected' }), {
+      code: 'INTERACTION_CONFLICT',
+      message: /already answered with approved by cli:local/,
+    });
+
+    const run = (await settled(harnessed, waiting.id)) as TimedRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, {
+      data: { input: { name: 'v1' }, decision: 'approved', response: { comment: 'ok' } },
+    });
+    assert.deepEqual(
+      run.executions.map((execution) => [execution.node, execution.state]),
+      [
+        ['start', 'COMPLETED'],
+        ['ask', 'COMPLETED'],
+        ['done', 'COMPLETED'],
+      ],
+    );
+    assert.equal(run.activeTime.usedMs, 0, 'waiting for a human costs no active time');
+    assert.deepEqual(pendingInteractions(harnessed), []);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// start -> form (human_input) -> success: end; optionally timeout: late (a transform).
+const inputWorkflow = (timeoutRoute: boolean) =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      {
+        id: 'form',
+        type: 'human_input',
+        config: {
+          title: 'Why?',
+          timeoutMs: 60_000,
+          form: {
+            type: 'object',
+            required: ['reason'],
+            properties: { reason: { type: 'string', minLength: 1 } },
+          },
+        },
+      },
+      { id: 'end', type: 'end' },
+      { id: 'late', type: 'transform', config: { data: { late: true } } },
+    ],
+    connections: [
+      connect('c1', 'start', 'form'),
+      connect('c2', 'form', 'end'),
+      ...(timeoutRoute ? [connect('c3', 'form', 'late', 'timeout')] : []),
+    ],
+  }) as Json;
+
+test('human input returns the response with the previous data and context', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, inputWorkflow(true));
+    const { id } = await startNow(harnessed, workflowId, { input: { ticket: 7 } });
+    const [request] = pendingInteractions(harnessed);
+    assert.equal(request!.kind, 'input');
+    assert.equal(request!.outcomes, null);
+    assert.throws(() => respond(harnessed, request!.id, { revision: 0 }), {
+      code: 'INVALID_RESPONSE',
+    });
+    assert.throws(
+      () => respond(harnessed, request!.id, { revision: 0, decision: 'approved', response: {} }),
+      { code: 'INVALID_RESPONSE' },
+    );
+    respond(harnessed, request!.id, { revision: 0, response: { reason: 'flaky test' } });
+    const run = await settled(harnessed, id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, {
+      data: { input: { ticket: 7 }, response: { reason: 'flaky test' } },
+    });
+    assert.deepEqual(wakeupStates(harnessed), [{ reason: 'deadline', state: 'CANCELLED' }]);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an unanswered request takes its timeout route, or fails the run without one', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const routed = await startNow(harnessed, await publish(harnessed, inputWorkflow(true)));
+    const unrouted = await startNow(harnessed, await publish(harnessed, inputWorkflow(false)));
+    const requests = pendingInteractions(harnessed);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]!.expiresAt, clock.now() + 60_000);
+    clock.advance(60_000);
+
+    // A human wait settles `settled`; the deadline then fires on the next pump.
+    const finished = (run: ControlledRun) => run.state !== 'WAITING';
+    const late = await until(harnessed, routed.id, finished);
+    assert.equal(late.state, 'COMPLETED');
+    assert.deepEqual(late.outcome, { data: { late: true } });
+    assert.equal((late.executions[1] as unknown as { port: string }).port, 'timeout');
+    const failed = await until(harnessed, unrouted.id, finished);
+    assert.equal(failed.state, 'FAILED');
+    assert.deepEqual(
+      {
+        code: (failed.outcome as { code: string }).code,
+        category: (failed.outcome as { category: string }).category,
+      },
+      { code: 'INTERACTION_EXPIRED', category: 'blocked' },
+    );
+    for (const request of requests) {
+      assert.equal(interactionOf(harnessed, request.id).state, 'EXPIRED');
+      assert.throws(
+        () => respond(harnessed, request.id, { revision: 0, response: { reason: 'x' } }),
+        {
+          code: 'INTERACTION_RETIRED',
+        },
+      );
+    }
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a response wins over a deadline that falls due afterwards', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const { id } = await startNow(harnessed, await publish(harnessed, inputWorkflow(true)));
+    const [request] = pendingInteractions(harnessed);
+    respond(harnessed, request!.id, { revision: 0, response: { reason: 'in time' } });
+    clock.advance(120_000);
+    await delay(100);
+    const run = view(harnessed, id);
+    assert.equal(run.state, 'COMPLETED');
+    assert.equal(run.executions.length, 3, 'only the success route ran');
+    assert.equal(interactionOf(harnessed, request!.id).state, 'RESPONDED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('cancelling a run retires its pending request', async () => {
+  const clock = new FakeClock();
+  const harnessed = await engineFor(() => {}, { clock });
+  try {
+    const { id } = await startNow(harnessed, await publish(harnessed, inputWorkflow(true)));
+    const [request] = pendingInteractions(harnessed);
+    assert.equal(control(harnessed, id, 'cancel').state, 'CANCELLED');
+    const retired = interactionOf(harnessed, request!.id);
+    assert.equal(retired.state, 'CANCELLED');
+    assert.throws(
+      () =>
+        respond(harnessed, request!.id, { revision: retired.revision, response: { reason: 'x' } }),
+      {
+        code: 'INTERACTION_RETIRED',
+        message: /cancelled/,
+      },
+    );
+    clock.advance(120_000);
+    await delay(100);
+    assert.equal(view(harnessed, id).state, 'CANCELLED');
+    assert.deepEqual(attemptsOf(view(harnessed, id)), [['CANCELLED', null]]);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a pending request survives a restart and is answered exactly once', async () => {
+  const first = await engineFor(() => {});
+  const { id } = await startNow(first, await publish(first, approvalWorkflow()), {
+    input: { name: 'v2' },
+  });
+  const [request] = pendingInteractions(first);
+  await first.close();
+  const second = await engineFor(() => {}, { state: first.state });
+  try {
+    assert.deepEqual(
+      pendingInteractions(second).map((pending) => pending.id),
+      [request!.id],
+    );
+    respond(second, request!.id, { revision: 0, decision: 'rejected' });
+    const run = await settled(second, id);
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(run.outcome, {
+      data: { input: { name: 'v2' }, decision: 'rejected', response: {} },
+      reason: 'rejected',
+    });
+    const responded = second.store.db
+      .prepare("SELECT COUNT(*) AS count FROM events WHERE type = 'interaction.responded'")
+      .get() as { count: number };
+    assert.equal(responded.count, 1);
+  } finally {
+    await second.close();
+  }
+});
