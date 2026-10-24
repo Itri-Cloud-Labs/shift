@@ -82,6 +82,19 @@ export interface ExecutionError {
   category: 'input' | 'contract' | 'blocked' | 'permission' | 'external' | 'internal';
   message: string;
   details?: Json;
+  // Whether another attempt may run automatically (specification 6.6). `safe` errors are retried
+  // up to the node's `retry.maxAttempts`; absent means `never`. `reconcile_first` work never gets
+  // here: it waits for the owner instead.
+  retryDisposition?: 'safe' | 'never' | 'reconcile_first';
+}
+
+// Waiting for a durable wake-up, as shown on a WAITING run.
+export interface RunWait {
+  kind: 'retry';
+  executionId: string;
+  dueAt: number;
+  attempt: number;
+  error: { code: string; message: string };
 }
 
 export type ExecutionOutcome =
@@ -840,6 +853,15 @@ export class RunRepository {
     const now = this.clock.now();
     const context = this.execution(claim.executionId);
     const { node, snapshot } = context;
+    if (
+      outcome.kind === 'failed' &&
+      claim.attemptId !== null &&
+      outcome.error.retryDisposition === 'safe' &&
+      this.#runState(claim.runId) === 'RUNNING' &&
+      this.#scheduleRetry({ ...claim, attemptId: claim.attemptId }, node, outcome.error)
+    ) {
+      return;
+    }
     const completed = outcome.kind === 'completed';
     const output = completed ? outcome.output : null;
     const error = completed ? null : outcome.error;
@@ -910,6 +932,97 @@ export class RunRepository {
     }
   }
 
+  // A safely retryable failure with attempts left: the attempt fails, and the execution and run
+  // wait for a durable wake-up after a capped exponential backoff with jitter. The next attempt
+  // keeps the execution's frozen input and session. Returns false when no attempt is left.
+  #scheduleRetry(
+    claim: { runId: string; executionId: string; attemptId: string },
+    node: NodeDefinition,
+    error: ExecutionError,
+  ): boolean {
+    const attempts = (
+      this.db
+        .prepare('SELECT COUNT(*) AS count FROM node_attempts WHERE execution_id = ?')
+        .get(claim.executionId) as { count: number }
+    ).count;
+    if (attempts >= node.retry.maxAttempts) return false;
+    const now = this.clock.now();
+    const backoff = Math.min(
+      node.retry.maxDelayMs,
+      node.retry.initialDelayMs * 2 ** Math.min(attempts - 1, 30),
+    );
+    // Half fixed, half random, so retries of runs that failed together spread out.
+    const dueAt = now + Math.round(backoff / 2 + (Math.random() * backoff) / 2);
+    this.db
+      .prepare(
+        "UPDATE node_attempts SET state = 'FAILED', finished_at = ?, error_json = ? WHERE id = ?",
+      )
+      .run(now, JSON.stringify(error), claim.attemptId);
+    this.db
+      .prepare("UPDATE node_executions SET state = 'WAITING', revision = revision + 1 WHERE id = ?")
+      .run(claim.executionId);
+    this.db
+      .prepare("UPDATE runs SET state = 'WAITING', revision = revision + 1 WHERE id = ?")
+      .run(claim.runId);
+    const payload = {
+      attempt: attempts + 1,
+      error: { code: error.code, message: error.message },
+    };
+    this.db
+      .prepare(
+        "INSERT INTO wakeups (id, run_id, execution_id, reason, due_at, state, payload_json, created_at) VALUES (?, ?, ?, 'retry', ?, 'PENDING', ?, ?)",
+      )
+      .run(randomUUID(), claim.runId, claim.executionId, dueAt, JSON.stringify(payload), now);
+    this.#event(
+      'execution.retry_scheduled',
+      { runId: claim.runId, executionId: claim.executionId },
+      { ...payload, dueAt },
+    );
+    return true;
+  }
+
+  // Fires every wake-up that is due. A retry wake-up reopens its execution for the next attempt;
+  // one whose run moved on, for example because it was cancelled, settles without effect.
+  fireDueWakeups(): number {
+    return this.db
+      .transaction(() => {
+        const now = this.clock.now();
+        const due = this.db
+          .prepare(
+            "SELECT id, run_id, execution_id FROM wakeups WHERE state = 'PENDING' AND due_at <= ? ORDER BY due_at, rowid",
+          )
+          .all(now) as Array<{ id: string; run_id: string; execution_id: string }>;
+        for (const wakeup of due) {
+          this.db
+            .prepare("UPDATE wakeups SET state = 'FIRED', settled_at = ? WHERE id = ?")
+            .run(now, wakeup.id);
+          const reopened = this.db
+            .prepare(
+              "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ? AND state = 'WAITING' AND run_id IN (SELECT id FROM runs WHERE state = 'WAITING')",
+            )
+            .run(wakeup.execution_id).changes;
+          if (reopened === 0) continue;
+          this.#resume(wakeup.run_id);
+          this.#event(
+            'execution.retrying',
+            { runId: wakeup.run_id, executionId: wakeup.execution_id },
+            {},
+          );
+        }
+        return due.length;
+      })
+      .immediate();
+  }
+
+  // When the earliest pending wake-up falls due, or null when nothing waits.
+  nextWakeup(): number | null {
+    return (
+      this.db.prepare("SELECT MIN(due_at) AS due FROM wakeups WHERE state = 'PENDING'").get() as {
+        due: number | null;
+      }
+    ).due;
+  }
+
   #limits(runId: string): RunLimits {
     const row = this.db.prepare('SELECT limits_json FROM runs WHERE id = ?').get(runId) as
       { limits_json: string | null } | undefined;
@@ -968,7 +1081,7 @@ export class RunRepository {
         if (run.state === 'CANCELLED' || run.state === 'CANCEL_REQUESTED') {
           return this.#runningClaims(runId);
         }
-        this.#require(run, ['RUNNING', 'NEEDS_HUMAN'], 'cancel');
+        this.#require(run, ['RUNNING', 'WAITING', 'NEEDS_HUMAN'], 'cancel');
         const now = this.clock.now();
         this.#control(runId, 'cancel', actor, commandId, null, reason ? { reason } : {});
         this.db
@@ -1286,13 +1399,19 @@ export class RunRepository {
     }));
   }
 
-  // Work that is not running stops at once.
+  // Work that is not running stops at once, and its wake-ups never fire.
   #cancelIdle(runId: string): void {
+    const now = this.clock.now();
     this.db
       .prepare(
         "UPDATE node_executions SET state = 'CANCELLED', finished_at = ?, revision = revision + 1 WHERE run_id = ? AND state IN ('PENDING', 'WAITING')",
       )
-      .run(this.clock.now(), runId);
+      .run(now, runId);
+    this.db
+      .prepare(
+        "UPDATE wakeups SET state = 'CANCELLED', settled_at = ? WHERE run_id = ? AND state = 'PENDING'",
+      )
+      .run(now, runId);
   }
 
   #finishCancel(runId: string): void {
@@ -1356,13 +1475,16 @@ export class RunRepository {
     )?.id;
   }
 
-  // The attempt number of a claim; later attempts are owner retries.
-  attemptNumber(attemptId: string): number {
-    return (
-      this.db.prepare('SELECT attempt_number FROM node_attempts WHERE id = ?').get(attemptId) as {
-        attempt_number: number;
-      }
-    ).attempt_number;
+  // The attempt before a claim's, if any: an automatic retry follows a FAILED attempt and an owner
+  // retry an INTERRUPTED one.
+  previousAttempt(claim: Claim): { state: string; error: ExecutionError | null } | null {
+    const row = this.db
+      .prepare(
+        'SELECT state, error_json FROM node_attempts WHERE execution_id = ? AND attempt_number < (SELECT attempt_number FROM node_attempts WHERE id = ?) ORDER BY attempt_number DESC LIMIT 1',
+      )
+      .get(claim.executionId, claim.attemptId) as
+      { state: string; error_json: string | null } | undefined;
+    return row ? { state: row.state, error: parse<ExecutionError>(row.error_json) } : null;
   }
 
   run(runId: string): Json {
@@ -1412,6 +1534,29 @@ export class RunRepository {
       submissions: number;
       accepted: number;
     }>;
+    const attempts = this.db
+      .prepare(
+        'SELECT a.execution_id, a.attempt_number, a.state, a.error_json FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id WHERE e.run_id = ? ORDER BY a.attempt_number',
+      )
+      .all(runId) as Array<{
+      execution_id: string;
+      attempt_number: number;
+      state: string;
+      error_json: string | null;
+    }>;
+    const wakeup = this.db
+      .prepare(
+        "SELECT execution_id, due_at, payload_json FROM wakeups WHERE run_id = ? AND reason = 'retry' AND state = 'PENDING' ORDER BY due_at LIMIT 1",
+      )
+      .get(runId) as { execution_id: string; due_at: number; payload_json: string } | undefined;
+    const wait: RunWait | null = wakeup
+      ? {
+          kind: 'retry',
+          executionId: wakeup.execution_id,
+          dueAt: wakeup.due_at,
+          ...(JSON.parse(wakeup.payload_json) as Pick<RunWait, 'attempt' | 'error'>),
+        }
+      : null;
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,
@@ -1426,6 +1571,7 @@ export class RunRepository {
           ? null
           : { id: run.workspace_id, path: run.workspace_path, state: run.workspace_state },
       attention: parse<Json>(run.attention_json),
+      wait: wait as unknown as Json,
       cancelRequested: run.cancel_requested_at !== null,
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,
@@ -1439,6 +1585,13 @@ export class RunRepository {
         port: execution.selected_port,
         output: parse<Json>(execution.output_json),
         error: parse<Json>(execution.error_json),
+        attempts: attempts
+          .filter((attempt) => attempt.execution_id === execution.id)
+          .map((attempt) => ({
+            number: attempt.attempt_number,
+            state: attempt.state,
+            error: parse<Json>(attempt.error_json),
+          })),
       })),
       invocations: invocations.map((invocation) => ({
         id: invocation.id,

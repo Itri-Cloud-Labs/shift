@@ -350,3 +350,15 @@ Decided 2026-10-18 for the first half of M04b, following specification sections 
 - **Responses** show the run as committed with the command. Inline work the command unblocks runs right after it, the same as for run start.
 
 Automatic retries with backoff, the other half of M04b, need durable delayed wake-ups. Those are shared with M04c's human and timer waits, so they are built together next.
+
+## Automatic retries and durable wake-ups
+
+Decided 2026-10-24 for the second half of M04b, following specification sections 6.6, 6.7 and 10, with the owner choosing which failures count as safe.
+
+- **Disposition.** `ExecutionError` carries the specification's `retryDisposition`. Only two kinds of failure are `safe`: `PROVIDER_ERROR`, and a harness that could not be started or reached (`HARNESS_START_FAILED`, `HARNESS_REQUEST_FAILED`, `HARNESS_UNAVAILABLE`) while no prompt of the attempt may have reached it. Everything else is `never`, including `PROVIDER_AUTH`, `HARNESS_TURN_FAILED`, contract failures and agent blockers, which would fail the same way again. Uncertain outcomes keep going to `NEEDS_HUMAN` and never reach the retry path. An absent disposition means `never`, so executors must opt in.
+- **Scheduling.** When a safe failure finishes an attempt and the execution has fewer attempts than `retry.maxAttempts`, the same transaction fails the attempt with its error, puts the execution and the run in `WAITING`, and inserts a `wakeups` row with the UTC due time. Otherwise the failure routes as before. The delay doubles from `initialDelayMs` up to `maxDelayMs` and keeps a random half, so runs that failed together don't retry in lockstep. Both delays are capped at 24 hours, and a maximum shorter than the initial delay is refused at publish. Attempts count every physical attempt of the execution, owner retries included.
+- **Wake-ups.** The `wakeups` table stores only IDs, a reason (`retry` now; `timer` and `deadline` reserved for M04c) and the due time. The engine fires due rows at the start of every pump, and keeps one timer armed for the earliest pending row. Startup therefore rebuilds every wait from the table, and a row that fell due while Shift was down fires at once. Firing reopens the execution only if it and its run are still `WAITING`, so a cancelled run's wake-up settles without effect. Cancellation also marks pending wake-ups `CANCELLED` in its transaction.
+- **The next attempt** keeps the frozen input and session. Its first prompt names the error and asks the agent to inspect the workspace first, because a failed turn can have done part of the work. If the failed attempt never sent a prompt (the harness did not start), the goal prompt is sent as usual.
+- **Visibility.** The run view gains `wait` and per-execution `attempts`. `shift run show --wait` and `run start --wait` keep polling through a retry wait.
+
+Run-level `WAITING` was chosen over keeping the run `RUNNING`, because the specification models every durable wait as `WAITING` plus a reason, and M04c's human waits need the same. Owner commands other than `cancel` refuse a waiting run. The active-time budget remains for the next PR.

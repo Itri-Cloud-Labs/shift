@@ -125,9 +125,9 @@ test('validation rejects graphs the executor cannot run', () => {
       /Run variables arrive with M04a/,
     ],
     [
-      'retries',
-      (d) => (d.nodes[1].retry = { maxAttempts: 3, initialDelayMs: 0, maxDelayMs: 0 }),
-      /M04b/,
+      'retry delays out of order',
+      (d) => (d.nodes[1].retry = { maxAttempts: 3, initialDelayMs: 5000, maxDelayMs: 1000 }),
+      /shorter than the initial delay/,
     ],
     ['overlap policy', (d) => (d.execution = { overlap: 'skip' }), /M12/],
     [

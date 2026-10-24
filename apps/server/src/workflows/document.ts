@@ -163,8 +163,8 @@ const validateShape = ajv.compile({
             required: ['maxAttempts', 'initialDelayMs', 'maxDelayMs'],
             properties: {
               maxAttempts: { type: 'integer', minimum: 1, maximum: 100 },
-              initialDelayMs: { type: 'integer', minimum: 0 },
-              maxDelayMs: { type: 'integer', minimum: 0 },
+              initialDelayMs: { type: 'integer', minimum: 0, maximum: 86_400_000 },
+              maxDelayMs: { type: 'integer', minimum: 0, maximum: 86_400_000 },
             },
           },
           limits: {
@@ -324,8 +324,8 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(`${at}/config/${field}`, 'Not a valid JSON Schema 2020-12 document.');
       }
     }
-    if (node.retry.maxAttempts !== 1) {
-      add(`${at}/retry/maxAttempts`, 'Retries arrive with failure and retry controls (M04b).');
+    if (node.retry.maxDelayMs < node.retry.initialDelayMs) {
+      add(`${at}/retry/maxDelayMs`, 'The maximum delay is shorter than the initial delay.');
     }
     for (const [name, source] of Object.entries(node.bindings)) {
       if (!validateSource(source as unknown)) {

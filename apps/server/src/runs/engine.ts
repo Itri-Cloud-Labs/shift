@@ -99,6 +99,7 @@ export class RunEngine {
   readonly #tasks = new Map<string, { controller: AbortController; done: Promise<void> }>();
   readonly #cancellations = new Set<Promise<void>>();
   #timer: NodeJS.Timeout | undefined;
+  #wakeTimer: NodeJS.Timeout | undefined;
   #stopping = false;
   #pumping = false;
 
@@ -280,6 +281,8 @@ export class RunEngine {
     if (this.#stopping || this.#pumping) return;
     this.#pumping = true;
     try {
+      // Due wake-ups reopen their executions first, so they are admitted in this pass.
+      this.repository.fireDueWakeups();
       const limit = this.#options.maxActiveAgents ?? 2;
       // Inline nodes can schedule more inline work; repeat until nothing more can start now.
       for (let progressed = true; progressed && !this.#stopping;) {
@@ -297,6 +300,20 @@ export class RunEngine {
     } finally {
       this.#pumping = false;
     }
+    this.#armWake();
+  }
+
+  // One timer for the earliest durable wake-up. Deadlines live in the database, so a restart
+  // rebuilds this from scratch and a wake-up that fell due while the server was down fires at once.
+  #armWake(): void {
+    clearTimeout(this.#wakeTimer);
+    this.#wakeTimer = undefined;
+    if (this.#stopping) return;
+    const due = this.repository.nextWakeup();
+    if (due === null) return;
+    const delay = Math.min(Math.max(due - this.#options.clock.now(), 0), 2_147_483_647);
+    this.#wakeTimer = setTimeout(() => this.#pump(), delay);
+    this.#wakeTimer.unref();
   }
 
   // Returns whether the execution finished inline.
@@ -432,6 +449,7 @@ export class RunEngine {
   async stop(timeoutMs: number): Promise<void> {
     this.#stopping = true;
     clearInterval(this.#timer);
+    clearTimeout(this.#wakeTimer);
     const tasks = [...this.#tasks.values()];
     for (const task of tasks) task.controller.abort();
     let timer: NodeJS.Timeout | undefined;

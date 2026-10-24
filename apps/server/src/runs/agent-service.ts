@@ -31,6 +31,15 @@ import {
 } from './repository.js';
 
 const contractFailures = new Set(['RESULT_MISSING', 'RESULT_REJECTED']);
+// Failures that are safe to retry automatically: a provider error ended the turn, or the harness
+// could not be reached before any prompt was sent. A provider refusing its credential, a failed
+// turn and a broken result contract would fail the same way again.
+const transientTurnFailures = new Set(['PROVIDER_ERROR']);
+const transientHarnessFailures = new Set([
+  'HARNESS_START_FAILED',
+  'HARNESS_REQUEST_FAILED',
+  'HARNESS_UNAVAILABLE',
+]);
 
 export interface AgentServiceOptions {
   repository: RunRepository;
@@ -95,7 +104,12 @@ export class AgentService {
         } else {
           this.#finish(claim, {
             kind: 'failed',
-            error: { code: safe.code, category: 'external', message: safe.message },
+            error: {
+              code: safe.code,
+              category: 'external',
+              message: safe.message,
+              retryDisposition: transientHarnessFailures.has(safe.code) ? 'safe' : 'never',
+            },
           });
         }
       } catch (finishError) {
@@ -171,11 +185,18 @@ export class AgentService {
       if (!next) return;
       const id = randomUUID();
       const artifactDirectory = this.#artifactDirectory(claim, id);
-      // An owner retry reopens the execution: its first prompt continues the session and says that
-      // the earlier attempt's effects are unknown.
-      const retried = next === 'goal' && repository.attemptNumber(claim.attemptId) > 1;
+      // A later attempt continues the session. Its first prompt says why the earlier one stopped:
+      // an automatic retry follows a failure, an owner retry a stop whose effects are unknown. An
+      // earlier attempt that never sent a prompt changed nothing, so the goal is sent as usual.
+      const earlier = next === 'goal' ? repository.lastInvocationId(claim.executionId) : undefined;
+      const previous = earlier === undefined ? null : repository.previousAttempt(claim);
+      const retried = previous !== null;
       const prompt = retried
-        ? retryPrompt(task, artifactDirectory)
+        ? retryPrompt(
+            task,
+            artifactDirectory,
+            previous.state === 'FAILED' && previous.error ? previous.error : undefined,
+          )
         : next === 'goal'
           ? goalPrompt(task, artifactDirectory)
           : next === 'correction'
@@ -187,8 +208,7 @@ export class AgentService {
         kind: retried ? 'continuation' : next,
         correlationId: adapter.correlate(id).providerMessageId,
         prompt,
-        previousInvocationId:
-          last?.id ?? (retried ? (repository.lastInvocationId(claim.executionId) ?? null) : null),
+        previousInvocationId: last?.id ?? (retried ? earlier! : null),
       });
     }
   }
@@ -259,7 +279,14 @@ export class AgentService {
         // Corrections remedy a model that broke the result contract. A turn the harness or the
         // provider failed would fail the same way again, so its cause is the node's error.
         if (last.error && !contractFailures.has(last.error.code)) {
-          this.#finish(claim, { kind: 'failed', error: { ...last.error, category: 'external' } });
+          this.#finish(claim, {
+            kind: 'failed',
+            error: {
+              ...last.error,
+              category: 'external',
+              retryDisposition: transientTurnFailures.has(last.error.code) ? 'safe' : 'never',
+            },
+          });
           return null;
         }
         if (count('correction') < limits.corrections) return 'correction';

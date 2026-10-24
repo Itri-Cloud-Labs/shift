@@ -51,16 +51,16 @@ A minimal document needs only `nodes` and `connections`. Everything else has def
 
 Each node has:
 
-| Field                        | Default           | Meaning                                                          |
-| ---------------------------- | ----------------- | ---------------------------------------------------------------- |
-| `id`                         | required          | Unique within the document.                                      |
-| `type`                       | required          | One of the node types below.                                     |
-| `typeVersion`                | `1`               | The node type version. A published version pins it.              |
-| `config`                     | `{}`              | Type-specific settings. Unknown keys are refused.                |
-| `bindings`                   | `{}`              | Named values the node reads. See [bindings](#bindings).          |
-| `limits.maxExecutionsPerRun` | `50`              | How often this node may run in one run.                          |
-| `retry`                      | one attempt       | Only `maxAttempts: 1` is accepted until retries are implemented. |
-| `position`                   | laid out in a row | Editor data.                                                     |
+| Field                        | Default           | Meaning                                                                               |
+| ---------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
+| `id`                         | required          | Unique within the document.                                                           |
+| `type`                       | required          | One of the node types below.                                                          |
+| `typeVersion`                | `1`               | The node type version. A published version pins it.                                   |
+| `config`                     | `{}`              | Type-specific settings. Unknown keys are refused.                                     |
+| `bindings`                   | `{}`              | Named values the node reads. See [bindings](#bindings).                               |
+| `limits.maxExecutionsPerRun` | `50`              | How often this node may run in one run.                                               |
+| `retry`                      | one attempt       | Automatic retries of temporary failures. See [automatic retries](#automatic-retries). |
+| `position`                   | laid out in a row | Editor data.                                                                          |
 
 Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid. Publishing reports every problem at once, each with the JSON pointer of the offending field.
 
@@ -191,11 +191,40 @@ Runs started before workspaces existed keep working in the repository itself.
 | State              | Meaning                                                                                                                                                                                            |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RUNNING`          | Nodes are executing or about to.                                                                                                                                                                   |
+| `WAITING`          | A step failed temporarily and waits to be retried. `wait` says when; see [automatic retries](#automatic-retries).                                                                                  |
 | `NEEDS_HUMAN`      | The run stopped because it can't continue safely. `attention` says why. Continue it with `shift run retry`, `fail`, `complete` or `extend`, or cancel it; see [owner decisions](#owner-decisions). |
 | `CANCEL_REQUESTED` | `shift run cancel` was accepted, and Shift is stopping the running agent.                                                                                                                          |
 | `CANCELLED`        | The run was cancelled. Work completed before cancellation is kept; nothing is rolled back.                                                                                                         |
 | `COMPLETED`        | The run reached an `end` node or an unconnected port. `outcome` holds the final data.                                                                                                              |
 | `FAILED`           | A node failed without an `error` connection, or an `end` node declared `FAILED`.                                                                                                                   |
+
+## Automatic retries
+
+A node's `retry` setting retries failures that are temporary, so another attempt can succeed:
+
+```json
+{
+  "id": "count",
+  "type": "agent",
+  "config": { "goal": "…" },
+  "retry": { "maxAttempts": 3, "initialDelayMs": 1000, "maxDelayMs": 60000 }
+}
+```
+
+`maxAttempts` counts every attempt, including the first, from 1 (the default, no retries) to 100. The wait before attempt _n_ + 1 is `initialDelayMs` × 2<sup>_n_ − 1</sup>, capped at `maxDelayMs`, and then shortened by a random amount of up to half so that runs that failed together don't retry together. Both delays are at most 24 hours.
+
+Only these failures are retried:
+
+| Code                                                                    | Why it is safe                                                                       |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `PROVIDER_ERROR`                                                        | The model provider failed the request, for example with HTTP 429 or 503.             |
+| `HARNESS_START_FAILED`, `HARNESS_REQUEST_FAILED`, `HARNESS_UNAVAILABLE` | OpenCode could not be started or reached before any prompt was sent for the attempt. |
+
+Everything else fails at once: a refused credential (`PROVIDER_AUTH`), a failed turn, a result the agent never got right, a blocker, and errors in the node's inputs would fail the same way again. A turn whose outcome is unknown is never retried automatically, because its tools may have had effects; it waits in `NEEDS_HUMAN` as before.
+
+While it waits, the run is `WAITING` and its `wait` shows the attempt that comes next, when it is due and the error that caused it. The failed attempt stays in the execution's `attempts`. The next attempt uses the same frozen input. An agent continues in the same session, and its first prompt names the error and asks it to inspect the workspace before going on, since the failed turn may have done part of the work. When the attempts run out, the last error is handled like any other failure: it follows the node's `error` connection, or the run fails.
+
+Wake-ups are stored with their due time, so a restart during a backoff keeps waiting, and a retry that fell due while Shift was stopped runs when it starts. Cancelling a waiting run cancels it immediately, and the retry never runs. `shift run show --wait` keeps waiting through a backoff.
 
 ## Owner decisions
 
@@ -222,6 +251,7 @@ Runs, executions, attempts, agent sessions, prompts and result submissions are s
 | Shift killed after OpenCode accepted the prompt but before the agent started | The next start continues in the same session.                                                                                                                                           |
 | Shift or OpenCode killed while the agent's tools run                         | The tools are killed with OpenCode's process scope, and the run enters `NEEDS_HUMAN` with `HARNESS_OUTCOME_UNKNOWN`. Nothing is resent, because the tools may already have had effects. |
 | OpenCode finishes the turn while Shift is down                               | The agent's result call fails, so the turn ends without an accepted result. Its correction prompt says not to redo completed work.                                                      |
+| Shift stopped during a retry backoff                                         | The run keeps waiting. A retry that fell due in the meantime runs as soon as Shift starts.                                                                                              |
 
 A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn that was running when Shift crashed is always interrupted.
 
@@ -230,7 +260,6 @@ A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn
 Publishing refuses these, so a document never silently ignores them:
 
 - Run variables (M04a).
-- Automatic retries with `retry.maxAttempts` above 1 (M04b). Owner retries work today.
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 

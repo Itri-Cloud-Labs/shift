@@ -36,6 +36,13 @@
       "when": 1792454400000,
       "tag": "0004_run_controls",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792540800000,
+      "tag": "0005_wakeups",
+      "breakpoints": true
     }
   ]
 }
