@@ -5,6 +5,12 @@ export type {
   ServerIdentity,
   Readiness,
   ShutdownAcknowledgement,
+  Device,
+  PairRequest,
+  PairResponse,
+  PairingIssued,
+  DeviceList,
+  DeviceResponse,
 } from './generated/types.js';
 export {
   validateProtocolError,
@@ -12,6 +18,11 @@ export {
   validateServerHealth,
   validateServerIdentity,
   validateShutdownAcknowledgement,
+  validatePairRequest,
+  validatePairResponse,
+  validatePairingIssued,
+  validateDeviceList,
+  validateDeviceResponse,
 } from './generated/validators.js';
 
 export const protocolRange = { min: 0, max: 0 } as const;

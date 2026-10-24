@@ -5,6 +5,12 @@ import type {
   ProtocolError,
   ShutdownAcknowledgement,
   ServerIdentity,
+  Device,
+  PairRequest,
+  PairResponse,
+  PairingIssued,
+  DeviceList,
+  DeviceResponse,
 } from './types.js';
 
 export interface ValidationDiagnostic {
@@ -23,3 +29,9 @@ export const validateServerHealth: Validator<ServerHealth>;
 export const validateProtocolError: Validator<ProtocolError>;
 export const validateShutdownAcknowledgement: Validator<ShutdownAcknowledgement>;
 export const validateServerIdentity: Validator<ServerIdentity>;
+export const validateDevice: Validator<Device>;
+export const validatePairRequest: Validator<PairRequest>;
+export const validatePairResponse: Validator<PairResponse>;
+export const validatePairingIssued: Validator<PairingIssued>;
+export const validateDeviceList: Validator<DeviceList>;
+export const validateDeviceResponse: Validator<DeviceResponse>;

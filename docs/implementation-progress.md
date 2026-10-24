@@ -374,3 +374,20 @@ Acceptance coverage:
 - **Publish:** `{sequence: 0}` is refused.
 - **End-to-end:** `shift run executions --limit 1` returns the trigger with `next: 1`, `--after 1` returns the rest with `next: null`, and `--limit 0` is refused with `INVALID_REQUEST`.
 - **Totals:** `pnpm check` passed 147 tests (138 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Device pairing and authentication
+
+Status: complete for the pairing part of M05's server half (prompt 10). The device API for runs and events are next. Date: 2026-10-24.
+
+Changed files: the `@scure/bip39` dependency (wordlist only); the master-key secret box (`secrets/secret-box.ts`); the device registry and service (`devices/`); migration 0009 (`pairing_challenges`, `devices`) and its journal entry; device receipt actors; the shared protocol schema, fixtures and generated validators for both apps; pairing and device routes on TCP and the administrative socket; `shift device pair|list|revoke`; server startup (key, registry, sweep); device, server and storage tests; the API reference, server README, CLI help, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Pairing:** a phrase of eight lowercase words pairs one device. Typing it in upper case with hyphens still works. The token authenticates its device.
+- **Lost response:** the same command and body return the same device and token until 1 ms before the phrase's expiry. Another command ID is refused, and a changed body is `COMMAND_CONFLICT`. At expiry the delivery copy is erased, while the device keeps working until it is revoked.
+- **No plain text:** after a checkpoint, the database file contains neither the phrase nor the token. The server's stdout and stderr contain neither, end to end.
+- **Guessing:** expired phrases are refused. 20 failures from different addresses withdraw the open phrase. An eleventh attempt per address within a minute is `429 RATE_LIMITED` (retryable), and it passes again after a minute.
+- **Revocation:** a repeated command returns its receipt, a second revocation changes nothing, and listeners are told once, after the commit. The token then fails, and unknown devices and extra fields are refused.
+- **Master key:** created with mode 0600 and reopened with the same key. A wrong context or tampered ciphertext fails, mode 0644 is refused, and a file whose current key is missing is invalid.
+- **End-to-end:** info advertises pairing. `shift device pair` prints the phrase, `POST /api/v0/pair` returns a validated `PairResponse`, and a repeat returns the same token. Without a token the device list is `401` with `WWW-Authenticate: Bearer`; with it, the list is validated. A device can issue a new phrase. After `shift device revoke`, the token gets `401`.
+- **Totals:** `pnpm check` passed 153 tests (144 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
