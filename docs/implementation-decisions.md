@@ -362,3 +362,13 @@ Decided 2026-10-24 for the second half of M04b, following specification sections
 - **Visibility.** The run view gains `wait` and per-execution `attempts`. `shift run show --wait` and `run start --wait` keep polling through a retry wait.
 
 Run-level `WAITING` was chosen over keeping the run `RUNNING`, because the specification models every durable wait as `WAITING` plus a reason, and M04c's human waits need the same. Owner commands other than `cancel` refuse a waiting run. The active-time budget remains for the next PR.
+
+## Active execution time
+
+Decided 2026-10-24 to finish M04b, following specification section 6.7.
+
+- **What counts.** Only `RUNNING` attempts accrue time. Each attempt has a `checkpoint_at`, and a charge adds the time since its last checkpoint (or its start) to `runs.active_ms`, then moves the checkpoint. The engine checkpoints every running attempt on its 2-second interval, and every transition that ends an attempt charges it in the same transaction. Retry backoff, `NEEDS_HUMAN` and future human or timer waits therefore cost nothing, and no interval is counted twice.
+- **Recovery.** An attempt that an earlier process left running is charged up to the restart when it is reclaimed, and a `run.active_time_charged` event explains the charge. The runtime scope from the old process is only reaped at restart, so tools can have kept running through the outage. Charging it in full is the conservative reading the specification asks for, and a long outage during a turn can use up the budget.
+- **Enforcement.** `#schedule` checks the budget before any other limit and stops in `NEEDS_HUMAN` with `ACTIVE_TIME_LIMIT`, the same way as `EXECUTION_LIMIT`, keeping the execution and port. A running attempt that crosses the budget is stopped by the cancellation path: the engine aborts its task, stops its invocation through the harness, and then the attempt goes to `INTERRUPTED` through `needsHuman` with `ACTIVE_TIME_LIMIT`. This makes it a stuck step, which `fail`, `complete` and `cancel` already handle. The run is not cancelled, so the owner can decide. A stop that cannot be confirmed says so in the explanation.
+- **Extension.** `extend` takes `activeMs` for this attention and `executions` for the other. The new limit is the time used plus `activeMs`, not the old limit plus it, because a running attempt may have overshot by up to one checkpoint. A limit hit between steps continues from its port. One hit during a turn reopens the execution for a new attempt in the same session. The CLI takes `--active-minutes`.
+- **Granularity.** A turn can overrun the budget by up to one checkpoint interval plus the time it takes to stop. The budget guards against runaway runs; it is not a precise meter.

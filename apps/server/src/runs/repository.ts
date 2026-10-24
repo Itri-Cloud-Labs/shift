@@ -117,10 +117,13 @@ export interface Attention {
   code: string;
   explanation: string;
   invocationId?: string;
+  executionId?: string;
+  limit?: { scope: 'active'; value: number };
 }
 
 interface ExecutionLimit {
-  scope: 'run' | 'node';
+  // `active` is the run's active execution time in milliseconds; the others count executions.
+  scope: 'run' | 'node' | 'active';
   nodeId?: string;
   value: number;
   explanation: string;
@@ -130,6 +133,7 @@ interface ExecutionLimit {
 interface RunLimits {
   maxExecutions?: number;
   nodes?: Record<string, number>;
+  maxActiveMs?: number;
 }
 
 export interface ControlActor {
@@ -141,6 +145,11 @@ export class StaleClaim extends Error {}
 
 const parse = <T>(text: string | null): T | null =>
   text === null ? null : (JSON.parse(text) as T);
+const formatDuration = (ms: number): string => {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return `${Math.round(ms / 1000)} s`;
+  return minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
+};
 const activeInvocationStates = "('PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN')";
 const activeStates = new Set<InvocationState>(['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN']);
 
@@ -313,21 +322,28 @@ export class RunRepository {
     const extended = this.#limits(runId);
     const runLimit = extended.maxExecutions ?? snapshot.document.execution.limits.maxExecutions;
     const nodeLimit = extended.nodes?.[target.id] ?? target.limits.maxExecutionsPerRun;
+    const activeLimit = this.#activeLimit(runId, snapshot);
     const limit: ExecutionLimit | null =
-      counts.total >= runLimit
+      this.#activeMs(runId) >= activeLimit
         ? {
-            scope: 'run',
-            value: runLimit,
-            explanation: `The run reached its limit of ${runLimit} executions.`,
+            scope: 'active',
+            value: activeLimit,
+            explanation: `The run used its ${formatDuration(activeLimit)} of active execution time.`,
           }
-        : (counts.node ?? 0) >= nodeLimit
+        : counts.total >= runLimit
           ? {
-              scope: 'node',
-              nodeId: target.id,
-              value: nodeLimit,
-              explanation: `Node ${target.id} reached its limit of ${nodeLimit} executions.`,
+              scope: 'run',
+              value: runLimit,
+              explanation: `The run reached its limit of ${runLimit} executions.`,
             }
-          : null;
+          : (counts.node ?? 0) >= nodeLimit
+            ? {
+                scope: 'node',
+                nodeId: target.id,
+                value: nodeLimit,
+                explanation: `Node ${target.id} reached its limit of ${nodeLimit} executions.`,
+              }
+            : null;
     if (limit) {
       // Exhaustion enters NEEDS_HUMAN before another activation (specification 6.7). The attention
       // keeps what the next step needs, so an extension can resume exactly here.
@@ -338,7 +354,7 @@ export class RunRepository {
         )
         .run(
           JSON.stringify({
-            code: 'EXECUTION_LIMIT',
+            code: limit.scope === 'active' ? 'ACTIVE_TIME_LIMIT' : 'EXECUTION_LIMIT',
             explanation,
             executionId: from.id,
             port,
@@ -346,7 +362,11 @@ export class RunRepository {
           }),
           runId,
         );
-      this.#event('run.needs_human', { runId, executionId: from.id }, { code: 'EXECUTION_LIMIT' });
+      this.#event(
+        'run.needs_human',
+        { runId, executionId: from.id },
+        { code: limit.scope === 'active' ? 'ACTIVE_TIME_LIMIT' : 'EXECUTION_LIMIT' },
+      );
       return;
     }
     const id = randomUUID();
@@ -423,6 +443,7 @@ export class RunRepository {
           )
           .all(workerGeneration) as Array<{ id: string; execution_id: string; run_id: string }>;
         return orphans.map((orphan) => {
+          this.#chargeRecovered(orphan.run_id, orphan.execution_id, orphan.id);
           this.db
             .prepare(
               'UPDATE node_attempts SET fence = fence + 1, worker_generation = ? WHERE id = ?',
@@ -866,6 +887,7 @@ export class RunRepository {
     const output = completed ? outcome.output : null;
     const error = completed ? null : outcome.error;
     if (claim.attemptId !== null) {
+      this.#charge(claim.runId, claim.attemptId);
       this.db
         .prepare('UPDATE node_attempts SET state = ?, finished_at = ?, error_json = ? WHERE id = ?')
         .run(
@@ -953,6 +975,7 @@ export class RunRepository {
     );
     // Half fixed, half random, so retries of runs that failed together spread out.
     const dueAt = now + Math.round(backoff / 2 + (Math.random() * backoff) / 2);
+    this.#charge(claim.runId, claim.attemptId);
     this.db
       .prepare(
         "UPDATE node_attempts SET state = 'FAILED', finished_at = ?, error_json = ? WHERE id = ?",
@@ -1023,6 +1046,101 @@ export class RunRepository {
     ).due;
   }
 
+  // ---- Active execution time (specification 6.7) ----
+  // Only running attempts accrue time. Each charge adds the time since the attempt's last
+  // checkpoint and moves the checkpoint, so time is never counted twice.
+
+  #charge(runId: string, attemptId: string): number {
+    const now = this.clock.now();
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(checkpoint_at, started_at) AS since FROM node_attempts WHERE id = ? AND state = 'RUNNING'",
+      )
+      .get(attemptId) as { since: number | null } | undefined;
+    if (!row || row.since === null) return 0;
+    const charged = Math.max(now - row.since, 0);
+    this.db.prepare('UPDATE node_attempts SET checkpoint_at = ? WHERE id = ?').run(now, attemptId);
+    this.db.prepare('UPDATE runs SET active_ms = active_ms + ? WHERE id = ?').run(charged, runId);
+    return charged;
+  }
+
+  // An attempt an earlier process left running: Shift cannot tell whether its tools kept working
+  // between the last checkpoint and now, so the whole interval is charged and explained.
+  #chargeRecovered(runId: string, executionId: string, attemptId: string): void {
+    const charged = this.#charge(runId, attemptId);
+    if (charged === 0) return;
+    this.#event(
+      'run.active_time_charged',
+      { runId, executionId },
+      {
+        attemptId,
+        chargedMs: charged,
+        explanation:
+          'Shift stopped while this attempt was running. Its tools may have kept working until the restart, so the time since the last checkpoint is charged in full.',
+      },
+    );
+  }
+
+  // Checkpoints every running attempt, then returns the running runs that have used their active
+  // time, with the attempts to stop.
+  checkpointActiveTime(): Array<{ runId: string; claims: Claim[] }> {
+    return this.db
+      .transaction(() => {
+        const running = this.db
+          .prepare(
+            "SELECT a.id, e.run_id FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id JOIN runs r ON r.id = e.run_id WHERE a.state = 'RUNNING' AND r.state IN ('RUNNING', 'CANCEL_REQUESTED')",
+          )
+          .all() as Array<{ id: string; run_id: string }>;
+        for (const attempt of running) this.#charge(attempt.run_id, attempt.id);
+        const runIds = [...new Set(running.map((attempt) => attempt.run_id))];
+        return runIds
+          .filter(
+            (runId) =>
+              this.#runState(runId) === 'RUNNING' &&
+              this.#activeMs(runId) >= this.#activeLimit(runId, this.snapshot(runId)),
+          )
+          .map((runId) => ({ runId, claims: this.#runningClaims(runId) }));
+      })
+      .immediate();
+  }
+
+  // After the engine stopped attempts that ran out of active time, each still-running one stops
+  // for an owner decision, like any stuck step. A stop that could not be confirmed says so.
+  settleActiveLimit(claims: Claim[]): void {
+    for (const claim of claims) {
+      if (this.#runState(claim.runId) !== 'RUNNING') continue;
+      try {
+        const snapshot = this.snapshot(claim.runId);
+        const value = this.#activeLimit(claim.runId, snapshot);
+        const last = this.invocations(claim.attemptId).at(-1);
+        const unconfirmed =
+          last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN');
+        this.needsHuman(claim, {
+          code: 'ACTIVE_TIME_LIMIT',
+          explanation: unconfirmed
+            ? `The run used its ${formatDuration(value)} of active execution time. Shift could not confirm that the agent stopped, so its effects are unknown.`
+            : `The run used its ${formatDuration(value)} of active execution time, so its agent was stopped.`,
+          executionId: claim.executionId,
+          limit: { scope: 'active', value },
+          ...(last ? { invocationId: last.id } : {}),
+        });
+      } catch (error) {
+        // The attempt finished first, or the run moved on; its own transition already decided.
+        if (!(error instanceof StaleClaim)) throw error;
+      }
+    }
+  }
+
+  #activeMs(runId: string): number {
+    return (
+      this.db.prepare('SELECT active_ms FROM runs WHERE id = ?').get(runId) as { active_ms: number }
+    ).active_ms;
+  }
+
+  #activeLimit(runId: string, snapshot: RunSnapshot): number {
+    return this.#limits(runId).maxActiveMs ?? snapshot.document.execution.limits.maxActiveMs;
+  }
+
   #limits(runId: string): RunLimits {
     const row = this.db.prepare('SELECT limits_json FROM runs WHERE id = ?').get(runId) as
       { limits_json: string | null } | undefined;
@@ -1040,6 +1158,7 @@ export class RunRepository {
       .transaction(() => {
         this.#fenced(claim);
         const now = this.clock.now();
+        this.#charge(claim.runId, claim.attemptId);
         this.db
           .prepare("UPDATE node_attempts SET state = 'INTERRUPTED', finished_at = ? WHERE id = ?")
           .run(now, claim.attemptId);
@@ -1111,6 +1230,7 @@ export class RunRepository {
           const uncertain =
             last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN');
           unconfirmed ||= uncertain;
+          this.#charge(runId, claim.attemptId);
           this.db
             .prepare('UPDATE node_attempts SET state = ?, finished_at = ? WHERE id = ?')
             .run(uncertain ? 'INTERRUPTED' : 'CANCELLED', now, claim.attemptId);
@@ -1149,6 +1269,9 @@ export class RunRepository {
           .prepare("SELECT id FROM runs WHERE state = 'CANCEL_REQUESTED' ORDER BY created_at")
           .all() as Array<{ id: string }>;
         return runs.map(({ id }) => {
+          for (const claim of this.#runningClaims(id)) {
+            this.#chargeRecovered(id, claim.executionId, claim.attemptId);
+          }
           this.db
             .prepare(
               "UPDATE node_attempts SET fence = fence + 1, worker_generation = ? WHERE state = 'RUNNING' AND execution_id IN (SELECT id FROM node_executions WHERE run_id = ?)",
@@ -1264,12 +1387,13 @@ export class RunRepository {
       .immediate();
   }
 
-  // Raises the execution limit that stopped the run by `executions` and takes the step it held.
+  // Raises the limit that stopped the run and takes the step it held. An execution limit grows by
+  // `executions`; the active-time limit grows by `activeMs` beyond what the run has used.
   extend(
     runId: string,
     actor: ControlActor,
     commandId: string | undefined,
-    executions: number,
+    by: { executions?: number; activeMs?: number },
   ): void {
     this.db
       .transaction(() => {
@@ -1280,19 +1404,35 @@ export class RunRepository {
           code: string;
           executionId?: string;
           port?: string;
-          limit?: { scope: 'run' | 'node'; nodeId?: string; value: number };
+          limit?: { scope: 'run' | 'node' | 'active'; nodeId?: string; value: number };
         }>(run.attention_json);
-        if (attention?.code !== 'EXECUTION_LIMIT' || !attention.executionId || !attention.limit) {
+        const active = attention?.code === 'ACTIVE_TIME_LIMIT';
+        if (
+          (attention?.code !== 'EXECUTION_LIMIT' && !active) ||
+          !attention.executionId ||
+          !attention.limit
+        ) {
+          throw new ShiftError('NOTHING_TO_EXTEND', 'The run is not stopped by a limit.', 409);
+        }
+        const amount = active ? by.activeMs : by.executions;
+        if (amount === undefined) {
           throw new ShiftError(
             'NOTHING_TO_EXTEND',
-            'The run is not stopped by an execution limit.',
+            active
+              ? 'The run is stopped by its active-time limit; extend it with activeMs.'
+              : 'The run is stopped by an execution limit; extend it with executions.',
             409,
           );
         }
-        const { limit, executionId, port = 'success' } = attention;
+        const { limit, executionId } = attention;
+        // Only a stop in the middle of an attempt has no port to continue from.
+        const port = attention.port ?? (active ? undefined : 'success');
         const limits = this.#limits(runId);
-        const value = limit.value + executions;
-        if (limit.scope === 'run') limits.maxExecutions = value;
+        const value = active
+          ? Math.max(limit.value, this.#activeMs(runId)) + amount
+          : limit.value + amount;
+        if (limit.scope === 'active') limits.maxActiveMs = value;
+        else if (limit.scope === 'run') limits.maxExecutions = value;
         else limits.nodes = { ...limits.nodes, [limit.nodeId!]: value };
         this.db
           .prepare('UPDATE runs SET limits_json = ? WHERE id = ?')
@@ -1304,6 +1444,15 @@ export class RunRepository {
           to: value,
         });
         this.#resume(runId);
+        if (port === undefined) {
+          // The limit stopped a running attempt: its execution continues with a new attempt.
+          this.db
+            .prepare(
+              "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ? AND state = 'WAITING'",
+            )
+            .run(executionId);
+          return;
+        }
         const from = this.db
           .prepare(
             'SELECT node_id, input_json, output_json, error_json FROM node_executions WHERE id = ?',
@@ -1572,6 +1721,8 @@ export class RunRepository {
           : { id: run.workspace_id, path: run.workspace_path, state: run.workspace_state },
       attention: parse<Json>(run.attention_json),
       wait: wait as unknown as Json,
+      // Charged up to the last checkpoint, so a running attempt can be up to one checkpoint behind.
+      activeTime: { usedMs: this.#activeMs(runId), limitMs: this.#activeLimit(runId, snapshot) },
       cancelRequested: run.cancel_requested_at !== null,
       outcome: parse<Json>(run.outcome_json),
       createdAt: run.created_at,

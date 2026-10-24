@@ -51,8 +51,10 @@ const controlSchemas = {
   fail: { properties: { reason } },
   complete: { required: ['data'], properties: { data: {} } },
   extend: {
-    required: ['executions'],
-    properties: { executions: { type: 'integer', minimum: 1, maximum: 10000 } },
+    properties: {
+      executions: { type: 'integer', minimum: 1, maximum: 10000 },
+      activeMs: { type: 'integer', minimum: 1000, maximum: 30 * 24 * 60 * 60 * 1000 },
+    },
   },
 } as const;
 export type RunControlKind = keyof typeof controlSchemas;
@@ -98,6 +100,8 @@ export class RunEngine {
   readonly #options: RunEngineOptions;
   readonly #tasks = new Map<string, { controller: AbortController; done: Promise<void> }>();
   readonly #cancellations = new Set<Promise<void>>();
+  // Runs whose attempts are being stopped because they ran out of active time.
+  readonly #limitStops = new Set<string>();
   #timer: NodeJS.Timeout | undefined;
   #wakeTimer: NodeJS.Timeout | undefined;
   #stopping = false;
@@ -130,8 +134,33 @@ export class RunEngine {
       this.#dispatch(claim);
     }
     this.#pump();
-    this.#timer = setInterval(() => this.#pump(), 2_000);
+    this.#timer = setInterval(() => {
+      this.#checkpoint();
+      this.#pump();
+    }, 2_000);
     this.#timer.unref();
+  }
+
+  // Records the running attempts' active time and stops those whose run has used its budget.
+  #checkpoint(): void {
+    if (this.#stopping) return;
+    let exhausted: Array<{ runId: string; claims: Claim[] }>;
+    try {
+      exhausted = this.repository.checkpointActiveTime();
+    } catch {
+      this.#options.logger.error('Checkpointing active time failed.');
+      return;
+    }
+    for (const { runId, claims } of exhausted) {
+      if (this.#limitStops.has(runId)) continue;
+      this.#limitStops.add(runId);
+      this.#stopAttempts(
+        runId,
+        claims,
+        () => this.repository.settleActiveLimit(claims),
+        () => this.#limitStops.delete(runId),
+      );
+    }
   }
 
   // Starts the workflow's active version with trigger input. The base ref is resolved to a commit
@@ -220,7 +249,17 @@ export class RunEngine {
       reason?: string;
       data?: Json;
       executions?: number;
+      activeMs?: number;
     };
+    if (kind === 'extend' && (body.executions === undefined) === (body.activeMs === undefined)) {
+      throw new ShiftError(
+        'INVALID_REQUEST',
+        'Extend takes either executions or activeMs.',
+        422,
+        false,
+        ['/'],
+      );
+    }
     let stops: Claim[] = [];
     const response = this.#options.receipts.execute(
       local,
@@ -241,7 +280,10 @@ export class RunEngine {
             this.repository.complete(runId, local, id, body.data as Json);
             break;
           case 'extend':
-            this.repository.extend(runId, local, id, body.executions!);
+            this.repository.extend(runId, local, id, {
+              ...(body.executions === undefined ? {} : { executions: body.executions }),
+              ...(body.activeMs === undefined ? {} : { activeMs: body.activeMs }),
+            });
             break;
         }
         return { status: 200, body: { run: this.repository.run(runId) } };
@@ -252,9 +294,18 @@ export class RunEngine {
     return response;
   }
 
-  // Aborts the attempts' running tasks, stops whatever is still active through the harness, then
-  // settles the cancellation.
   #stopForCancel(runId: string, claims: Claim[]): void {
+    this.#stopAttempts(runId, claims, () => this.repository.settleCancellation(runId));
+  }
+
+  // Aborts the attempts' running tasks, stops whatever is still active through the harness, then
+  // settles. Cancellation and the active-time limit stop work the same way.
+  #stopAttempts(
+    runId: string,
+    claims: Claim[],
+    settle: () => void,
+    after: () => void = () => undefined,
+  ): void {
     const done = (async () => {
       for (const claim of claims) {
         const task = this.#tasks.get(claim.attemptId);
@@ -264,16 +315,20 @@ export class RunEngine {
         }
         await this.agents.cancel(claim).catch((error: unknown) => {
           if (!(error instanceof StaleClaim)) {
-            this.#options.logger.error({ runId }, 'Stopping a cancelled agent failed.');
+            this.#options.logger.error({ runId }, 'Stopping an agent failed.');
           }
         });
       }
-      this.repository.settleCancellation(runId);
+      settle();
     })()
       .catch(() => {
-        this.#options.logger.error({ runId }, 'Settling a cancellation failed.');
+        this.#options.logger.error({ runId }, 'Settling stopped attempts failed.');
       })
-      .finally(() => this.#cancellations.delete(done));
+      .finally(() => {
+        this.#cancellations.delete(done);
+        after();
+        this.#pump();
+      });
     this.#cancellations.add(done);
   }
 

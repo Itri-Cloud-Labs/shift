@@ -34,7 +34,7 @@ shift run cancel RUN_ID [--reason TEXT] [--wait]
 shift run retry RUN_ID [--wait]
 shift run fail RUN_ID [--reason TEXT]
 shift run complete RUN_ID --file DATA.json
-shift run extend RUN_ID --executions N [--wait]
+shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
@@ -44,7 +44,7 @@ Project, workflow, run and workspace commands accept --state-dir PATH; changes a
 A run in NEEDS_HUMAN continues with retry (run the stuck step again; its agent is
 told earlier effects are unknown), fail (abandon the step), complete (record a
 result you verified, as JSON matching the step's result schema) or extend (raise
-the execution limit it reached). cancel stops a run at any point.
+the execution or active-time limit it reached). cancel stops a run at any point.
 Each run works in its own detached worktree of the project, under the state
 directory, at the commit its base ref had when the run started. Worktrees are
 kept after runs finish; remove refuses one with uncommitted changes unless

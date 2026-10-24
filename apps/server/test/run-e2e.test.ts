@@ -71,12 +71,17 @@ async function setup() {
   };
   // Registers the repository once, then publishes a start -> agent -> end workflow per run.
   let projectId: string | undefined;
-  const start = async (goal: string, agent: Record<string, unknown> = {}) => {
+  const start = async (
+    goal: string,
+    agent: Record<string, unknown> = {},
+    document: Record<string, unknown> = {},
+  ) => {
     projectId ??= ((await shift('project', 'add', '--path', repo)) as { id: string }).id;
     const file = join(state.path, `workflow-${Date.now()}.json`);
     await writeFile(
       file,
       JSON.stringify({
+        ...document,
         nodes: [
           { id: 'start', type: 'manual_trigger' },
           { ...agent, id: 'agent', type: 'agent', config: { goal } },
@@ -206,6 +211,38 @@ test(
         ],
       );
       assert.equal(await env.userMessages(), 3, 'one prompt per attempt, in one session');
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
+  'a run out of active time stops its agent and continues after extend --active-minutes',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    const server = await env.serve();
+    try {
+      const run = await env.start(
+        'Work. [fake-work 8000] [fake-result {"status":"completed","data":{"done":true}}]',
+        {},
+        { execution: { limits: { maxExecutions: 1000, maxActiveMs: 3000 } } },
+      );
+      const tool = await env.toolStarted();
+      const stopped = await env.until(run.id, (candidate) => candidate.state === 'NEEDS_HUMAN');
+      assert.equal(stopped.attention?.code, 'ACTIVE_TIME_LIMIT');
+      assert.equal(alive(tool), false, 'the tool was stopped with the turn');
+      await env.shift('run', 'extend', run.id, '--active-minutes', '1');
+      const finished = (await env.until(
+        run.id,
+        (candidate) => candidate.state !== 'RUNNING',
+      )) as Run & { activeTime: { usedMs: number; limitMs: number } };
+      assert.equal(finished.state, 'COMPLETED');
+      assert.deepEqual(finished.outcome, { data: { done: true } });
+      assert.ok(finished.activeTime.limitMs >= 61_000);
+      assert.ok(finished.activeTime.usedMs >= 11_000, 'both attempts were charged');
     } finally {
       await stopped(server);
       await env.state.remove();
