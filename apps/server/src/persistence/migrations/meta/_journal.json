@@ -64,6 +64,13 @@
       "when": 1792800000000,
       "tag": "0008_binding_sources",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1792886400000,
+      "tag": "0009_devices",
+      "breakpoints": true
     }
   ]
 }

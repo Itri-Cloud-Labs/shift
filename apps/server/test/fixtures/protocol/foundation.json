@@ -7,26 +7,46 @@
     "serverId": "00000000-0000-4000-8000-000000000002",
     "eventEpoch": "00000000-0000-4000-8000-000000000003",
     "serverVersion": "0.0.0",
-    "protocol": { "min": 0, "max": 0 },
-    "readiness": { "ready": true, "phase": "ready", "reason": "READY" },
+    "protocol": {
+      "min": 0,
+      "max": 0
+    },
+    "readiness": {
+      "ready": true,
+      "phase": "ready",
+      "reason": "READY"
+    },
     "capabilities": {
       "commands": false,
       "events": false,
-      "pairing": false,
+      "pairing": true,
       "nodeTypes": [],
       "harnesses": []
     },
-    "time": { "epochMs": 1790985600000, "iso": "2026-10-03T00:00:00.000Z" }
+    "time": {
+      "epochMs": 1790985600000,
+      "iso": "2026-10-03T00:00:00.000Z"
+    }
   },
   "health": {
     "schemaVersion": 1,
     "requestId": "00000000-0000-4000-8000-000000000004",
     "serverId": "00000000-0000-4000-8000-000000000002",
     "eventEpoch": "00000000-0000-4000-8000-000000000003",
-    "protocol": { "min": 0, "max": 0 },
+    "protocol": {
+      "min": 0,
+      "max": 0
+    },
     "liveness": "alive",
-    "readiness": { "ready": false, "phase": "starting", "reason": "STARTING" },
-    "time": { "epochMs": 1790985600000, "iso": "2026-10-03T00:00:00.000Z" }
+    "readiness": {
+      "ready": false,
+      "phase": "starting",
+      "reason": "STARTING"
+    },
+    "time": {
+      "epochMs": 1790985600000,
+      "iso": "2026-10-03T00:00:00.000Z"
+    }
   },
   "error": {
     "schemaVersion": 1,
@@ -34,11 +54,66 @@
     "code": "INVALID_CONFIGURATION",
     "message": "Invalid configuration.",
     "retryable": false,
-    "diagnostics": [{ "field": "/port", "message": "Invalid field." }]
+    "diagnostics": [
+      {
+        "field": "/port",
+        "message": "Invalid field."
+      }
+    ]
   },
   "shutdown": {
     "schemaVersion": 1,
     "requestId": "00000000-0000-4000-8000-000000000006",
     "accepted": true
+  },
+  "pairRequest": {
+    "phrase": "abandon ability able about above absent absorb abstract",
+    "deviceName": "Laptop",
+    "commandId": "pair-command-0001"
+  },
+  "pairResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000011",
+    "device": {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "Laptop",
+      "createdAt": 1790985600000,
+      "lastSeenAt": 1790985660000,
+      "revokedAt": null
+    },
+    "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "pairingIssued": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000012",
+    "pairing": {
+      "phrase": "abandon ability able about above absent absorb abstract",
+      "expiresAt": 1790986200000
+    }
+  },
+  "deviceList": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000013",
+    "devices": [
+      {
+        "id": "00000000-0000-4000-8000-000000000010",
+        "name": "Laptop",
+        "createdAt": 1790985600000,
+        "lastSeenAt": 1790985660000,
+        "revokedAt": null
+      }
+    ],
+    "currentDeviceId": "00000000-0000-4000-8000-000000000010"
+  },
+  "deviceResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000014",
+    "device": {
+      "id": "00000000-0000-4000-8000-000000000010",
+      "name": "Laptop",
+      "createdAt": 1790985600000,
+      "lastSeenAt": 1790985660000,
+      "revokedAt": 1790985700000
+    }
   }
 }

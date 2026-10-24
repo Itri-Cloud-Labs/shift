@@ -282,6 +282,24 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
           )
         )['workspace'],
       );
+    case 'device pair': {
+      const { pairing } = (await send('POST', '/api/v0/admin/pairing', {})) as {
+        pairing: { phrase: string; expiresAt: number };
+      };
+      return print(pairing);
+    }
+    case 'device list':
+      return print((await get('/api/v0/admin/devices'))['devices']);
+    case 'device revoke':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/devices/${encodeURIComponent(need(target, 'DEVICE_ID'))}/revoke`,
+            {},
+          )
+        )['device'],
+      );
     case 'interaction list':
       return print(
         (await get(`/api/v0/admin/interactions${values.all ? '?all=true' : ''}`))['interactions'],

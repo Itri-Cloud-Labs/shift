@@ -1,15 +1,15 @@
 # Shift server API
 
-This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. The remote protocol for paired clients, with SSE events and device authentication ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)), is not implemented yet. [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
+This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. Paired devices can pair and manage devices over TCP ([devices](#devices)). The rest of the remote protocol, with the device API for runs and SSE events ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)), follows in later releases. [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
 
 ## Transports
 
 The server listens on two transports with different reach.
 
-| Transport             | Address                                                                                    | Serves                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| TCP                   | `127.0.0.1:4317` by default (`--host`, `--port`). A non-loopback address needs `--public`. | Read-only `GET /api/v0/info`, `/api/v0/health` and `/api/v0/ready`. Nothing else, and no request bodies. |
-| Administrative socket | `<state>/admin.sock`, a Unix socket with mode `0600` inside the private state directory    | Everything on TCP, plus every `/api/v0/admin/…` route.                                                   |
+| Transport             | Address                                                                                    | Serves                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TCP                   | `127.0.0.1:4317` by default (`--host`, `--port`). A non-loopback address needs `--public`. | `GET /api/v0/info`, `/api/v0/health` and `/api/v0/ready`; `POST /api/v0/pair`; and the [device](#devices) routes, which need a bearer token. Only device commands take a request body. |
+| Administrative socket | `<state>/admin.sock`, a Unix socket with mode `0600` inside the private state directory    | Everything on TCP, plus every `/api/v0/admin/…` route.                                                                                                                                 |
 
 The state directory defaults to `$XDG_STATE_HOME/shift`, or `~/.local/state/shift` when `XDG_STATE_HOME` is unset. Set it with `--state-dir` or `SHIFT_STATE_DIR`. Access to the socket is access control: only the account that owns the state directory can connect. The CLI also refuses to use a socket or state directory that another account could read. Requests that carry an `Origin` header are refused with `403 INVALID_REQUEST`, so a browser page cannot drive the socket through a local proxy.
 
@@ -20,6 +20,8 @@ curl --unix-socket ~/.local/state/shift/admin.sock http://shift/api/v0/admin/run
 ```
 
 The host part of the URL is ignored.
+
+TCP is plain HTTP. On loopback that is fine. A device token sent over plain HTTP across a network can be read by anyone on the path, so serve `--public` only behind a TLS-terminating reverse proxy until Shift's own hostname support (M14) exists.
 
 ## Conventions
 
@@ -62,6 +64,13 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `GET /api/v0/health`                           | `shift health`              | Liveness and readiness                           |
 | `GET /api/v0/ready`                            | `shift ready`               | Readiness; `503` when not ready                  |
 | `POST /api/v0/admin/shutdown`                  | `shift stop`                | Graceful shutdown                                |
+| `POST /api/v0/pair`                            | none                        | Pair a device with a phrase (TCP, no token)      |
+| `GET /api/v0/devices`                          | none                        | Paired devices (TCP, token)                      |
+| `POST /api/v0/devices/{id}/revoke`             | none                        | Revoke a device (TCP, token)                     |
+| `POST /api/v0/pairing`                         | none                        | Issue a pairing phrase (TCP, token)              |
+| `POST /api/v0/admin/pairing`                   | `shift device pair`         | Issue a pairing phrase                           |
+| `GET /api/v0/admin/devices`                    | `shift device list`         | Paired devices                                   |
+| `POST /api/v0/admin/devices/{id}/revoke`       | `shift device revoke`       | Revoke a device                                  |
 | `POST /api/v0/admin/projects`                  | `shift project add`         | Register a repository                            |
 | `GET /api/v0/admin/projects`                   | `shift project list`        | List projects                                    |
 | `POST /api/v0/admin/workflows`                 | `shift workflow create`     | Create a workflow with a draft                   |
@@ -409,6 +418,35 @@ A `Workspace`:
 - `409 WORKSPACE_DIRTY`: the worktree has uncommitted or untracked changes. Pass `force: true` to discard them.
 - `404 WORKSPACE_NOT_FOUND`.
 
+### Devices
+
+A desktop client pairs once with a phrase and then authenticates every request with a bearer token ([specification 13.1](shift-server-v0.md#131-enrollment-and-secrets)).
+
+1. The owner runs `shift device pair` (or a paired device calls `POST /api/v0/pairing`). It prints `{"phrase", "expiresAt"}`: eight words from the BIP39 English list, 88 random bits. The phrase works once and expires after ten minutes. Shift stores only its hash, and never logs it.
+2. The client sends `POST /api/v0/pair` over TCP with `{"phrase", "deviceName", "commandId"}`. Case, hyphens and extra spaces in the phrase don't matter. The answer is `201 {"device": Device, "token"}`: a random 256-bit token, base64url. Shift stores only the token's SHA-256 hash.
+3. Every later request carries `Authorization: Bearer <token>`. A missing, unknown or revoked token gets `401 DEVICE_UNAUTHORIZED` with `WWW-Authenticate: Bearer`. Tokens never go in URLs.
+
+If the pairing response is lost, send the same request again with the same `commandId`. Until the phrase's original expiry, that returns the same device and token, from a copy encrypted with the server's master key. After the expiry the copy is erased. Issue a new phrase, and revoke the device the lost response created. Another command ID on a used phrase is refused like a wrong phrase. The same command ID with a different body is `409 COMMAND_CONFLICT`.
+
+A `Device` is `{"id", "name", "createdAt", "lastSeenAt", "revokedAt"}`. `lastSeenAt` is updated at most once a minute.
+
+| Request                            | Answer                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v0/devices`              | `{"devices": [Device], "currentDeviceId"}`, oldest first.                                                                                                        |
+| `POST /api/v0/devices/{id}/revoke` | `{"commandId"?}` → `{"device": Device}`. The device's later requests are refused and its streams close. Runs it started keep running. Revoking twice is a no-op. |
+| `POST /api/v0/pairing`             | `201 {"pairing": {"phrase", "expiresAt"}}`. Issuing is not idempotent: a lost phrase is replaced by issuing another.                                             |
+
+The administrative socket offers the same through `shift device pair`, `shift device list` and `shift device revoke <id>`.
+
+Protection against guessing:
+
+- At most 10 pairing attempts per client address and 60 in total per minute (`429 RATE_LIMITED`, retryable).
+- After 20 failed attempts while phrases are open, every open phrase is withdrawn, and the owner issues a new one.
+
+Wrong, used, expired and withdrawn phrases all get the same `401 PAIRING_REJECTED`.
+
+The master key lives in `<state>/secrets/master.key`, mode `0600`, created on first start. It is versioned, so keys can be rotated later. It protects copies of the database, such as backups, that leave the state directory without it. It does not protect against code running as the server's account.
+
 ## Error codes
 
 HTTP errors returned by the endpoints above:
@@ -416,12 +454,14 @@ HTTP errors returned by the endpoints above:
 | Status | Codes                                                                                                                                                                                                                                                                                                  |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                |
+| 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`                                                                                                                                                                                                                          |
 | 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                             |
-| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`                                                                                                                                                                                   |
+| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`                                                                                                                                                               |
 | 409    | `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
 | 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                  |
 | 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB or a workflow document over 1 MiB                                                                                                                                                                                                                               |
 | 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`                                                                                                                     |
+| 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                        |
 | 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                      |
 | 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                      |
 

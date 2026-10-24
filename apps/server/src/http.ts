@@ -11,6 +11,10 @@ import {
   validateServerHealth,
   validateProtocolError,
   validateShutdownAcknowledgement,
+  validatePairResponse,
+  validatePairingIssued,
+  validateDeviceList,
+  validateDeviceResponse,
   type ServerInfo,
   type ServerHealth,
   type ProtocolError,
@@ -18,6 +22,8 @@ import {
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
 import type { CommandResponse } from './persistence/receipts.js';
+import type { DeviceService } from './devices/service.js';
+import type { Device } from './devices/registry.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
 import type { DefinitionRepository } from './workflows/repository.js';
@@ -35,6 +41,7 @@ export function createHttpServer(options: {
   engine?: RunEngine;
   definitions?: { service: DefinitionService; repository: DefinitionRepository };
   workspaces?: WorkspaceService;
+  devices?: DeviceService;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -50,11 +57,14 @@ export function createHttpServer(options: {
     });
     // Only run creation on the administrative socket accepts a (bounded JSON) body.
     // Administrative commands on the private socket accept a bounded JSON body; shutdown does not.
-    const acceptsBody =
-      options.administrative &&
-      (req.method === 'POST' || req.method === 'PUT') &&
-      req.path.startsWith(`${admin}/`) &&
-      req.path !== `${admin}/shutdown`;
+    // On TCP, only device commands take a body.
+    const acceptsBody = options.administrative
+      ? (req.method === 'POST' || req.method === 'PUT') &&
+        req.path.startsWith(`${admin}/`) &&
+        req.path !== `${admin}/shutdown`
+      : req.method === 'POST' &&
+        options.devices !== undefined &&
+        /^\/api\/v0\/(pair|pairing|devices\/[^/]+\/revoke)$/.test(req.path);
     if (
       !acceptsBody &&
       (req.headers['transfer-encoding'] !== undefined ||
@@ -105,7 +115,7 @@ export function createHttpServer(options: {
       capabilities: {
         commands: false,
         events: false,
-        pairing: false,
+        pairing: options.devices !== undefined,
         nodeTypes: [],
         harnesses: [],
       },
@@ -253,6 +263,94 @@ export function createHttpServer(options: {
       res.status(202).json(payload);
     });
   }
+  // Paired devices (specification 13.1). Every TCP route but pairing itself needs a bearer token.
+  const devices = options.devices;
+  if (devices) {
+    const small = express.json({ limit: '16kb', strict: true });
+    const send = <T>(
+      res: Response,
+      status: number,
+      body: Record<string, unknown>,
+      validate: (value: unknown) => value is T,
+    ) => {
+      const payload = { schemaVersion: 1, requestId: res.locals['requestId'] as string, ...body };
+      if (!validate(payload)) throw new ShiftError('INTERNAL_ERROR', 'Invalid device response.');
+      res.status(status).json(payload);
+    };
+    if (options.administrative) {
+      const cli = { kind: 'cli' as const, id: 'local' };
+      const local = (req: express.Request) => {
+        if (req.headers.origin !== undefined)
+          throw new ShiftError(
+            'INVALID_REQUEST',
+            'Browser-origin administration is unavailable.',
+            403,
+          );
+      };
+      app.post(`${admin}/pairing`, (req, res) => {
+        local(req);
+        send(res, 201, { pairing: devices.issue(cli) }, validatePairingIssued);
+      });
+      app.get(`${admin}/devices`, (req, res) => {
+        local(req);
+        res.json({
+          schemaVersion: 1,
+          requestId: res.locals['requestId'],
+          devices: devices.registry.list(),
+        });
+      });
+      app.post(`${admin}/devices/:id/revoke`, express.json({ limit: '16kb' }), (req, res) => {
+        local(req);
+        const response = devices.revoke(String(req.params['id']), cli, req.body ?? {});
+        send(
+          res,
+          response.status,
+          response.body as Record<string, unknown>,
+          validateDeviceResponse,
+        );
+      });
+    } else {
+      app.post('/api/v0/pair', small, (req, res) => {
+        const paired = devices.pair(req.body, req.socket.remoteAddress ?? 'unknown');
+        send(res, 201, paired, validatePairResponse);
+      });
+      const authenticated: express.RequestHandler = (req, res, next) => {
+        const header = req.headers.authorization ?? '';
+        const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(header);
+        const device = match ? devices.registry.authenticate(match[1]!) : null;
+        if (!device) {
+          next(new ShiftError('DEVICE_UNAUTHORIZED', 'A valid device token is required.', 401));
+          return;
+        }
+        res.locals['device'] = device;
+        next();
+      };
+      const caller = (res: Response) => ({
+        kind: 'device' as const,
+        id: (res.locals['device'] as Device).id,
+      });
+      app.get('/api/v0/devices', authenticated, (_req, res) => {
+        send(
+          res,
+          200,
+          { devices: devices.registry.list(), currentDeviceId: caller(res).id },
+          validateDeviceList,
+        );
+      });
+      app.post('/api/v0/devices/:id/revoke', authenticated, small, (req, res) => {
+        const response = devices.revoke(String(req.params['id']), caller(res), req.body ?? {});
+        send(
+          res,
+          response.status,
+          response.body as Record<string, unknown>,
+          validateDeviceResponse,
+        );
+      });
+      app.post('/api/v0/pairing', authenticated, (_req, res) => {
+        send(res, 201, { pairing: devices.issue(caller(res)) }, validatePairingIssued);
+      });
+    }
+  }
   app.use((_req, _res, next) => next(new ShiftError('NOT_FOUND', 'Endpoint not found.', 404)));
   const errorHandler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     const bodyError = (error as { type?: unknown } | null)?.type;
@@ -278,6 +376,7 @@ export function createHttpServer(options: {
       res.status(500).end();
       return;
     }
+    if (safe.code === 'DEVICE_UNAUTHORIZED') res.set('WWW-Authenticate', 'Bearer');
     res.status(safe.status).json(payload);
   };
   app.use(errorHandler);

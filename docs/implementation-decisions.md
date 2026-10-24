@@ -432,3 +432,31 @@ Decided 2026-10-24 to finish prompt 06, following specification sections 6.3 and
   The execution view adds `predecessorId`, `connectionId` and `sources`. Executions prepared before this change show `sources: null`.
 
 - **History.** `GET /runs/{id}/executions?after=SEQ&limit=N` returns entries in the same form as the run view, paged by sequence: up to 500 per page, 100 by default, with `next` as the following cursor. `shift run executions` wraps it. The run view still lists every execution, which the execution limit caps at 1,000 by default. Trimming the run view can wait for the paired client, which will page.
+
+## Device pairing and authentication
+
+Decided 2026-10-24 for the first part of M05 (prompt 10), following specification sections 10 and 13.1.
+
+- **Phrase.**
+  - Eight words drawn with `crypto.randomInt` from the BIP39 English list, which gives 88 random bits. The list comes from `@scure/bip39` (MIT), importing only its wordlist module, which has no dependencies.
+  - Lifetime is ten minutes, and a phrase can be consumed once.
+  - Only its SHA-256 is stored. At this entropy an unsalted hash is not a guessing aid.
+  - Normalizing case, hyphens and spaces lets a person type it.
+- **Issuing.** `shift device pair` on the administrative socket, or `POST /api/v0/pairing` from a paired device. Issuing is deliberately not idempotent and keeps no receipt, so the phrase never enters a receipt. A lost phrase is replaced by issuing another.
+  - The specification has the first-start CLI display a phrase. The service does not do that: its stdout goes to the journal and would persist the secret. The owner runs `shift device pair` instead.
+- **Enrollment.**
+  - **Pairing.** `POST /api/v0/pair` consumes the phrase and creates the device in one transaction. The token is 32 random bytes (base64url), and only its SHA-256 is stored.
+  - **Lost response.** Instead of a command receipt, the challenge row keeps the command ID, a request hash over the phrase hash and device name, and an AES-256-GCM delivery copy of the token bound to the challenge ID. Until the phrase's original expiry, the same command and body return the same device and token. A sweep at startup, every minute and before each pairing clears expired copies. After that, the owner issues a new phrase and revokes the orphan device.
+  - **Reuse.** Another command ID on a used phrase is refused like a wrong phrase. The same command ID with a different body is `COMMAND_CONFLICT`.
+- **Guessing.**
+  - In-memory limits allow 10 attempts per peer address and 60 in total per minute (`429 RATE_LIMITED`).
+  - After 20 failures while phrases are open, all open phrases are withdrawn. Failures are counted after the transaction, which a rejection rolls back.
+  - Every rejection has the same code and message, so a response does not reveal which phrases exist.
+  - The limits reset on restart. That is acceptable because guessing 88 bits online is not feasible anyway.
+- **Master key.** `<state>/secrets/master.key` is versioned JSON (`current` plus numbered 32-byte keys), created with `wx` and mode 0600 in a 0700 directory. Startup refuses wrong ownership, modes or links. Sealed values are `k<version>.<iv>.<tag>.<ciphertext>` with the context string as AAD.
+- **Authentication.** `Authorization: Bearer <token>` is required on every TCP device route except `/pair`. Failures are `401 DEVICE_UNAUTHORIZED` with `WWW-Authenticate: Bearer`. `last_seen_at` is written at most once a minute. Receipts are now scoped to `device:<id>` actors as well as `cli:local`, so a device can look up only its own.
+- **Revocation** commits with its receipt and is recorded in an event. Listeners hear about it only after the commit, so the event streams in the next part can close a revoked device's connections. Runs the device started are unaffected.
+- **Transport.** TCP stays plain HTTP. Loopback is the default. With `--public`, the owner must put a TLS-terminating proxy in front until M14 adds hostname and TLS support. The API reference and the CLI help say so.
+- **Protocol.** `Device`, `PairRequest`, `PairResponse`, `PairingIssued`, `DeviceList` and `DeviceResponse` join the shared schema. The validators are generated for both server and client, and `capabilities.pairing` is now true.
+
+The device API for runs, workflows and interactions follows next, with per-device receipt lookup; then events with snapshot, replay and SSE.

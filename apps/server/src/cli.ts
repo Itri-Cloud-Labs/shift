@@ -39,12 +39,15 @@ shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
+shift device pair
+shift device list
+shift device revoke DEVICE_ID
 shift interaction list [--all]
 shift interaction show INTERACTION_ID
 shift interaction respond INTERACTION_ID [--decision OUTCOME] [--file RESPONSE.json]
             [--revision N] [--wait]
 
-Project, workflow, run, workspace and interaction commands accept --state-dir PATH; changes accept
+Project, workflow, run, workspace, interaction and device commands accept --state-dir PATH; changes accept
 --command-id ID, which makes repeating the same command return its first result.
 A run in NEEDS_HUMAN continues with retry (run the stuck step again; its agent is
 told earlier effects are unknown), fail (abandon the step), complete (record a
@@ -57,12 +60,17 @@ directory, at the commit its base ref had when the run started. Worktrees are
 kept after runs finish; remove refuses one with uncommitted changes unless
 --force is given.
 
-TCP serves read-only /api/v0/info, /health and /ready. Administration and runs
-use the private admin.sock in the state directory. --public explicitly permits a
-non-loopback IP; it exposes no administration. OpenCode runs as your own install,
-with your config, credentials and plugins. --opencode-environment isolated gives it
-a private namespace instead; SHIFT_OPENCODE_API_KEY then supplies the provider key
-for --opencode-model once. Pairing and remote clients are unavailable.
+device pair prints a single-use, eight-word phrase that pairs one desktop client
+within ten minutes; revoke cuts a device off without stopping runs it started.
+
+TCP serves /api/v0/info, /health and /ready, pairing, and the API for paired
+devices, which authenticate with a bearer token. Local administration uses the
+private admin.sock in the state directory. --public explicitly permits a
+non-loopback IP; serve it only behind a TLS-terminating proxy, because tokens
+would otherwise cross the network in clear text. OpenCode runs as your own
+install, with your config, credentials and plugins. --opencode-environment
+isolated gives it a private namespace instead; SHIFT_OPENCODE_API_KEY then
+supplies the provider key for --opencode-model once.
 `;
 
 function integer(value: string | undefined, fallback: number): number {
@@ -84,7 +92,7 @@ async function main(): Promise<void> {
     process.stdout.write(usage);
     return;
   }
-  if (['project', 'workflow', 'run', 'workspace', 'interaction'].includes(command)) {
+  if (['project', 'workflow', 'run', 'workspace', 'interaction', 'device'].includes(command)) {
     const { adminCommand } = await import('./cli-admin.js');
     return adminCommand(command, args.slice(1));
   }

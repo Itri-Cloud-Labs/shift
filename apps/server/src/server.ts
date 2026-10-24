@@ -17,6 +17,9 @@ import { OpenCodeAdapter } from './harness/opencode/adapter.js';
 import { OpenCodeRuntime } from './harness/opencode/runtime.js';
 import type { ResultHandler } from './harness/types.js';
 import { CommandReceipts } from './persistence/receipts.js';
+import { DeviceRegistry } from './devices/registry.js';
+import { DeviceService } from './devices/service.js';
+import { SecretBox } from './secrets/secret-box.js';
 import { RunEngine } from './runs/engine.js';
 import { DefinitionRepository } from './workflows/repository.js';
 import { WorkspaceService } from './workspaces/service.js';
@@ -85,6 +88,7 @@ export async function startServer(
   let engine: RunEngine | undefined;
   let tcp: Server | undefined;
   let admin: Server | undefined;
+  let sweeper: NodeJS.Timeout | undefined;
   let stopping = false;
   let resolveStopped!: () => void;
   let rejectStopped!: (error: unknown) => void;
@@ -97,6 +101,7 @@ export async function startServer(
     // One deadline for the whole shutdown; each step gets only the time that remains. Killing the
     // runtime scope is immediate, so it still happens after the deadline has passed.
     const deadline = Date.now() + config.shutdownTimeoutMs;
+    clearInterval(sweeper);
     const remaining = () => Math.max(0, deadline - Date.now());
     // The engine cancels active turns through the harness while the store is still open.
     for (const step of [() => engine?.stop(remaining()), () => runtime?.stop(remaining())]) {
@@ -188,6 +193,12 @@ export async function startServer(
     const definitions = new DefinitionRepository(store.db, clock);
     const definitionService = new DefinitionService(definitions, receipts);
     const workspaces = new Workspaces(store.db, clock, join(state.path, 'workspaces'));
+    const registry = new DeviceRegistry(store.db, clock, await SecretBox.open(state.path));
+    const devices = new DeviceService(registry, receipts);
+    // Enrollment delivery copies are cleared once their phrase's original expiry passes.
+    registry.sweep();
+    sweeper = setInterval(() => registry.sweep(), 60_000);
+    sweeper.unref();
     engine = new RunEngine({
       definitions,
       receipts,
@@ -212,6 +223,7 @@ export async function startServer(
       engine,
       definitions: { service: definitionService, repository: definitions },
       workspaces: new WorkspaceService(workspaces, receipts),
+      devices,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
@@ -222,6 +234,7 @@ export async function startServer(
       logger,
       administrative: false,
       stop: requestStop,
+      devices,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {

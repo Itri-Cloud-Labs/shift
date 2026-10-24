@@ -1,7 +1,17 @@
 /* Generated from foundation.schema.json. Do not edit. */
 
 export type FoundationPayload =
-  ServerInfo | ServerHealth | ProtocolError | ShutdownAcknowledgement | ServerIdentity;
+  | ServerInfo
+  | ServerHealth
+  | ProtocolError
+  | ShutdownAcknowledgement
+  | ServerIdentity
+  | Device
+  | PairRequest
+  | PairResponse
+  | PairingIssued
+  | DeviceList
+  | DeviceResponse;
 export type Uuid = string;
 export type Readiness = {
   ready: boolean;
@@ -33,6 +43,8 @@ export type Readiness1 =
       reason?: 'PERSISTENCE_UNAVAILABLE';
       [k: string]: unknown;
     };
+export type DeviceName = string;
+export type CommandId = string;
 
 export interface ServerInfo {
   schemaVersion: 1;
@@ -52,7 +64,7 @@ export interface ProtocolRange {
 export interface ServerCapabilities {
   commands: false;
   events: false;
-  pairing: false;
+  pairing: boolean;
   /**
    * @maxItems 0
    */
@@ -99,4 +111,44 @@ export interface ShutdownAcknowledgement {
 export interface ServerIdentity {
   serverId: Uuid;
   eventEpoch: Uuid;
+}
+export interface Device {
+  id: Uuid;
+  name: DeviceName;
+  createdAt: number;
+  lastSeenAt: number | null;
+  revokedAt: number | null;
+}
+export interface PairRequest {
+  phrase: string;
+  deviceName: DeviceName;
+  commandId: CommandId;
+}
+export interface PairResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  device: Device;
+  token: string;
+}
+export interface PairingIssued {
+  schemaVersion: 1;
+  requestId: Uuid;
+  pairing: {
+    phrase: string;
+    expiresAt: number;
+  };
+}
+export interface DeviceList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 1000
+   */
+  devices: Device[];
+  currentDeviceId: Uuid;
+}
+export interface DeviceResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  device: Device;
 }

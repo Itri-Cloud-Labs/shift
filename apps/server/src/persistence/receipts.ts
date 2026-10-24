@@ -6,7 +6,7 @@ import type { Json } from '../harness/types.js';
 import { canonicalJson } from '../workflows/document.js';
 
 export interface Actor {
-  kind: 'cli';
+  kind: 'cli' | 'device';
   id: string;
 }
 
