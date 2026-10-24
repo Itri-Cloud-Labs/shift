@@ -200,6 +200,77 @@ test('validation rejects graphs the executor cannot run', () => {
       /undeclared binding version/,
     ],
     [
+      'condition comparing an undeclared binding',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'condition',
+          config: { when: { op: 'eq', left: { binding: 'ghost' }, right: { value: 1 } } },
+        }),
+      /undeclared binding ghost/,
+    ],
+    [
+      'comparison without a right operand',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'condition',
+          config: { when: { op: 'gt', left: { value: 1 } } },
+        }),
+      /gt compares two operands/,
+    ],
+    [
+      'rule nested too deeply',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'condition',
+          config: {
+            when: {
+              all: [
+                { any: [{ all: [{ any: [{ all: [{ op: 'exists', left: { value: 1 } }] }] }] }] },
+              ],
+            },
+          },
+        }),
+      /nest at most 4 groups/,
+    ],
+    [
+      'switch case named default',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'switch',
+          config: { cases: [{ port: 'default', when: { op: 'exists', left: { value: 1 } } }] },
+        }),
+      /must NOT be valid/,
+    ],
+    [
+      'switch with a duplicate case',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'switch',
+          config: {
+            cases: [
+              { port: 'a', when: { op: 'exists', left: { value: 1 } } },
+              { port: 'a', when: { op: 'exists', left: { value: 2 } } },
+            ],
+          },
+        }),
+      /Duplicate case port a/,
+    ],
+    [
+      'connection from a switch port it does not have',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'switch',
+          config: { cases: [{ port: 'a', when: { op: 'exists', left: { value: 1 } } }] },
+        }),
+      /Node shape has no port success/,
+    ],
+    [
       'wait until an undeclared binding',
       (d) => d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: { until: '{{when}}' } }),
       /undeclared binding when/,

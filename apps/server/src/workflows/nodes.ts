@@ -2,6 +2,7 @@
 // node's type version; a type version this server does not implement fails publication and start.
 import type { Json } from '../harness/types.js';
 import { defaultOutcomes } from './forms.js';
+import { ruleDefs, ruleRef } from './rules.js';
 
 export interface NodeTypeDefinition {
   type: string;
@@ -85,6 +86,59 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
         durationMs: { type: 'integer', minimum: 0, maximum: 366 * 24 * 60 * 60 * 1000 },
         until: { type: 'string', minLength: 1, maxLength: 200 },
       },
+    },
+  },
+  {
+    // Selects `true` or `false` from `when` and passes its input through.
+    type: 'condition',
+    version: 1,
+    ports: ['true', 'false', 'error'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['when'],
+      properties: { when: ruleRef },
+      $defs: ruleDefs,
+    },
+  },
+  {
+    // Selects the port of the first case whose rule holds, or `default`, and passes its input
+    // through. Each case's `port` is an output port.
+    type: 'switch',
+    version: 1,
+    ports: ['default', 'error'],
+    portsFor: (config) => [
+      ...((config as { cases?: Array<{ port: string }> } | null)?.cases ?? []).map(
+        (entry) => entry.port,
+      ),
+      'default',
+      'error',
+    ],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['cases'],
+      properties: {
+        cases: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['port', 'when'],
+            properties: {
+              port: {
+                type: 'string',
+                pattern: '^[a-z][a-z0-9_]{0,39}$',
+                not: { enum: ['default', 'error'] },
+              },
+              when: ruleRef,
+            },
+          },
+        },
+      },
+      $defs: ruleDefs,
     },
   },
   {

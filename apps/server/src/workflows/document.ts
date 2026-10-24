@@ -4,6 +4,7 @@ import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
 import { assertResultSchema } from '../runs/envelope.js';
 import { formProblem } from './forms.js';
+import { ruleProblems, type Rule } from './rules.js';
 import { nodeType } from './nodes.js';
 
 // The serialized workflow graph (server specification section 5). Renderer positions are
@@ -366,6 +367,23 @@ export function diagnose(document: unknown): Diagnostic[] {
       } else if (source.kind === 'node' && source.optional && source.fallback === undefined) {
         add(`${at}/bindings/${name}/fallback`, 'An optional binding needs an explicit fallback.');
       }
+    }
+    const declared = new Set(Object.keys(node.bindings));
+    if (node.type === 'condition') {
+      for (const problem of ruleProblems(config['when'] as Rule, declared, `${at}/config/when`)) {
+        add(problem.at, problem.message);
+      }
+    }
+    if (node.type === 'switch') {
+      const ports = new Set<string>();
+      (config['cases'] as Array<{ port: string; when: Rule }>).forEach((entry, index) => {
+        const where = `${at}/config/cases/${index}`;
+        if (ports.has(entry.port)) add(`${where}/port`, `Duplicate case port ${entry.port}.`);
+        ports.add(entry.port);
+        for (const problem of ruleProblems(entry.when, declared, `${where}/when`)) {
+          add(problem.at, problem.message);
+        }
+      });
     }
     if (typeof config['form'] === 'object' && config['form'] !== null) {
       const problem = formProblem(config['form']);

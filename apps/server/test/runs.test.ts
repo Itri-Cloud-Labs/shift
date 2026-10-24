@@ -2357,3 +2357,213 @@ test('a pending request survives a restart and is answered exactly once', async 
     await second.close();
   }
 });
+
+// ---- Condition and Switch (specification 6.2) ----
+
+const nGreater = (value: number) => ({ op: 'gt', left: { binding: 'n' }, right: { value } });
+const nBinding = { n: { kind: 'input', path: ['data', 'n'] } };
+
+test('a condition picks one branch, and the branches converge through the chosen one only', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'check',
+          type: 'condition',
+          config: { when: { all: [{ op: 'exists', left: { binding: 'n' } }, nGreater(5)] } },
+          bindings: nBinding,
+        },
+        { id: 'big', type: 'transform', config: { data: { size: 'big' } } },
+        { id: 'small', type: 'transform', config: { data: { size: 'small' } } },
+        { id: 'end', type: 'end' },
+      ],
+      connections: [
+        connect('c1', 'start', 'check'),
+        connect('c2', 'check', 'big', 'true'),
+        connect('c3', 'check', 'small', 'false'),
+        connect('c4', 'big', 'end'),
+        connect('c5', 'small', 'end'),
+      ],
+    } as Json);
+    for (const [n, size, branch] of [
+      [7, 'big', 'true'],
+      [2, 'small', 'false'],
+    ] as const) {
+      const run = await startNow(harnessed, workflowId, { input: { n } });
+      assert.equal(run.state, 'COMPLETED');
+      assert.deepEqual(run.outcome, { data: { size } });
+      assert.deepEqual(
+        run.executions.map((execution) => execution.node),
+        ['start', 'check', size, 'end'],
+      );
+      const check = run.executions[1] as unknown as { port: string; output: { data: unknown } };
+      assert.equal(check.port, branch);
+      assert.deepEqual(check.output.data, { n }, 'the condition passes its input through');
+    }
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a switch takes its first matching case, or default', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const leaf = (id: string) => ({ id, type: 'transform', config: { data: id } });
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'route',
+          type: 'switch',
+          config: {
+            cases: [
+              { port: 'high', when: nGreater(9) },
+              { port: 'mid', when: nGreater(4) },
+              {
+                port: 'tagged',
+                when: { op: 'contains', left: { binding: 'tags' }, right: { value: 'x' } },
+              },
+            ],
+          },
+          bindings: {
+            ...nBinding,
+            tags: { kind: 'input', path: ['data', 'tags'] },
+          },
+        },
+        leaf('high'),
+        leaf('mid'),
+        leaf('tagged'),
+        leaf('other'),
+      ],
+      connections: [
+        connect('c1', 'start', 'route'),
+        connect('c2', 'route', 'high', 'high'),
+        connect('c3', 'route', 'mid', 'mid'),
+        connect('c4', 'route', 'tagged', 'tagged'),
+        connect('c5', 'route', 'other', 'default'),
+      ],
+    } as Json);
+    for (const [input, expected] of [
+      [{ n: 12, tags: [] }, 'high'],
+      [{ n: 7, tags: ['x'] }, 'mid'],
+      [{ n: 1, tags: ['x'] }, 'tagged'],
+      [{ n: 1, tags: [] }, 'other'],
+    ] as const) {
+      const run = await startNow(harnessed, workflowId, { input });
+      assert.deepEqual(run.outcome, { data: expected }, JSON.stringify(input));
+    }
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('comparing values of different types fails the node instead of choosing a branch', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'check', type: 'condition', config: { when: nGreater(5) }, bindings: nBinding },
+      ],
+      connections: [connect('c1', 'start', 'check')],
+    } as Json);
+    const run = await startNow(harnessed, workflowId, { input: { n: 'seven' } });
+    assert.equal(run.state, 'FAILED');
+    assert.deepEqual(run.outcome, {
+      code: 'CONDITION_TYPE',
+      category: 'input',
+      message: 'gt cannot compare string with number.',
+    });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a loop controlled by a condition keeps each pass across a restart', async () => {
+  // Each agent turn reports how many turns ran; the loop pauses before every new pass.
+  let turns = 0;
+  const counting: Behaviour = async (turn, fake) => complete({ count: ++turns })(turn, fake);
+  const document = {
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      {
+        id: 'agent',
+        type: 'agent',
+        config: {
+          goal: 'Count.',
+          resultSchema: { type: 'object', properties: { count: { type: 'integer' } } },
+        },
+      },
+      {
+        id: 'again',
+        type: 'condition',
+        config: { when: { op: 'lt', left: { binding: 'count' }, right: { value: 3 } } },
+        bindings: { count: { kind: 'input', path: ['data', 'count'] } },
+      },
+      { id: 'pause', type: 'wait', config: { durationMs: 60_000 } },
+      { id: 'end', type: 'end' },
+    ],
+    connections: [
+      connect('c1', 'start', 'agent'),
+      connect('c2', 'agent', 'again'),
+      connect('c3', 'again', 'pause', 'true'),
+      connect('c4', 'pause', 'agent'),
+      connect('c5', 'again', 'end', 'false'),
+    ],
+  } as Json;
+  const first = await engineFor(counting);
+  const workflowId = await publish(first, document);
+  const { id } = await startNow(first, workflowId);
+  const paused = await until(first, id, (run) => run.wait?.kind === 'timer');
+  await first.close();
+
+  // The first pass is paused; the server comes back after its timer.
+  const clock = new FakeClock(paused.wait!.dueAt);
+  const current = await engineFor(counting, { state: first.state, fake: first.fake, clock });
+  try {
+    // Each later pass pauses at a new deadline; move the clock past it until the loop ends.
+    for (let dueAt = paused.wait!.dueAt; ;) {
+      const run = await until(
+        current,
+        id,
+        (candidate) =>
+          candidate.state === 'COMPLETED' ||
+          (candidate.wait?.kind === 'timer' && candidate.wait.dueAt !== dueAt),
+      );
+      if (run.state === 'COMPLETED') break;
+      dueAt = run.wait!.dueAt;
+      clock.advance(60_000);
+    }
+    const run = view(current, id) as unknown as {
+      outcome: unknown;
+      executions: Array<{ node: string; port: string | null; output: { data: unknown } }>;
+    };
+    assert.deepEqual(
+      run.executions.map((execution) => `${execution.node}:${execution.port}`),
+      [
+        'start:success',
+        'agent:success',
+        'again:true',
+        'pause:success',
+        'agent:success',
+        'again:true',
+        'pause:success',
+        'agent:success',
+        'again:false',
+        'end:success',
+      ],
+    );
+    assert.deepEqual(
+      run.executions
+        .filter((execution) => execution.node === 'agent')
+        .map((execution) => execution.output.data),
+      [{ count: 1 }, { count: 2 }, { count: 3 }],
+      'every pass is its own execution with its own output',
+    );
+    assert.deepEqual(run.outcome, { data: { count: 3 } });
+  } finally {
+    await current.close();
+  }
+});
