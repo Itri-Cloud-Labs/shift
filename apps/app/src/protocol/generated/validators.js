@@ -669,18 +669,55 @@ function validate109(
                             }
                             if (_errs17 === errors) {
                               if (data5.min !== void 0) {
+                                let data6 = data5.min;
                                 const _errs18 = errors;
-                                if (0 !== data5.min) {
+                                if (!(
+                                  typeof data6 == 'number' &&
+                                  !(data6 % 1) &&
+                                  !isNaN(data6) &&
+                                  isFinite(data6)
+                                )) {
                                   validate109.errors = [
                                     {
                                       instancePath: instancePath + '/protocol/min',
-                                      schemaPath: '#/$defs/ProtocolRange/properties/min/const',
-                                      keyword: 'const',
-                                      params: { allowedValue: 0 },
-                                      message: 'must be equal to constant',
+                                      schemaPath: '#/$defs/ProtocolRange/properties/min/type',
+                                      keyword: 'type',
+                                      params: { type: 'integer' },
+                                      message: 'must be integer',
                                     },
                                   ];
                                   return false;
+                                }
+                                if (errors === _errs18) {
+                                  if (typeof data6 == 'number' && isFinite(data6)) {
+                                    if (data6 > 1e3 || isNaN(data6)) {
+                                      validate109.errors = [
+                                        {
+                                          instancePath: instancePath + '/protocol/min',
+                                          schemaPath:
+                                            '#/$defs/ProtocolRange/properties/min/maximum',
+                                          keyword: 'maximum',
+                                          params: { comparison: '<=', limit: 1e3 },
+                                          message: 'must be <= 1000',
+                                        },
+                                      ];
+                                      return false;
+                                    } else {
+                                      if (data6 < 0 || isNaN(data6)) {
+                                        validate109.errors = [
+                                          {
+                                            instancePath: instancePath + '/protocol/min',
+                                            schemaPath:
+                                              '#/$defs/ProtocolRange/properties/min/minimum',
+                                            keyword: 'minimum',
+                                            params: { comparison: '>=', limit: 0 },
+                                            message: 'must be >= 0',
+                                          },
+                                        ];
+                                        return false;
+                                      }
+                                    }
+                                  }
                                 }
                                 var valid5 = _errs18 === errors;
                               } else {
@@ -688,20 +725,57 @@ function validate109(
                               }
                               if (valid5) {
                                 if (data5.max !== void 0) {
-                                  const _errs19 = errors;
-                                  if (0 !== data5.max) {
+                                  let data7 = data5.max;
+                                  const _errs20 = errors;
+                                  if (!(
+                                    typeof data7 == 'number' &&
+                                    !(data7 % 1) &&
+                                    !isNaN(data7) &&
+                                    isFinite(data7)
+                                  )) {
                                     validate109.errors = [
                                       {
                                         instancePath: instancePath + '/protocol/max',
-                                        schemaPath: '#/$defs/ProtocolRange/properties/max/const',
-                                        keyword: 'const',
-                                        params: { allowedValue: 0 },
-                                        message: 'must be equal to constant',
+                                        schemaPath: '#/$defs/ProtocolRange/properties/max/type',
+                                        keyword: 'type',
+                                        params: { type: 'integer' },
+                                        message: 'must be integer',
                                       },
                                     ];
                                     return false;
                                   }
-                                  var valid5 = _errs19 === errors;
+                                  if (errors === _errs20) {
+                                    if (typeof data7 == 'number' && isFinite(data7)) {
+                                      if (data7 > 1e3 || isNaN(data7)) {
+                                        validate109.errors = [
+                                          {
+                                            instancePath: instancePath + '/protocol/max',
+                                            schemaPath:
+                                              '#/$defs/ProtocolRange/properties/max/maximum',
+                                            keyword: 'maximum',
+                                            params: { comparison: '<=', limit: 1e3 },
+                                            message: 'must be <= 1000',
+                                          },
+                                        ];
+                                        return false;
+                                      } else {
+                                        if (data7 < 0 || isNaN(data7)) {
+                                          validate109.errors = [
+                                            {
+                                              instancePath: instancePath + '/protocol/max',
+                                              schemaPath:
+                                                '#/$defs/ProtocolRange/properties/max/minimum',
+                                              keyword: 'minimum',
+                                              params: { comparison: '>=', limit: 0 },
+                                              message: 'must be >= 0',
+                                            },
+                                          ];
+                                          return false;
+                                        }
+                                      }
+                                    }
+                                  }
+                                  var valid5 = _errs20 === errors;
                                 } else {
                                   var valid5 = true;
                                 }
@@ -728,15 +802,15 @@ function validate109(
                     if (valid0) {
                       if (data.readiness !== void 0) {
                         let data8 = data.readiness;
-                        const _errs20 = errors;
-                        const _errs21 = errors;
+                        const _errs22 = errors;
                         const _errs23 = errors;
+                        const _errs25 = errors;
                         let valid7 = false;
                         let passing0 = null;
-                        const _errs24 = errors;
+                        const _errs26 = errors;
                         if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                           if (data8.ready !== void 0) {
-                            const _errs25 = errors;
+                            const _errs27 = errors;
                             if (false !== data8.ready) {
                               const err0 = {
                                 instancePath: instancePath + '/readiness/ready',
@@ -752,13 +826,13 @@ function validate109(
                               }
                               errors++;
                             }
-                            var valid8 = _errs25 === errors;
+                            var valid8 = _errs27 === errors;
                           } else {
                             var valid8 = true;
                           }
                           if (valid8) {
                             if (data8.phase !== void 0) {
-                              const _errs26 = errors;
+                              const _errs28 = errors;
                               if ('starting' !== data8.phase) {
                                 const err1 = {
                                   instancePath: instancePath + '/readiness/phase',
@@ -774,13 +848,13 @@ function validate109(
                                 }
                                 errors++;
                               }
-                              var valid8 = _errs26 === errors;
+                              var valid8 = _errs28 === errors;
                             } else {
                               var valid8 = true;
                             }
                             if (valid8) {
                               if (data8.reason !== void 0) {
-                                const _errs27 = errors;
+                                const _errs29 = errors;
                                 if ('STARTING' !== data8.reason) {
                                   const err2 = {
                                     instancePath: instancePath + '/readiness/reason',
@@ -796,14 +870,14 @@ function validate109(
                                   }
                                   errors++;
                                 }
-                                var valid8 = _errs27 === errors;
+                                var valid8 = _errs29 === errors;
                               } else {
                                 var valid8 = true;
                               }
                             }
                           }
                         }
-                        var _valid0 = _errs24 === errors;
+                        var _valid0 = _errs26 === errors;
                         if (_valid0) {
                           valid7 = true;
                           passing0 = 0;
@@ -812,10 +886,10 @@ function validate109(
                           props0.phase = true;
                           props0.reason = true;
                         }
-                        const _errs28 = errors;
+                        const _errs30 = errors;
                         if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                           if (data8.ready !== void 0) {
-                            const _errs29 = errors;
+                            const _errs31 = errors;
                             if (true !== data8.ready) {
                               const err3 = {
                                 instancePath: instancePath + '/readiness/ready',
@@ -831,13 +905,13 @@ function validate109(
                               }
                               errors++;
                             }
-                            var valid9 = _errs29 === errors;
+                            var valid9 = _errs31 === errors;
                           } else {
                             var valid9 = true;
                           }
                           if (valid9) {
                             if (data8.phase !== void 0) {
-                              const _errs30 = errors;
+                              const _errs32 = errors;
                               if ('ready' !== data8.phase) {
                                 const err4 = {
                                   instancePath: instancePath + '/readiness/phase',
@@ -853,13 +927,13 @@ function validate109(
                                 }
                                 errors++;
                               }
-                              var valid9 = _errs30 === errors;
+                              var valid9 = _errs32 === errors;
                             } else {
                               var valid9 = true;
                             }
                             if (valid9) {
                               if (data8.reason !== void 0) {
-                                const _errs31 = errors;
+                                const _errs33 = errors;
                                 if ('READY' !== data8.reason) {
                                   const err5 = {
                                     instancePath: instancePath + '/readiness/reason',
@@ -875,14 +949,14 @@ function validate109(
                                   }
                                   errors++;
                                 }
-                                var valid9 = _errs31 === errors;
+                                var valid9 = _errs33 === errors;
                               } else {
                                 var valid9 = true;
                               }
                             }
                           }
                         }
-                        var _valid0 = _errs28 === errors;
+                        var _valid0 = _errs30 === errors;
                         if (_valid0 && valid7) {
                           valid7 = false;
                           passing0 = [passing0, 1];
@@ -897,10 +971,10 @@ function validate109(
                               props0.reason = true;
                             }
                           }
-                          const _errs32 = errors;
+                          const _errs34 = errors;
                           if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                             if (data8.ready !== void 0) {
-                              const _errs33 = errors;
+                              const _errs35 = errors;
                               if (false !== data8.ready) {
                                 const err6 = {
                                   instancePath: instancePath + '/readiness/ready',
@@ -916,13 +990,13 @@ function validate109(
                                 }
                                 errors++;
                               }
-                              var valid10 = _errs33 === errors;
+                              var valid10 = _errs35 === errors;
                             } else {
                               var valid10 = true;
                             }
                             if (valid10) {
                               if (data8.phase !== void 0) {
-                                const _errs34 = errors;
+                                const _errs36 = errors;
                                 if ('stopping' !== data8.phase) {
                                   const err7 = {
                                     instancePath: instancePath + '/readiness/phase',
@@ -938,13 +1012,13 @@ function validate109(
                                   }
                                   errors++;
                                 }
-                                var valid10 = _errs34 === errors;
+                                var valid10 = _errs36 === errors;
                               } else {
                                 var valid10 = true;
                               }
                               if (valid10) {
                                 if (data8.reason !== void 0) {
-                                  const _errs35 = errors;
+                                  const _errs37 = errors;
                                   if ('STOPPING' !== data8.reason) {
                                     const err8 = {
                                       instancePath: instancePath + '/readiness/reason',
@@ -961,14 +1035,14 @@ function validate109(
                                     }
                                     errors++;
                                   }
-                                  var valid10 = _errs35 === errors;
+                                  var valid10 = _errs37 === errors;
                                 } else {
                                   var valid10 = true;
                                 }
                               }
                             }
                           }
-                          var _valid0 = _errs32 === errors;
+                          var _valid0 = _errs34 === errors;
                           if (_valid0 && valid7) {
                             valid7 = false;
                             passing0 = [passing0, 2];
@@ -983,10 +1057,10 @@ function validate109(
                                 props0.reason = true;
                               }
                             }
-                            const _errs36 = errors;
+                            const _errs38 = errors;
                             if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                               if (data8.ready !== void 0) {
-                                const _errs37 = errors;
+                                const _errs39 = errors;
                                 if (false !== data8.ready) {
                                   const err9 = {
                                     instancePath: instancePath + '/readiness/ready',
@@ -1002,13 +1076,13 @@ function validate109(
                                   }
                                   errors++;
                                 }
-                                var valid11 = _errs37 === errors;
+                                var valid11 = _errs39 === errors;
                               } else {
                                 var valid11 = true;
                               }
                               if (valid11) {
                                 if (data8.phase !== void 0) {
-                                  const _errs38 = errors;
+                                  const _errs40 = errors;
                                   if ('failed' !== data8.phase) {
                                     const err10 = {
                                       instancePath: instancePath + '/readiness/phase',
@@ -1025,13 +1099,13 @@ function validate109(
                                     }
                                     errors++;
                                   }
-                                  var valid11 = _errs38 === errors;
+                                  var valid11 = _errs40 === errors;
                                 } else {
                                   var valid11 = true;
                                 }
                                 if (valid11) {
                                   if (data8.reason !== void 0) {
-                                    const _errs39 = errors;
+                                    const _errs41 = errors;
                                     if ('PERSISTENCE_UNAVAILABLE' !== data8.reason) {
                                       const err11 = {
                                         instancePath: instancePath + '/readiness/reason',
@@ -1048,14 +1122,14 @@ function validate109(
                                       }
                                       errors++;
                                     }
-                                    var valid11 = _errs39 === errors;
+                                    var valid11 = _errs41 === errors;
                                   } else {
                                     var valid11 = true;
                                   }
                                 }
                               }
                             }
-                            var _valid0 = _errs36 === errors;
+                            var _valid0 = _errs38 === errors;
                             if (_valid0 && valid7) {
                               valid7 = false;
                               passing0 = [passing0, 3];
@@ -1090,16 +1164,16 @@ function validate109(
                           validate109.errors = vErrors;
                           return false;
                         } else {
-                          errors = _errs23;
+                          errors = _errs25;
                           if (vErrors !== null) {
-                            if (_errs23) {
-                              vErrors.length = _errs23;
+                            if (_errs25) {
+                              vErrors.length = _errs25;
                             } else {
                               vErrors = null;
                             }
                           }
                         }
-                        if (errors === _errs21) {
+                        if (errors === _errs23) {
                           if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                             let missing2;
                             if (
@@ -1118,7 +1192,7 @@ function validate109(
                               ];
                               return false;
                             } else {
-                              const _errs40 = errors;
+                              const _errs42 = errors;
                               for (const key2 in data8) {
                                 if (!(key2 === 'ready' || key2 === 'phase' || key2 === 'reason')) {
                                   validate109.errors = [
@@ -1134,9 +1208,9 @@ function validate109(
                                   break;
                                 }
                               }
-                              if (_errs40 === errors) {
+                              if (_errs42 === errors) {
                                 if (data8.ready !== void 0) {
-                                  const _errs41 = errors;
+                                  const _errs43 = errors;
                                   if (typeof data8.ready !== 'boolean') {
                                     validate109.errors = [
                                       {
@@ -1149,14 +1223,14 @@ function validate109(
                                     ];
                                     return false;
                                   }
-                                  var valid12 = _errs41 === errors;
+                                  var valid12 = _errs43 === errors;
                                 } else {
                                   var valid12 = true;
                                 }
                                 if (valid12) {
                                   if (data8.phase !== void 0) {
                                     let data22 = data8.phase;
-                                    const _errs43 = errors;
+                                    const _errs45 = errors;
                                     if (!(
                                       data22 === 'starting' ||
                                       data22 === 'ready' ||
@@ -1174,14 +1248,14 @@ function validate109(
                                       ];
                                       return false;
                                     }
-                                    var valid12 = _errs43 === errors;
+                                    var valid12 = _errs45 === errors;
                                   } else {
                                     var valid12 = true;
                                   }
                                   if (valid12) {
                                     if (data8.reason !== void 0) {
                                       let data23 = data8.reason;
-                                      const _errs44 = errors;
+                                      const _errs46 = errors;
                                       if (!(
                                         data23 === 'STARTING' ||
                                         data23 === 'READY' ||
@@ -1201,7 +1275,7 @@ function validate109(
                                         ];
                                         return false;
                                       }
-                                      var valid12 = _errs44 === errors;
+                                      var valid12 = _errs46 === errors;
                                     } else {
                                       var valid12 = true;
                                     }
@@ -1222,16 +1296,16 @@ function validate109(
                             return false;
                           }
                         }
-                        var valid0 = _errs20 === errors;
+                        var valid0 = _errs22 === errors;
                       } else {
                         var valid0 = true;
                       }
                       if (valid0) {
                         if (data.capabilities !== void 0) {
                           let data24 = data.capabilities;
-                          const _errs45 = errors;
-                          const _errs46 = errors;
-                          if (errors === _errs46) {
+                          const _errs47 = errors;
+                          const _errs48 = errors;
+                          if (errors === _errs48) {
                             if (data24 && typeof data24 == 'object' && !Array.isArray(data24)) {
                               let missing3;
                               if (
@@ -1252,7 +1326,7 @@ function validate109(
                                 ];
                                 return false;
                               } else {
-                                const _errs48 = errors;
+                                const _errs50 = errors;
                                 for (const key3 in data24) {
                                   if (!(
                                     key3 === 'commands' ||
@@ -1275,9 +1349,9 @@ function validate109(
                                     break;
                                   }
                                 }
-                                if (_errs48 === errors) {
+                                if (_errs50 === errors) {
                                   if (data24.commands !== void 0) {
-                                    const _errs49 = errors;
+                                    const _errs51 = errors;
                                     if (typeof data24.commands !== 'boolean') {
                                       validate109.errors = [
                                         {
@@ -1291,13 +1365,13 @@ function validate109(
                                       ];
                                       return false;
                                     }
-                                    var valid14 = _errs49 === errors;
+                                    var valid14 = _errs51 === errors;
                                   } else {
                                     var valid14 = true;
                                   }
                                   if (valid14) {
                                     if (data24.events !== void 0) {
-                                      const _errs51 = errors;
+                                      const _errs53 = errors;
                                       if (typeof data24.events !== 'boolean') {
                                         validate109.errors = [
                                           {
@@ -1311,13 +1385,13 @@ function validate109(
                                         ];
                                         return false;
                                       }
-                                      var valid14 = _errs51 === errors;
+                                      var valid14 = _errs53 === errors;
                                     } else {
                                       var valid14 = true;
                                     }
                                     if (valid14) {
                                       if (data24.pairing !== void 0) {
-                                        const _errs53 = errors;
+                                        const _errs55 = errors;
                                         if (typeof data24.pairing !== 'boolean') {
                                           validate109.errors = [
                                             {
@@ -1331,15 +1405,15 @@ function validate109(
                                           ];
                                           return false;
                                         }
-                                        var valid14 = _errs53 === errors;
+                                        var valid14 = _errs55 === errors;
                                       } else {
                                         var valid14 = true;
                                       }
                                       if (valid14) {
                                         if (data24.nodeTypes !== void 0) {
                                           let data28 = data24.nodeTypes;
-                                          const _errs55 = errors;
-                                          if (errors === _errs55) {
+                                          const _errs57 = errors;
+                                          if (errors === _errs57) {
                                             if (Array.isArray(data28)) {
                                               if (data28.length > 0) {
                                                 validate109.errors = [
@@ -1359,7 +1433,7 @@ function validate109(
                                                 const len0 = data28.length;
                                                 for (let i0 = 0; i0 < len0; i0++) {
                                                   let data29 = data28[i0];
-                                                  const _errs57 = errors;
+                                                  const _errs59 = errors;
                                                   if (!(
                                                     data29 &&
                                                     typeof data29 == 'object' &&
@@ -1380,7 +1454,7 @@ function validate109(
                                                     ];
                                                     return false;
                                                   }
-                                                  var valid15 = _errs57 === errors;
+                                                  var valid15 = _errs59 === errors;
                                                   if (!valid15) {
                                                     break;
                                                   }
@@ -1401,15 +1475,15 @@ function validate109(
                                               return false;
                                             }
                                           }
-                                          var valid14 = _errs55 === errors;
+                                          var valid14 = _errs57 === errors;
                                         } else {
                                           var valid14 = true;
                                         }
                                         if (valid14) {
                                           if (data24.harnesses !== void 0) {
                                             let data30 = data24.harnesses;
-                                            const _errs59 = errors;
-                                            if (errors === _errs59) {
+                                            const _errs61 = errors;
+                                            if (errors === _errs61) {
                                               if (Array.isArray(data30)) {
                                                 if (data30.length > 0) {
                                                   validate109.errors = [
@@ -1429,7 +1503,7 @@ function validate109(
                                                   const len1 = data30.length;
                                                   for (let i1 = 0; i1 < len1; i1++) {
                                                     let data31 = data30[i1];
-                                                    const _errs61 = errors;
+                                                    const _errs63 = errors;
                                                     if (!(
                                                       data31 &&
                                                       typeof data31 == 'object' &&
@@ -1450,7 +1524,7 @@ function validate109(
                                                       ];
                                                       return false;
                                                     }
-                                                    var valid16 = _errs61 === errors;
+                                                    var valid16 = _errs63 === errors;
                                                     if (!valid16) {
                                                       break;
                                                     }
@@ -1471,7 +1545,7 @@ function validate109(
                                                 return false;
                                               }
                                             }
-                                            var valid14 = _errs59 === errors;
+                                            var valid14 = _errs61 === errors;
                                           } else {
                                             var valid14 = true;
                                           }
@@ -1494,16 +1568,16 @@ function validate109(
                               return false;
                             }
                           }
-                          var valid0 = _errs45 === errors;
+                          var valid0 = _errs47 === errors;
                         } else {
                           var valid0 = true;
                         }
                         if (valid0) {
                           if (data.time !== void 0) {
                             let data32 = data.time;
-                            const _errs63 = errors;
-                            const _errs64 = errors;
-                            if (errors === _errs64) {
+                            const _errs65 = errors;
+                            const _errs66 = errors;
+                            if (errors === _errs66) {
                               if (data32 && typeof data32 == 'object' && !Array.isArray(data32)) {
                                 let missing4;
                                 if (
@@ -1521,7 +1595,7 @@ function validate109(
                                   ];
                                   return false;
                                 } else {
-                                  const _errs66 = errors;
+                                  const _errs68 = errors;
                                   for (const key4 in data32) {
                                     if (!(key4 === 'epochMs' || key4 === 'iso')) {
                                       validate109.errors = [
@@ -1537,10 +1611,10 @@ function validate109(
                                       break;
                                     }
                                   }
-                                  if (_errs66 === errors) {
+                                  if (_errs68 === errors) {
                                     if (data32.epochMs !== void 0) {
                                       let data33 = data32.epochMs;
-                                      const _errs67 = errors;
+                                      const _errs69 = errors;
                                       if (!(
                                         typeof data33 == 'number' &&
                                         !(data33 % 1) &&
@@ -1558,7 +1632,7 @@ function validate109(
                                         ];
                                         return false;
                                       }
-                                      if (errors === _errs67) {
+                                      if (errors === _errs69) {
                                         if (typeof data33 == 'number' && isFinite(data33)) {
                                           if (data33 > 864e13 || isNaN(data33)) {
                                             validate109.errors = [
@@ -1589,16 +1663,16 @@ function validate109(
                                           }
                                         }
                                       }
-                                      var valid18 = _errs67 === errors;
+                                      var valid18 = _errs69 === errors;
                                     } else {
                                       var valid18 = true;
                                     }
                                     if (valid18) {
                                       if (data32.iso !== void 0) {
                                         let data34 = data32.iso;
-                                        const _errs69 = errors;
-                                        if (errors === _errs69) {
-                                          if (errors === _errs69) {
+                                        const _errs71 = errors;
+                                        if (errors === _errs71) {
+                                          if (errors === _errs71) {
                                             if (typeof data34 === 'string') {
                                               if (func2(data34) > 32) {
                                                 validate109.errors = [
@@ -1643,7 +1717,7 @@ function validate109(
                                             }
                                           }
                                         }
-                                        var valid18 = _errs69 === errors;
+                                        var valid18 = _errs71 === errors;
                                       } else {
                                         var valid18 = true;
                                       }
@@ -1663,7 +1737,7 @@ function validate109(
                                 return false;
                               }
                             }
-                            var valid0 = _errs63 === errors;
+                            var valid0 = _errs65 === errors;
                           } else {
                             var valid0 = true;
                           }
@@ -2009,18 +2083,54 @@ function validate110(
                           }
                           if (_errs15 === errors) {
                             if (data4.min !== void 0) {
+                              let data5 = data4.min;
                               const _errs16 = errors;
-                              if (0 !== data4.min) {
+                              if (!(
+                                typeof data5 == 'number' &&
+                                !(data5 % 1) &&
+                                !isNaN(data5) &&
+                                isFinite(data5)
+                              )) {
                                 validate110.errors = [
                                   {
                                     instancePath: instancePath + '/protocol/min',
-                                    schemaPath: '#/$defs/ProtocolRange/properties/min/const',
-                                    keyword: 'const',
-                                    params: { allowedValue: 0 },
-                                    message: 'must be equal to constant',
+                                    schemaPath: '#/$defs/ProtocolRange/properties/min/type',
+                                    keyword: 'type',
+                                    params: { type: 'integer' },
+                                    message: 'must be integer',
                                   },
                                 ];
                                 return false;
+                              }
+                              if (errors === _errs16) {
+                                if (typeof data5 == 'number' && isFinite(data5)) {
+                                  if (data5 > 1e3 || isNaN(data5)) {
+                                    validate110.errors = [
+                                      {
+                                        instancePath: instancePath + '/protocol/min',
+                                        schemaPath: '#/$defs/ProtocolRange/properties/min/maximum',
+                                        keyword: 'maximum',
+                                        params: { comparison: '<=', limit: 1e3 },
+                                        message: 'must be <= 1000',
+                                      },
+                                    ];
+                                    return false;
+                                  } else {
+                                    if (data5 < 0 || isNaN(data5)) {
+                                      validate110.errors = [
+                                        {
+                                          instancePath: instancePath + '/protocol/min',
+                                          schemaPath:
+                                            '#/$defs/ProtocolRange/properties/min/minimum',
+                                          keyword: 'minimum',
+                                          params: { comparison: '>=', limit: 0 },
+                                          message: 'must be >= 0',
+                                        },
+                                      ];
+                                      return false;
+                                    }
+                                  }
+                                }
                               }
                               var valid5 = _errs16 === errors;
                             } else {
@@ -2028,20 +2138,57 @@ function validate110(
                             }
                             if (valid5) {
                               if (data4.max !== void 0) {
-                                const _errs17 = errors;
-                                if (0 !== data4.max) {
+                                let data6 = data4.max;
+                                const _errs18 = errors;
+                                if (!(
+                                  typeof data6 == 'number' &&
+                                  !(data6 % 1) &&
+                                  !isNaN(data6) &&
+                                  isFinite(data6)
+                                )) {
                                   validate110.errors = [
                                     {
                                       instancePath: instancePath + '/protocol/max',
-                                      schemaPath: '#/$defs/ProtocolRange/properties/max/const',
-                                      keyword: 'const',
-                                      params: { allowedValue: 0 },
-                                      message: 'must be equal to constant',
+                                      schemaPath: '#/$defs/ProtocolRange/properties/max/type',
+                                      keyword: 'type',
+                                      params: { type: 'integer' },
+                                      message: 'must be integer',
                                     },
                                   ];
                                   return false;
                                 }
-                                var valid5 = _errs17 === errors;
+                                if (errors === _errs18) {
+                                  if (typeof data6 == 'number' && isFinite(data6)) {
+                                    if (data6 > 1e3 || isNaN(data6)) {
+                                      validate110.errors = [
+                                        {
+                                          instancePath: instancePath + '/protocol/max',
+                                          schemaPath:
+                                            '#/$defs/ProtocolRange/properties/max/maximum',
+                                          keyword: 'maximum',
+                                          params: { comparison: '<=', limit: 1e3 },
+                                          message: 'must be <= 1000',
+                                        },
+                                      ];
+                                      return false;
+                                    } else {
+                                      if (data6 < 0 || isNaN(data6)) {
+                                        validate110.errors = [
+                                          {
+                                            instancePath: instancePath + '/protocol/max',
+                                            schemaPath:
+                                              '#/$defs/ProtocolRange/properties/max/minimum',
+                                            keyword: 'minimum',
+                                            params: { comparison: '>=', limit: 0 },
+                                            message: 'must be >= 0',
+                                          },
+                                        ];
+                                        return false;
+                                      }
+                                    }
+                                  }
+                                }
+                                var valid5 = _errs18 === errors;
                               } else {
                                 var valid5 = true;
                               }
@@ -2067,7 +2214,7 @@ function validate110(
                   }
                   if (valid0) {
                     if (data.liveness !== void 0) {
-                      const _errs18 = errors;
+                      const _errs20 = errors;
                       if ('alive' !== data.liveness) {
                         validate110.errors = [
                           {
@@ -2080,22 +2227,22 @@ function validate110(
                         ];
                         return false;
                       }
-                      var valid0 = _errs18 === errors;
+                      var valid0 = _errs20 === errors;
                     } else {
                       var valid0 = true;
                     }
                     if (valid0) {
                       if (data.readiness !== void 0) {
                         let data8 = data.readiness;
-                        const _errs19 = errors;
-                        const _errs20 = errors;
+                        const _errs21 = errors;
                         const _errs22 = errors;
+                        const _errs24 = errors;
                         let valid7 = false;
                         let passing0 = null;
-                        const _errs23 = errors;
+                        const _errs25 = errors;
                         if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                           if (data8.ready !== void 0) {
-                            const _errs24 = errors;
+                            const _errs26 = errors;
                             if (false !== data8.ready) {
                               const err0 = {
                                 instancePath: instancePath + '/readiness/ready',
@@ -2111,13 +2258,13 @@ function validate110(
                               }
                               errors++;
                             }
-                            var valid8 = _errs24 === errors;
+                            var valid8 = _errs26 === errors;
                           } else {
                             var valid8 = true;
                           }
                           if (valid8) {
                             if (data8.phase !== void 0) {
-                              const _errs25 = errors;
+                              const _errs27 = errors;
                               if ('starting' !== data8.phase) {
                                 const err1 = {
                                   instancePath: instancePath + '/readiness/phase',
@@ -2133,13 +2280,13 @@ function validate110(
                                 }
                                 errors++;
                               }
-                              var valid8 = _errs25 === errors;
+                              var valid8 = _errs27 === errors;
                             } else {
                               var valid8 = true;
                             }
                             if (valid8) {
                               if (data8.reason !== void 0) {
-                                const _errs26 = errors;
+                                const _errs28 = errors;
                                 if ('STARTING' !== data8.reason) {
                                   const err2 = {
                                     instancePath: instancePath + '/readiness/reason',
@@ -2155,14 +2302,14 @@ function validate110(
                                   }
                                   errors++;
                                 }
-                                var valid8 = _errs26 === errors;
+                                var valid8 = _errs28 === errors;
                               } else {
                                 var valid8 = true;
                               }
                             }
                           }
                         }
-                        var _valid0 = _errs23 === errors;
+                        var _valid0 = _errs25 === errors;
                         if (_valid0) {
                           valid7 = true;
                           passing0 = 0;
@@ -2171,10 +2318,10 @@ function validate110(
                           props0.phase = true;
                           props0.reason = true;
                         }
-                        const _errs27 = errors;
+                        const _errs29 = errors;
                         if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                           if (data8.ready !== void 0) {
-                            const _errs28 = errors;
+                            const _errs30 = errors;
                             if (true !== data8.ready) {
                               const err3 = {
                                 instancePath: instancePath + '/readiness/ready',
@@ -2190,13 +2337,13 @@ function validate110(
                               }
                               errors++;
                             }
-                            var valid9 = _errs28 === errors;
+                            var valid9 = _errs30 === errors;
                           } else {
                             var valid9 = true;
                           }
                           if (valid9) {
                             if (data8.phase !== void 0) {
-                              const _errs29 = errors;
+                              const _errs31 = errors;
                               if ('ready' !== data8.phase) {
                                 const err4 = {
                                   instancePath: instancePath + '/readiness/phase',
@@ -2212,13 +2359,13 @@ function validate110(
                                 }
                                 errors++;
                               }
-                              var valid9 = _errs29 === errors;
+                              var valid9 = _errs31 === errors;
                             } else {
                               var valid9 = true;
                             }
                             if (valid9) {
                               if (data8.reason !== void 0) {
-                                const _errs30 = errors;
+                                const _errs32 = errors;
                                 if ('READY' !== data8.reason) {
                                   const err5 = {
                                     instancePath: instancePath + '/readiness/reason',
@@ -2234,14 +2381,14 @@ function validate110(
                                   }
                                   errors++;
                                 }
-                                var valid9 = _errs30 === errors;
+                                var valid9 = _errs32 === errors;
                               } else {
                                 var valid9 = true;
                               }
                             }
                           }
                         }
-                        var _valid0 = _errs27 === errors;
+                        var _valid0 = _errs29 === errors;
                         if (_valid0 && valid7) {
                           valid7 = false;
                           passing0 = [passing0, 1];
@@ -2256,10 +2403,10 @@ function validate110(
                               props0.reason = true;
                             }
                           }
-                          const _errs31 = errors;
+                          const _errs33 = errors;
                           if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                             if (data8.ready !== void 0) {
-                              const _errs32 = errors;
+                              const _errs34 = errors;
                               if (false !== data8.ready) {
                                 const err6 = {
                                   instancePath: instancePath + '/readiness/ready',
@@ -2275,13 +2422,13 @@ function validate110(
                                 }
                                 errors++;
                               }
-                              var valid10 = _errs32 === errors;
+                              var valid10 = _errs34 === errors;
                             } else {
                               var valid10 = true;
                             }
                             if (valid10) {
                               if (data8.phase !== void 0) {
-                                const _errs33 = errors;
+                                const _errs35 = errors;
                                 if ('stopping' !== data8.phase) {
                                   const err7 = {
                                     instancePath: instancePath + '/readiness/phase',
@@ -2297,13 +2444,13 @@ function validate110(
                                   }
                                   errors++;
                                 }
-                                var valid10 = _errs33 === errors;
+                                var valid10 = _errs35 === errors;
                               } else {
                                 var valid10 = true;
                               }
                               if (valid10) {
                                 if (data8.reason !== void 0) {
-                                  const _errs34 = errors;
+                                  const _errs36 = errors;
                                   if ('STOPPING' !== data8.reason) {
                                     const err8 = {
                                       instancePath: instancePath + '/readiness/reason',
@@ -2320,14 +2467,14 @@ function validate110(
                                     }
                                     errors++;
                                   }
-                                  var valid10 = _errs34 === errors;
+                                  var valid10 = _errs36 === errors;
                                 } else {
                                   var valid10 = true;
                                 }
                               }
                             }
                           }
-                          var _valid0 = _errs31 === errors;
+                          var _valid0 = _errs33 === errors;
                           if (_valid0 && valid7) {
                             valid7 = false;
                             passing0 = [passing0, 2];
@@ -2342,10 +2489,10 @@ function validate110(
                                 props0.reason = true;
                               }
                             }
-                            const _errs35 = errors;
+                            const _errs37 = errors;
                             if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                               if (data8.ready !== void 0) {
-                                const _errs36 = errors;
+                                const _errs38 = errors;
                                 if (false !== data8.ready) {
                                   const err9 = {
                                     instancePath: instancePath + '/readiness/ready',
@@ -2361,13 +2508,13 @@ function validate110(
                                   }
                                   errors++;
                                 }
-                                var valid11 = _errs36 === errors;
+                                var valid11 = _errs38 === errors;
                               } else {
                                 var valid11 = true;
                               }
                               if (valid11) {
                                 if (data8.phase !== void 0) {
-                                  const _errs37 = errors;
+                                  const _errs39 = errors;
                                   if ('failed' !== data8.phase) {
                                     const err10 = {
                                       instancePath: instancePath + '/readiness/phase',
@@ -2384,13 +2531,13 @@ function validate110(
                                     }
                                     errors++;
                                   }
-                                  var valid11 = _errs37 === errors;
+                                  var valid11 = _errs39 === errors;
                                 } else {
                                   var valid11 = true;
                                 }
                                 if (valid11) {
                                   if (data8.reason !== void 0) {
-                                    const _errs38 = errors;
+                                    const _errs40 = errors;
                                     if ('PERSISTENCE_UNAVAILABLE' !== data8.reason) {
                                       const err11 = {
                                         instancePath: instancePath + '/readiness/reason',
@@ -2407,14 +2554,14 @@ function validate110(
                                       }
                                       errors++;
                                     }
-                                    var valid11 = _errs38 === errors;
+                                    var valid11 = _errs40 === errors;
                                   } else {
                                     var valid11 = true;
                                   }
                                 }
                               }
                             }
-                            var _valid0 = _errs35 === errors;
+                            var _valid0 = _errs37 === errors;
                             if (_valid0 && valid7) {
                               valid7 = false;
                               passing0 = [passing0, 3];
@@ -2449,16 +2596,16 @@ function validate110(
                           validate110.errors = vErrors;
                           return false;
                         } else {
-                          errors = _errs22;
+                          errors = _errs24;
                           if (vErrors !== null) {
-                            if (_errs22) {
-                              vErrors.length = _errs22;
+                            if (_errs24) {
+                              vErrors.length = _errs24;
                             } else {
                               vErrors = null;
                             }
                           }
                         }
-                        if (errors === _errs20) {
+                        if (errors === _errs22) {
                           if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
                             let missing2;
                             if (
@@ -2477,7 +2624,7 @@ function validate110(
                               ];
                               return false;
                             } else {
-                              const _errs39 = errors;
+                              const _errs41 = errors;
                               for (const key2 in data8) {
                                 if (!(key2 === 'ready' || key2 === 'phase' || key2 === 'reason')) {
                                   validate110.errors = [
@@ -2493,9 +2640,9 @@ function validate110(
                                   break;
                                 }
                               }
-                              if (_errs39 === errors) {
+                              if (_errs41 === errors) {
                                 if (data8.ready !== void 0) {
-                                  const _errs40 = errors;
+                                  const _errs42 = errors;
                                   if (typeof data8.ready !== 'boolean') {
                                     validate110.errors = [
                                       {
@@ -2508,14 +2655,14 @@ function validate110(
                                     ];
                                     return false;
                                   }
-                                  var valid12 = _errs40 === errors;
+                                  var valid12 = _errs42 === errors;
                                 } else {
                                   var valid12 = true;
                                 }
                                 if (valid12) {
                                   if (data8.phase !== void 0) {
                                     let data22 = data8.phase;
-                                    const _errs42 = errors;
+                                    const _errs44 = errors;
                                     if (!(
                                       data22 === 'starting' ||
                                       data22 === 'ready' ||
@@ -2533,14 +2680,14 @@ function validate110(
                                       ];
                                       return false;
                                     }
-                                    var valid12 = _errs42 === errors;
+                                    var valid12 = _errs44 === errors;
                                   } else {
                                     var valid12 = true;
                                   }
                                   if (valid12) {
                                     if (data8.reason !== void 0) {
                                       let data23 = data8.reason;
-                                      const _errs43 = errors;
+                                      const _errs45 = errors;
                                       if (!(
                                         data23 === 'STARTING' ||
                                         data23 === 'READY' ||
@@ -2560,7 +2707,7 @@ function validate110(
                                         ];
                                         return false;
                                       }
-                                      var valid12 = _errs43 === errors;
+                                      var valid12 = _errs45 === errors;
                                     } else {
                                       var valid12 = true;
                                     }
@@ -2581,16 +2728,16 @@ function validate110(
                             return false;
                           }
                         }
-                        var valid0 = _errs19 === errors;
+                        var valid0 = _errs21 === errors;
                       } else {
                         var valid0 = true;
                       }
                       if (valid0) {
                         if (data.time !== void 0) {
                           let data24 = data.time;
-                          const _errs44 = errors;
-                          const _errs45 = errors;
-                          if (errors === _errs45) {
+                          const _errs46 = errors;
+                          const _errs47 = errors;
+                          if (errors === _errs47) {
                             if (data24 && typeof data24 == 'object' && !Array.isArray(data24)) {
                               let missing3;
                               if (
@@ -2608,7 +2755,7 @@ function validate110(
                                 ];
                                 return false;
                               } else {
-                                const _errs47 = errors;
+                                const _errs49 = errors;
                                 for (const key3 in data24) {
                                   if (!(key3 === 'epochMs' || key3 === 'iso')) {
                                     validate110.errors = [
@@ -2624,10 +2771,10 @@ function validate110(
                                     break;
                                   }
                                 }
-                                if (_errs47 === errors) {
+                                if (_errs49 === errors) {
                                   if (data24.epochMs !== void 0) {
                                     let data25 = data24.epochMs;
-                                    const _errs48 = errors;
+                                    const _errs50 = errors;
                                     if (!(
                                       typeof data25 == 'number' &&
                                       !(data25 % 1) &&
@@ -2645,7 +2792,7 @@ function validate110(
                                       ];
                                       return false;
                                     }
-                                    if (errors === _errs48) {
+                                    if (errors === _errs50) {
                                       if (typeof data25 == 'number' && isFinite(data25)) {
                                         if (data25 > 864e13 || isNaN(data25)) {
                                           validate110.errors = [
@@ -2676,16 +2823,16 @@ function validate110(
                                         }
                                       }
                                     }
-                                    var valid14 = _errs48 === errors;
+                                    var valid14 = _errs50 === errors;
                                   } else {
                                     var valid14 = true;
                                   }
                                   if (valid14) {
                                     if (data24.iso !== void 0) {
                                       let data26 = data24.iso;
-                                      const _errs50 = errors;
-                                      if (errors === _errs50) {
-                                        if (errors === _errs50) {
+                                      const _errs52 = errors;
+                                      if (errors === _errs52) {
+                                        if (errors === _errs52) {
                                           if (typeof data26 === 'string') {
                                             if (func2(data26) > 32) {
                                               validate110.errors = [
@@ -2728,7 +2875,7 @@ function validate110(
                                           }
                                         }
                                       }
-                                      var valid14 = _errs50 === errors;
+                                      var valid14 = _errs52 === errors;
                                     } else {
                                       var valid14 = true;
                                     }
@@ -2748,7 +2895,7 @@ function validate110(
                               return false;
                             }
                           }
-                          var valid0 = _errs44 === errors;
+                          var valid0 = _errs46 === errors;
                         } else {
                           var valid0 = true;
                         }

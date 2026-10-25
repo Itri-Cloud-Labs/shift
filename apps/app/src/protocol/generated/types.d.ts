@@ -80,8 +80,8 @@ export interface ServerInfo {
   time: Timestamp;
 }
 export interface ProtocolRange {
-  min: 0;
-  max: 0;
+  min: number;
+  max: number;
 }
 export interface ServerCapabilities {
   commands: boolean;

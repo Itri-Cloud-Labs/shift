@@ -18,18 +18,26 @@ import {
 } from '../src/main/security.js';
 import { dispatch } from '../src/main/dispatcher.js';
 import { ClientCore } from '../src/client-core/runtime.js';
+import { ConnectionRuntime } from '../src/client-core/connection.js';
+import { MemoryCredentialStore, MemoryProfileStore } from '../src/client-core/credentials.js';
+import { ServerHttp } from '../src/client-core/http.js';
 
 const trusted = { senderId: 4, mainSenderId: 4, frameIsMain: true, url: APP_URL };
-const core = () =>
-  new ClientCore(
-    {
-      query: async () => {
-        throw new Error('No network');
-      },
-    },
-    { resolve: async () => undefined },
-    undefined,
+// A client with no saved connection whose network always fails.
+const core = () => {
+  const http = new ServerHttp(async () => {
+    throw new Error('No network');
+  });
+  return new ClientCore(
+    new ConnectionRuntime({
+      http,
+      credentials: new MemoryCredentialStore(),
+      profiles: new MemoryProfileStore(),
+      allowLoopbackHttp: false,
+    }),
+    http,
   );
+};
 
 test('IPC rejects unknown discriminants, extra keys, coercion and payload exhaustion', () => {
   assert.deepEqual(parseRequest({ kind: 'server.query', operation: 'info' }), {

@@ -26,6 +26,21 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
 }
 const bridge: DesktopBridge = {
   readShell: () => invoke({ kind: 'shell.read' }),
+  connection: Object.freeze({
+    read: () => invoke({ kind: 'connection.read' }),
+    pair: (form: { url: string; phrase: string; deviceName: string }) =>
+      invoke({
+        kind: 'connection.pair',
+        url: form?.url,
+        phrase: form?.phrase,
+        deviceName: form?.deviceName,
+      } as DesktopRequest),
+    abandonPairing: () => invoke({ kind: 'connection.abandonPairing' }),
+    connect: (profileId: string) => invoke({ kind: 'connection.connect', profileId }),
+    changeAddress: (profileId: string, url: string) =>
+      invoke({ kind: 'connection.changeAddress', profileId, url }),
+    clear: (profileId: string) => invoke({ kind: 'connection.clear', profileId }),
+  }),
   setSamples: (enabled) => invoke({ kind: 'samples.set', enabled }),
   queryServer: (operation) => invoke({ kind: 'server.query', operation }),
   openDocumentation: () => invoke({ kind: 'desktop.openDocumentation' }),

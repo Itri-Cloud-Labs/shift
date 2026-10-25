@@ -1,11 +1,30 @@
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
-import { parseRequest, parseResponse, type DesktopResponse } from '../shared/contracts.js';
+import {
+  parseRequest,
+  parseResponse,
+  type ConnectionView,
+  type DesktopResponse,
+} from '../shared/contracts.js';
 import {
   DOCUMENTATION_URL,
   validExternalLink,
   validSender,
   type SenderContext,
 } from './security.js';
+
+// The renderer's view of the connection: state and public profile fields only.
+async function connectionView(core: ClientCore): Promise<ConnectionView> {
+  const { connection } = core;
+  const state = connection.state;
+  return {
+    status: state.status,
+    profileId: state.profileId,
+    problem: state.problem,
+    pairingPending: state.pairingPending,
+    credentialStorage: connection.credentialStorage,
+    profiles: await connection.profiles(),
+  };
+}
 
 export async function dispatch(
   core: ClientCore,
@@ -27,6 +46,33 @@ export async function dispatch(
     switch (request.kind) {
       case 'shell.read':
         response = { kind: 'shell', state: core.shell() };
+        break;
+      case 'connection.read':
+        response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'connection.pair':
+        await core.connection.pair({
+          url: request.url,
+          phrase: request.phrase,
+          deviceName: request.deviceName,
+        });
+        response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'connection.abandonPairing':
+        core.connection.abandonPairing();
+        response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'connection.connect':
+        await core.connection.connect(request.profileId);
+        response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'connection.changeAddress':
+        await core.connection.changeAddress(request.profileId, request.url);
+        response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'connection.clear':
+        await core.connection.clear(request.profileId);
+        response = { kind: 'connection', connection: await connectionView(core) };
         break;
       case 'samples.set':
         response = { kind: 'shell', state: core.setSamples(request.enabled) };

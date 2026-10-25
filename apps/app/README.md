@@ -2,7 +2,17 @@
 
 The Electron client opens a minimal shell: a disconnected status, six plain navigation buttons, and an empty section placeholder. The sections are Projects, Workflows, Runs, Sessions, Attention, and Settings. Development shows a fixture-mode label. There are no sample resource records, resource views, search, dialogs, icons, custom fonts, or product styling.
 
-The app never starts a Shift server, harness, or agent. Pairing, authenticated HTTP/SSE, credential persistence, workflow editing, and connected queries are later milestones. The foundation has injected transport and credential interfaces, with Node-only tests against fakes. There are no stored credentials in this version.
+The app never starts a Shift server, harness, or agent. The main process can pair with a server, keep the device token in the OS keychain, and reconnect, but no screen uses this yet: the renderer still shows the disconnected shell. The event stream, synchronized data and workflow editing are later milestones.
+
+## Connections
+
+`client-core/connection.ts` owns pairing and the active profile, through injected `fetch`, credential and profile stores, so it runs and is tested without Electron.
+
+- **URLs** must be HTTPS. Plain HTTP is accepted only for a loopback address in development builds. User info, queries and fragments are refused, and redirects are never followed, so a token cannot be carried to another origin.
+- **Identity first:** before any token is sent, the app reads `/api/v0/info`, checks that the protocol range includes version 0 and that the server is the one the profile was paired with, by server ID. A different server at the same address, or after an address change, is refused as `IDENTITY_MISMATCH`.
+- **Pairing** sends the phrase, the device name and a command ID once. If the response is lost, pairing again with the same form repeats the same command, and the server returns the same device and token until the phrase expires. The phrase is kept only in main-process memory for that pending pairing.
+- **Credentials:** the token is encrypted with Electron `safeStorage` and stored under a random handle in `userData/credentials`, apart from `userData/connections.json`, which holds only addresses and IDs. On Linux without a secret service (`basic_text`), the token lives only in memory for the session, and the profile shows its credential as missing after a restart.
+- **States:** `unconfigured`, `connecting`, `pairing`, `online`, `offline`, `revoked` and `incompatible`, each with a problem code when something is wrong. A revoked device's token is deleted. Clearing a profile removes only local data; the server keeps the device until it is revoked there.
 
 ## Run and verify
 
@@ -34,18 +44,18 @@ Electron cannot run as root with its sandbox enabled. The smoke tool handles a r
 
 ## Code boundaries
 
-| Directory                | Responsibility                                                                                                                                              |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main`               | Electron lifecycle, custom scheme, asset allowlist, permissions/navigation, validated IPC dispatch.                                                         |
-| `src/preload`            | A single CommonJS bundle exposing four named methods through contextBridge.                                                                                 |
-| `src/client-core`        | Platform-independent fixture state and validated foundation queries using injected transport and credentials. Disconnect invalidates outstanding responses. |
-| `src/client-ui`          | Minimal React shell and section selection. No Electron, Node, client-core implementation, or backend imports.                                               |
-| `src/shared`             | App-local IPC schemas, inferred types, safe errors, and explicit payload limits.                                                                            |
-| `src/protocol/generated` | Byte-identical server-owned types, standalone validators, schemas, and foundation fixtures. Regenerate from the root.                                       |
-| `tools`                  | Bundle inspection and built/packaged smoke launcher.                                                                                                        |
-| `test`                   | Boundary and client-core regression tests running without Electron.                                                                                         |
+| Directory                | Responsibility                                                                                                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main`               | Electron lifecycle, custom scheme, asset allowlist, permissions/navigation, validated IPC dispatch, safeStorage credentials and the profile file.                                 |
+| `src/preload`            | A single CommonJS bundle exposing four named methods through contextBridge.                                                                                                       |
+| `src/client-core`        | Platform-independent connection runtime, URL rules, HTTP exchange, credential/profile interfaces and validated status queries. A replaced connection attempt cannot change state. |
+| `src/client-ui`          | Minimal React shell and section selection. No Electron, Node, client-core implementation, or backend imports.                                                                     |
+| `src/shared`             | App-local IPC schemas, inferred types, safe errors, and explicit payload limits.                                                                                                  |
+| `src/protocol/generated` | Byte-identical server-owned types, standalone validators, schemas, and foundation fixtures. Regenerate from the root.                                                             |
+| `tools`                  | Bundle inspection and built/packaged smoke launcher.                                                                                                                              |
+| `test`                   | Boundary and client-core regression tests running without Electron.                                                                                                               |
 
-The bridge exposes `readShell`, `setSamples`, `queryServer`, and `openDocumentation`. Status queries allow only `info`, `health`, and `ready`; the current composition has no active profile and returns `DISCONNECTED`. There is no arbitrary URL, command, channel, filesystem, or token interface. Opening documentation uses one fixed HTTPS destination in main. Main checks the owned webContents, top frame, and exact application document before dispatch. Requests are limited to 8 KiB, responses to 256 KiB, and JSON nesting to 16 levels. Unknown fields, invalid discriminants, coercions, cycles, and non-JSON values fail validation. Raw exception messages never cross the bridge.
+The bridge exposes `readShell`, `setSamples`, `queryServer`, `openDocumentation`, and `connection.{read, pair, abandonPairing, connect, changeAddress, clear}`. Connection responses carry the state and public profile fields only; no token, handle or phrase ever crosses back to the renderer. Status queries allow only `info`, `health`, and `ready`, and return `DISCONNECTED` without an online connection. There is no arbitrary URL, command, channel, filesystem, or token interface. Opening documentation uses one fixed HTTPS destination in main. Main checks the owned webContents, top frame, and exact application document before dispatch. Requests are limited to 8 KiB, responses to 256 KiB, and JSON nesting to 16 levels. Unknown fields, invalid discriminants, coercions, cycles, and non-JSON values fail validation. Raw exception messages never cross the bridge.
 
 Main serves only build-listed files below the renderer directory using `shift://app/index.html`. It rejects unknown assets, methods, userinfo, ports, queries, and paths outside the directory. All assets carry CSP and MIME headers. Context isolation, sandboxing, and web security are enabled; Node integration, webviews, permissions, downloads, renderer networking, navigation, and child windows are disabled. The renderer uses system fonts and bundled scripts under `script-src 'self'` without eval or remote code.
 
