@@ -213,10 +213,14 @@
       "required": ["min", "max"],
       "properties": {
         "min": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
         },
         "max": {
-          "const": 0
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
         }
       }
     },

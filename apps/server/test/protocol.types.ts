@@ -3,7 +3,8 @@ import type { ServerInfo, ProtocolError } from '../src/protocol/index.js';
 // Checked during typecheck. Runtime bounds stay the validator's responsibility.
 export function contractTypes(info: ServerInfo, error: ProtocolError): void {
   const version: 1 = info.schemaVersion;
-  const initialProtocol: 0 = info.protocol.max;
+  // Ranges are numbers, so a client can negotiate with newer servers.
+  const initialProtocol: number = info.protocol.max;
   const identifiers: string[] = [info.serverId, info.eventEpoch, error.requestId];
   void [version, initialProtocol, identifiers];
   // @ts-expect-error Payload versions are literal discriminants.

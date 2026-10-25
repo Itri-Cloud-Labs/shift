@@ -3,6 +3,9 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientCore } from '../client-core/runtime.js';
+import { ConnectionRuntime } from '../client-core/connection.js';
+import { ServerHttp } from '../client-core/http.js';
+import { credentialStore, FileProfileStore } from './storage.js';
 import { IPC_CHANNEL } from '../shared/contracts.js';
 import { dispatch } from './dispatcher.js';
 import { APP_URL, CSP, assetPath, securePreferences } from './security.js';
@@ -16,16 +19,20 @@ app.enableSandbox();
 // Chromium process sandbox flags are never disabled by the application.
 if (smoke && process.env.SHIFT_SMOKE_STATE) app.setPath('userData', process.env.SHIFT_SMOKE_STATE);
 let window: BrowserWindow | undefined;
-const core = new ClientCore(
-  {
-    query: async () => {
-      throw new Error('Disconnected');
-    },
-  },
-  { resolve: async () => undefined },
-  undefined,
-  !app.isPackaged,
-);
+let core: ClientCore;
+
+// Created once the app is ready: safeStorage and userData are only available then.
+function createCore(): ClientCore {
+  const http = new ServerHttp((url, init) => fetch(url, init));
+  const connection = new ConnectionRuntime({
+    http,
+    credentials: credentialStore(join(app.getPath('userData'), 'credentials')),
+    profiles: new FileProfileStore(join(app.getPath('userData'), 'connections.json')),
+    // Plain HTTP to this computer is for development; remote servers always need HTTPS.
+    allowLoopbackHttp: !app.isPackaged,
+  });
+  return new ClientCore(connection, http, !app.isPackaged);
+}
 
 async function createWindow(): Promise<void> {
   const assets = JSON.parse(await readFile(join(root, 'renderer-assets.json'), 'utf8')) as Record<
@@ -104,7 +111,7 @@ async function createWindow(): Promise<void> {
   }
 }
 app.on('window-all-closed', () => {
-  core.disconnect();
+  core.connection.disconnect();
   if (process.platform !== 'darwin' || smoke) app.quit();
 });
 app.on('activate', () => {
@@ -116,7 +123,12 @@ app.on('activate', () => {
 });
 void app
   .whenReady()
-  .then(createWindow)
+  .then(async () => {
+    core = createCore();
+    // The smoke test starts without any saved connection.
+    if (!smoke) void core.connection.start().catch(() => undefined);
+    await createWindow();
+  })
   .catch((error) => {
     if (smoke) console.error(error);
     console.error('The desktop could not start.');

@@ -1,7 +1,8 @@
-import { app, type BrowserWindow } from 'electron';
+import { app, safeStorage, type BrowserWindow } from 'electron';
 import { readFile } from 'node:fs/promises';
 import type { ClientCore } from '../client-core/runtime.js';
 import { APP_URL } from './security.js';
+import { secureStorageAvailable } from './storage.js';
 
 export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise<void> {
   const renderer = app
@@ -17,12 +18,29 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
   if (app.isPackaged && core.shell().samples)
     throw new Error('Packaged app enabled samples by default');
   if (core.shell().connection !== 'unconfigured') throw new Error('Smoke started a connection');
+  // Tokens may be kept across restarts only with an OS-backed key; plain-text backends mean a
+  // session-only credential.
+  const expected = secureStorageAvailable() ? 'persistent' : 'session';
+  if (core.connection.credentialStorage !== expected)
+    throw new Error('Credential storage does not match the safeStorage backend');
+  if (
+    process.platform === 'linux' &&
+    safeStorage.getSelectedStorageBackend() === 'basic_text' &&
+    core.connection.credentialStorage !== 'session'
+  )
+    throw new Error('Insecure Linux storage would persist credentials');
   const report: unknown = await window.webContents.executeJavaScript(`(async () => {
     const assert = (value, message) => { if (!value) throw new Error(message); };
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'openDocumentation,queryServer,readShell,setSamples', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,openDocumentation,queryServer,readShell,setSamples', 'Broad bridge');
+    assert(Object.keys(window.shift.connection).sort().join(',') === 'abandonPairing,changeAddress,clear,connect,pair,read', 'Broad connection bridge');
+    const connection = await window.shift.connection.read();
+    assert(connection.kind === 'connection' && connection.connection.status === 'unconfigured' && connection.connection.profiles.length === 0, 'Unexpected saved connection');
+    assert((await window.shift.connection.pair({ url: 'http://shift.example.com', phrase: 'x', deviceName: 'smoke' })).connection.problem === 'INSECURE_URL', 'Insecure remote URL accepted');
+    assert((await window.shift.connection.connect('../../etc/passwd')).code === 'INVALID_REQUEST', 'Profile path accepted');
+    assert(!/bearer|credentialHandle|authorization|accessToken|token/i.test(JSON.stringify(connection)), 'Credential leaked');
     assert((await window.shift.queryServer('info')).code === 'DISCONNECTED', 'Unexpected live transport');
     assert((await window.shift.queryServer('admin/shutdown')).code === 'INVALID_REQUEST', 'Operation accepted');
     assert((await window.shift.setSamples('bearer-secret')).code === 'INVALID_REQUEST', 'Invalid sample request accepted');
@@ -49,7 +67,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const link = document.createElement('a'); link.href = 'https://example.com'; document.body.append(link); link.click(); link.remove();
     await new Promise(resolve => setTimeout(resolve, 80));
     assert(location.href === '${APP_URL}', 'Navigation escaped');
-    return { views: 6, sandbox: true, bridge: 'narrow', connection: 'unconfigured' };
+    return { views: 6, sandbox: true, bridge: 'narrow', connection: 'unconfigured', credentialStorage: connection.connection.credentialStorage };
   })()`);
   window.setSize(780, 600);
   const overflow = await window.webContents.executeJavaScript(

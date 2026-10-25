@@ -495,3 +495,26 @@ Decided 2026-10-25 to finish M05's server half (prompt 10), following specificat
 - **Proxies.** Responses carry `Cache-Control: no-store, no-transform` and `X-Accel-Buffering: no`, and headers are flushed at once. A test puts a streaming Node reverse proxy with a one-second idle timeout in front: keepalives hold the stream for 2.5 s, and a new event arrives within 1.5 s. No nginx is available in CI; the API reference gives the nginx settings.
 - **Lifecycle.** The device registry's post-commit revocation listener closes that device's streams. Shutdown closes every stream before the listeners close. A client closing or aborting a stream only ends its loop; runs are unaffected.
 - **Protocol.** `EventCursor`, `Event`, `EventPage` and `Snapshot` join the shared schema, and `capabilities.events` is now true.
+
+## Client pairing and credentials
+
+Decided 2026-10-25 for the first part of M05's client half (prompt 11), following client specification sections 2 to 4 and 8. The owner asked for no UI in this prompt, so the renderer is unchanged.
+
+- **Shape.** `ConnectionRuntime` in `client-core` takes `fetch`, a `CredentialStore` and a `ProfileStore` by injection. Main supplies global `fetch`, `safeStorage` files and a JSON profile file. Every awaited step checks its generation, so a pairing or connection replaced by another, or by `clear`, never writes state. Status queries now go through the active connection instead of a placeholder profile.
+- **URL rules.** HTTPS only. Plain HTTP is allowed for `localhost`, `127.0.0.0/8` or `[::1]` only in unpackaged builds, as the specification proposes. User info, query and fragment are refused, and fetch uses `redirect: 'error'` so a bearer token never follows a redirect. The packaged app therefore needs HTTPS even to a server on the same computer. Until the server serves TLS itself (M14), that means a local TLS proxy.
+- **Identity before credentials.** Info is read and checked before any token is sent: the protocol range and server ID must match, and pairing must be available. The protocol range is checked before the full schema, so a newer server is reported as `PROTOCOL_UNSUPPORTED` rather than as an invalid response. The shared `ProtocolRange` schema now allows any non-negative integers instead of pinning `0..0`, so a server supporting 0 and 1 stays compatible. An address change is saved only after the new address answers with the same server ID.
+- **Pairing recovery.** The pending pairing (address, server ID, normalized phrase, device name, command ID) lives in main-process memory for at most ten minutes, the phrase's lifetime. Submitting the same form again resends the same command. A different form, a different server or `abandonPairing` drops it.
+  - Network failure and rate limiting keep it pending, as `PAIRING_UNCONFIRMED` and `PAIRING_RATE_LIMITED`.
+  - Rejection and other errors clear it.
+  - The phrase crosses IPC once, from the renderer to main, and never back.
+- **Credentials.** The token is saved under a random handle as `safeStorage.encryptString` bytes, at `userData/credentials/<handle>.bin`, mode 0600, written through a temporary file. `connections.json` holds addresses and IDs only.
+  - When `safeStorage` is unavailable, or Linux selects `basic_text` or `unknown`, credentials are kept in memory only. They are gone after restart (`CREDENTIAL_MISSING`), and nothing is written in plain text. The smoke test asserts that the reported storage matches the backend.
+- **States.** The specification's seven states, with a problem code for the cause.
+  - `offline`: unreachable.
+  - `incompatible`: an invalid answer, an unsupported protocol, or a different server identity.
+  - `revoked`: `401` on the device check. The token is deleted.
+  - `unconfigured`: no profile, a missing credential, or a refused phrase.
+
+  Clearing a profile deletes its credential and profile locally and sends nothing to the server.
+
+The sync runtime follows next: the connection supervisor, snapshot and replayable events, cursor and projection persistence, receipt reconciliation, backoff and keepalive. It ends with live tests against the server.

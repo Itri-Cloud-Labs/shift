@@ -423,3 +423,35 @@ Acceptance coverage:
 - **Proxy:** behind a streaming reverse proxy that drops connections after one second idle, keepalives hold the stream for 2.5 s, and a new event arrives within 1.5 s.
 - **Aborted client:** aborting a device's stream leaves its waiting approval run `WAITING`.
 - **Totals:** `pnpm check` passed 158 tests (149 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`. One of nine repeated runs of the event tests failed right after the OpenCode suite, without output kept, and later runs did not reproduce it. The slow-client test's 500 ms close window was the likeliest cause and now waits up to 10 s. Thirteen further runs passed.
+
+## Client pairing and credentials
+
+Status: complete for the pairing and credential part of M05's client half (prompt 11). The sync runtime is next. No renderer change, as the owner asked. Date: 2026-10-25.
+
+Changed files:
+
+- **client-core:** URL rules (`url.ts`), the HTTP exchange (`http.ts`), credential and profile interfaces with memory stores (`credentials.ts`), and the connection runtime (`connection.ts`). Status queries go through the connection (`runtime.ts`).
+- **main:** `safeStorage` credential and profile file adapters (`storage.ts`), connection IPC requests in the dispatcher, the main composition, and the smoke checks.
+- **preload and contracts:** the narrow `connection` bridge, and the IPC connection view and request schemas.
+- **Protocol:** the shared `ProtocolRange` schema now accepts any non-negative integers.
+- **Tests and docs:** client tests, the app README, the prompts status and the decision log.
+
+Acceptance coverage (fake `fetch` server from the shared fixtures):
+
+- **URLs:** HTTPS, trailing slashes and spaces are normalized. Remote HTTP, loopback HTTP outside development, user info, queries, other schemes and non-URLs are all refused.
+- **Pairing:** a paired profile goes online and holds the token only behind its handle. The state, public profiles and the stored profile file contain neither token nor phrase. The token is first sent on the device check, after info.
+- **Lost response:** a dropped pairing response leaves the pairing pending. Pairing again, even with the phrase typed in upper case, repeats the same command ID and creates one profile. A different phrase gets a new command ID. Abandoning clears it.
+- **Told apart:**
+  - A retry that reaches another server is `IDENTITY_MISMATCH`.
+  - A refused phrase is cleared as `PAIRING_REJECTED`.
+  - A rate limit stays pending.
+  - A server with only protocol 1 is `PROTOCOL_UNSUPPORTED`, while one with 0 to 1 pairs.
+  - No pairing capability is `PAIRING_UNAVAILABLE`.
+  - Remote HTTP is `INSECURE_URL`.
+- **Restart:** the saved credential reconnects. A session-only store loses it, which leads to `CREDENTIAL_MISSING`, and the profile shows `missing`.
+- **Failures:** an unreachable server leaves the profile `offline`. An impostor at the saved address is `incompatible` and never receives a token. A `401` device check is `revoked` and deletes the token.
+- **Address change:** kept only when the same server ID answers.
+- **Clear:** deletes the credential and profile, supersedes a connection still in flight, and sends nothing.
+- **Status queries:** sent with the device token. Info from another server is refused.
+- **Electron smoke** (built app, Linux under Xvfb): the bridge exposes exactly the connection methods. With no saved connection the state is `unconfigured`. Remote HTTP is refused, a path-like profile ID is an invalid request, and no credential field reaches the renderer. With the `basic_text` backend, credential storage is `session`.
+- **Totals:** `pnpm check` passed 163 tests (149 server, 14 app) with zero skips.
