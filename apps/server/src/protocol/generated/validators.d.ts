@@ -23,6 +23,9 @@ import type {
   InteractionList,
   WorkspaceList,
   ExecutionPage,
+  Event,
+  EventPage,
+  Snapshot,
 } from './types.js';
 
 export interface ValidationDiagnostic {
@@ -59,3 +62,6 @@ export const validateRunList: Validator<RunList>;
 export const validateInteractionList: Validator<InteractionList>;
 export const validateWorkspaceList: Validator<WorkspaceList>;
 export const validateExecutionPage: Validator<ExecutionPage>;
+export const validateEvent: Validator<Event>;
+export const validateEventPage: Validator<EventPage>;
+export const validateSnapshot: Validator<Snapshot>;

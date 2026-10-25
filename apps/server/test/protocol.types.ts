@@ -14,8 +14,8 @@ export function contractTypes(info: ServerInfo, error: ProtocolError): void {
     ...info,
     capabilities: {
       ...info.capabilities,
-      // @ts-expect-error The event stream is not implemented yet, so it cannot be advertised.
-      events: true,
+      // @ts-expect-error Capabilities are booleans, not descriptions.
+      events: 'yes',
     },
   };
   void [wrongVersion, wrongIdentity, wrongCapabilities];

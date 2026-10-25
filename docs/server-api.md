@@ -1,6 +1,6 @@
 # Shift server API
 
-This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. Paired devices use the same resources over TCP with a bearer token ([device API](#device-api)). SSE events ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)) follow in a later release. [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
+This is the HTTP interface of `shift serve` as implemented today: protocol version 0, under `/api/v0`. The `shift` CLI is a thin client over it, so every CLI command below maps to one request. Paired devices use the same resources over TCP with a bearer token ([device API](#device-api)), and follow changes through a replayable SSE [event stream](#events) ([specification section 13](shift-server-v0.md#13-pairing-api-and-events)). [Workflows and runs](workflows.md) covers the document format and execution behaviour that these endpoints operate on.
 
 ## Transports
 
@@ -58,43 +58,46 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 
 ## Endpoints
 
-| Method and path                                | CLI                         | Purpose                                          |
-| ---------------------------------------------- | --------------------------- | ------------------------------------------------ |
-| `GET /api/v0/info`                             | `shift info`                | Server identity, protocol range and capabilities |
-| `GET /api/v0/health`                           | `shift health`              | Liveness and readiness                           |
-| `GET /api/v0/ready`                            | `shift ready`               | Readiness; `503` when not ready                  |
-| `POST /api/v0/admin/shutdown`                  | `shift stop`                | Graceful shutdown                                |
-| `POST /api/v0/pair`                            | none                        | Pair a device with a phrase (TCP, no token)      |
-| `GET /api/v0/devices`                          | none                        | Paired devices (TCP, token)                      |
-| `POST /api/v0/devices/{id}/revoke`             | none                        | Revoke a device (TCP, token)                     |
-| `POST /api/v0/pairing`                         | none                        | Issue a pairing phrase (TCP, token)              |
-| `POST /api/v0/admin/pairing`                   | `shift device pair`         | Issue a pairing phrase                           |
-| `GET /api/v0/admin/devices`                    | `shift device list`         | Paired devices                                   |
-| `POST /api/v0/admin/devices/{id}/revoke`       | `shift device revoke`       | Revoke a device                                  |
-| `GET /api/v0/commands/{commandId}`             | none                        | The device's own command receipt (TCP, token)    |
-| `GET /api/v0/admin/commands/{commandId}`       | none                        | The CLI's own command receipt                    |
-| `POST /api/v0/admin/projects`                  | `shift project add`         | Register a repository                            |
-| `GET /api/v0/admin/projects`                   | `shift project list`        | List projects                                    |
-| `POST /api/v0/admin/workflows`                 | `shift workflow create`     | Create a workflow with a draft                   |
-| `GET /api/v0/admin/workflows[?projectId=]`     | `shift workflow list`       | List workflows                                   |
-| `GET /api/v0/admin/workflows/{id}`             | `shift workflow show`       | Workflow with its draft and versions             |
-| `PUT /api/v0/admin/workflows/{id}/draft`       | `shift workflow save`       | Replace the draft at an expected revision        |
-| `POST /api/v0/admin/workflows/{id}/publish`    | `shift workflow publish`    | Publish the draft as a version                   |
-| `POST /api/v0/admin/runs`                      | `shift run start`           | Start a run of the active version                |
-| `GET /api/v0/admin/runs`                       | `shift run list`            | List runs                                        |
-| `GET /api/v0/admin/runs/{id}`                  | `shift run show`            | Run with executions and invocations              |
-| `GET /api/v0/admin/runs/{id}/executions`       | `shift run executions`      | A page of a run's execution history              |
-| `POST /api/v0/admin/runs/{id}/cancel`          | `shift run cancel`          | Cancel a run                                     |
-| `POST /api/v0/admin/runs/{id}/retry`           | `shift run retry`           | Retry a stuck step                               |
-| `POST /api/v0/admin/runs/{id}/fail`            | `shift run fail`            | Abandon a stuck step                             |
-| `POST /api/v0/admin/runs/{id}/complete`        | `shift run complete`        | Record a verified result for a stuck step        |
-| `POST /api/v0/admin/runs/{id}/extend`          | `shift run extend`          | Raise the limit a run reached                    |
-| `GET /api/v0/admin/interactions[?all=true]`    | `shift interaction list`    | Pending human requests                           |
-| `GET /api/v0/admin/interactions/{id}`          | `shift interaction show`    | One request with its response                    |
-| `POST /api/v0/admin/interactions/{id}/respond` | `shift interaction respond` | Answer a form or approval                        |
-| `GET /api/v0/admin/workspaces[?projectId=]`    | `shift workspace list`      | List run workspaces                              |
-| `GET /api/v0/admin/workspaces/{id}`            | `shift workspace show`      | One workspace                                    |
-| `POST /api/v0/admin/workspaces/{id}/remove`    | `shift workspace remove`    | Remove a finished run's worktree                 |
+| Method and path                                | CLI                         | Purpose                                           |
+| ---------------------------------------------- | --------------------------- | ------------------------------------------------- |
+| `GET /api/v0/info`                             | `shift info`                | Server identity, protocol range and capabilities  |
+| `GET /api/v0/health`                           | `shift health`              | Liveness and readiness                            |
+| `GET /api/v0/ready`                            | `shift ready`               | Readiness; `503` when not ready                   |
+| `POST /api/v0/admin/shutdown`                  | `shift stop`                | Graceful shutdown                                 |
+| `POST /api/v0/pair`                            | none                        | Pair a device with a phrase (TCP, no token)       |
+| `GET /api/v0/devices`                          | none                        | Paired devices (TCP, token)                       |
+| `POST /api/v0/devices/{id}/revoke`             | none                        | Revoke a device (TCP, token)                      |
+| `POST /api/v0/pairing`                         | none                        | Issue a pairing phrase (TCP, token)               |
+| `POST /api/v0/admin/pairing`                   | `shift device pair`         | Issue a pairing phrase                            |
+| `GET /api/v0/admin/devices`                    | `shift device list`         | Paired devices                                    |
+| `POST /api/v0/admin/devices/{id}/revoke`       | `shift device revoke`       | Revoke a device                                   |
+| `GET /api/v0/commands/{commandId}`             | none                        | The device's own command receipt (TCP, token)     |
+| `GET /api/v0/admin/commands/{commandId}`       | none                        | The CLI's own command receipt                     |
+| `GET /api/v0/snapshot`                         | none                        | State with the cursor to stream from (TCP, token) |
+| `GET /api/v0/events`                           | `shift event list`          | Event history (`/admin/events` on the socket)     |
+| `GET /api/v0/events/stream`                    | none                        | SSE event stream (TCP, token)                     |
+| `POST /api/v0/admin/projects`                  | `shift project add`         | Register a repository                             |
+| `GET /api/v0/admin/projects`                   | `shift project list`        | List projects                                     |
+| `POST /api/v0/admin/workflows`                 | `shift workflow create`     | Create a workflow with a draft                    |
+| `GET /api/v0/admin/workflows[?projectId=]`     | `shift workflow list`       | List workflows                                    |
+| `GET /api/v0/admin/workflows/{id}`             | `shift workflow show`       | Workflow with its draft and versions              |
+| `PUT /api/v0/admin/workflows/{id}/draft`       | `shift workflow save`       | Replace the draft at an expected revision         |
+| `POST /api/v0/admin/workflows/{id}/publish`    | `shift workflow publish`    | Publish the draft as a version                    |
+| `POST /api/v0/admin/runs`                      | `shift run start`           | Start a run of the active version                 |
+| `GET /api/v0/admin/runs`                       | `shift run list`            | List runs                                         |
+| `GET /api/v0/admin/runs/{id}`                  | `shift run show`            | Run with executions and invocations               |
+| `GET /api/v0/admin/runs/{id}/executions`       | `shift run executions`      | A page of a run's execution history               |
+| `POST /api/v0/admin/runs/{id}/cancel`          | `shift run cancel`          | Cancel a run                                      |
+| `POST /api/v0/admin/runs/{id}/retry`           | `shift run retry`           | Retry a stuck step                                |
+| `POST /api/v0/admin/runs/{id}/fail`            | `shift run fail`            | Abandon a stuck step                              |
+| `POST /api/v0/admin/runs/{id}/complete`        | `shift run complete`        | Record a verified result for a stuck step         |
+| `POST /api/v0/admin/runs/{id}/extend`          | `shift run extend`          | Raise the limit a run reached                     |
+| `GET /api/v0/admin/interactions[?all=true]`    | `shift interaction list`    | Pending human requests                            |
+| `GET /api/v0/admin/interactions/{id}`          | `shift interaction show`    | One request with its response                     |
+| `POST /api/v0/admin/interactions/{id}/respond` | `shift interaction respond` | Answer a form or approval                         |
+| `GET /api/v0/admin/workspaces[?projectId=]`    | `shift workspace list`      | List run workspaces                               |
+| `GET /api/v0/admin/workspaces/{id}`            | `shift workspace show`      | One workspace                                     |
+| `POST /api/v0/admin/workspaces/{id}/remove`    | `shift workspace remove`    | Remove a finished run's worktree                  |
 
 The CLI prints the resource from each response as one JSON line: the `project`, `workflow`, `run`, or list, without the envelope. On failure it prints the error object to stderr and exits with status 1.
 
@@ -436,6 +439,43 @@ Every response, on both transports, is checked against the shared protocol schem
 
 After a lost response, look the receipt up, or resend the identical request with the same `commandId`; both give the stored answer and nothing is applied twice. A different body under the same `commandId` is `409 COMMAND_CONFLICT`. Don't replay a queue of pending writes automatically: read the resource and decide. A network error does not mean the command failed, and an aborted request does not cancel a run it started; cancelling takes `POST /runs/{id}/cancel`.
 
+### Events
+
+Every state change commits a durable event in the same transaction, numbered by SQLite. A cursor is `<eventEpoch>:<sequence>`; the epoch comes from `GET /api/v0/info` and changes only when the database is replaced, for example by a restore. An `Event`:
+
+```json
+{
+  "cursor": "29471119-5bf2-47dd-8592-cb7038095c05:42",
+  "epoch": "29471119-5bf2-47dd-8592-cb7038095c05",
+  "sequence": 42,
+  "type": "interaction.responded",
+  "schemaVersion": 1,
+  "runId": "eef9be34-a2a4-47a3-ab68-e29c921bcbdc",
+  "executionId": "e50338fc-e0ee-476d-8700-9f164b04d613",
+  "sessionId": null,
+  "payload": { "interactionId": "0b6f6f0e-5d0f-4a4e-9a35-3f8d1c2b7a10", "decision": "approved" },
+  "createdAt": 1792286072113
+}
+```
+
+Payloads are small and name the resources that changed; read the resource for its current state. Event types include `run.created`, `execution.started`, `execution.completed`, `execution.failed`, `run.completed`, `run.cancelled`, `interaction.requested`, `interaction.responded`, `workflow.published` and `device.revoked`. All events are kept.
+
+| Request                                     | Answer                                                                                                                                                                                                   |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v0/snapshot`                      | `{"cursor", "projects", "workflows", "runs", "interactions"}`: the projects, workflows, 100 newest runs and pending interactions, read in one transaction with the cursor of the newest event.           |
+| `GET /api/v0/events[?after=CURSOR&limit=N]` | `{"events", "next", "highWater"}`: history after the cursor, or from the start, oldest first. `limit` is 1 to 1,000 (default 100). `next` is the cursor of the last event when more follow, else `null`. |
+| `GET /api/v0/events/stream`                 | `text/event-stream` of every event after the cursor in `Last-Event-ID` (or `?after=`), then live ones.                                                                                                   |
+
+The socket serves the same at `/api/v0/admin/…`, and `shift event list [--after CURSOR] [--limit N]` reads the history.
+
+To follow the server, take a snapshot and open the stream from its cursor. Each SSE record has the event's cursor as its `id`, `event: shift`, and the event as JSON in `data`. Save a cursor only after applying its event, together with the state it produced; reconnect with the saved cursor and nothing is lost or delivered twice. One ordered loop replays and then tails, so there is no gap between the two.
+
+- **Cursor checks** happen before the stream opens. A missing or malformed cursor, one from another epoch, or one beyond the newest event gets `409 RESYNC_REQUIRED`: take a new snapshot and stream from its cursor.
+- **Keepalive:** an idle stream sends a `: keepalive` comment every 15 seconds (`--event-keepalive-ms`). Reconnect after 45 seconds without any traffic. The stream also sends `retry: 3000`.
+- **Slow clients:** a stream whose unsent output passes 8 MiB is closed instead of holding events in memory; reconnect from the last applied cursor.
+- **Revocation** closes the device's open streams at once. Closing or aborting a stream changes nothing else: runs keep running.
+- **Proxies:** responses carry `Cache-Control: no-store, no-transform` and `X-Accel-Buffering: no`, and each event is flushed as it is written. Behind a reverse proxy, turn off response buffering for `/api/v0/events/stream` (for nginx, `proxy_buffering off` also works) and set its read timeout above the keepalive interval.
+
 ### Devices
 
 A desktop client pairs once with a phrase and then authenticates every request with a bearer token ([specification 13.1](shift-server-v0.md#131-enrollment-and-secrets)).
@@ -469,19 +509,19 @@ The master key lives in `<state>/secrets/master.key`, mode `0600`, created on fi
 
 HTTP errors returned by the endpoints above:
 
-| Status | Codes                                                                                                                                                                                                                                                                                                  |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                |
-| 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`                                                                                                                                                                                                                          |
-| 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                             |
-| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`, `COMMAND_NOT_FOUND`                                                                                                                                          |
-| 409    | `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
-| 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                  |
-| 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB or a workflow document over 1 MiB                                                                                                                                                                                                                               |
-| 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`                                                                                                                     |
-| 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                        |
-| 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                      |
-| 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                      |
+| Status | Codes                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                                   |
+| 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`                                                                                                                                                                                                                                             |
+| 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                                                |
+| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`, `COMMAND_NOT_FOUND`                                                                                                                                                             |
+| 409    | `RESYNC_REQUIRED`, `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
+| 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                                     |
+| 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB or a workflow document over 1 MiB                                                                                                                                                                                                                                                  |
+| 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`                                                                                                                                        |
+| 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                                           |
+| 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                                         |
+| 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                                         |
 
 The CLI adds errors of its own: `ADMIN_UNAVAILABLE` (no server is listening on the socket), `UNSAFE_STATE_DIRECTORY`, `ADMIN_INVALID_RESPONSE` and `INVALID_CONFIGURATION` (bad options). `shift serve` itself can fail at startup with `INSTANCE_ALREADY_RUNNING`, `INVALID_CONFIGURATION`, `SQLITE_*`, `MIGRATION_*` or `UNSAFE_STATE_*` codes.
 

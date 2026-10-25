@@ -13,6 +13,8 @@ export interface ServerConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
   sqliteNativeBinding?: string;
   harness?: HarnessConfig;
+  // SSE keepalive comment interval; 15 seconds unless set (specification 13.3).
+  eventKeepaliveMs?: number;
 }
 
 // OpenCode runs in the owner's environment unless `isolated`. A provider key applies only to an
@@ -43,6 +45,7 @@ const validate = new Ajv2020({
     shutdownTimeoutMs: { type: 'integer', minimum: 100, maximum: 30000 },
     logLevel: { enum: ['debug', 'info', 'warn', 'error', 'silent'] },
     sqliteNativeBinding: { type: 'string', minLength: 1, maxLength: 4096 },
+    eventKeepaliveMs: { type: 'integer', minimum: 50, maximum: 60000 },
     harness: {
       type: 'object',
       additionalProperties: false,

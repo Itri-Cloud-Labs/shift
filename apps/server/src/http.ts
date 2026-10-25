@@ -27,6 +27,8 @@ import {
   validateWorkspaceResponse,
   validateWorkspaceList,
   validateCommandReceiptResponse,
+  validateEventPage,
+  validateSnapshot,
   type ServerInfo,
   type ServerHealth,
   type ProtocolError,
@@ -35,6 +37,8 @@ import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
 import type { Actor, CommandReceipts, CommandResponse } from './persistence/receipts.js';
 import type { DeviceService } from './devices/service.js';
+import type { EventLog } from './events/log.js';
+import type { EventStreams } from './events/streams.js';
 import type { Device } from './devices/registry.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
@@ -56,6 +60,7 @@ export function createHttpServer(options: {
   workspaces?: WorkspaceService;
   devices?: DeviceService;
   receipts?: CommandReceipts;
+  events?: { log: EventLog; streams: EventStreams };
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -129,7 +134,7 @@ export function createHttpServer(options: {
       time: observedHealth.time,
       capabilities: {
         commands: options.engine !== undefined && options.devices !== undefined,
-        events: false,
+        events: options.events !== undefined && options.devices !== undefined,
         pairing: options.devices !== undefined,
         nodeTypes: [],
         harnesses: [],
@@ -299,6 +304,45 @@ export function createHttpServer(options: {
           await workspaces.remove(id(req), body(req), actorOf(res)),
           validateWorkspaceResponse,
         );
+      });
+    }
+    const events = options.events;
+    if (events) {
+      // Durable history after a cursor; without one, from the beginning.
+      router.get('/events', guard, (req, res) => {
+        const raw = query(req, 'limit');
+        const limit = raw === undefined ? 100 : /^\d+$/.test(raw) ? Number(raw) : NaN;
+        if (!(limit >= 1 && limit <= 1000)) {
+          throw new ShiftError('INVALID_REQUEST', 'Invalid limit.', 422, false, ['/limit']);
+        }
+        const after = query(req, 'after');
+        reply(
+          res,
+          200,
+          events.log.page(after === undefined ? 0 : events.log.parse(after), limit),
+          validateEventPage,
+        );
+      });
+      // Current state with the cursor to stream from, read together.
+      router.get('/snapshot', guard, (_req, res) => {
+        reply(
+          res,
+          200,
+          events.log.snapshot(() => ({
+            projects: repository.projects(),
+            workflows: repository.workflows(),
+            runs: engine.repository.runs(),
+            interactions: engine.repository.interactions(),
+          })),
+          validateSnapshot,
+        );
+      });
+      // The cursor is checked before the stream opens, so a stale one gets a plain 409.
+      router.get('/events/stream', guard, (req, res) => {
+        const header = req.headers['last-event-id'];
+        const after = events.log.parse(typeof header === 'string' ? header : query(req, 'after'));
+        const device = res.locals['device'] as Device | undefined;
+        events.streams.open(res, after, device?.id ?? null);
       });
     }
     // The caller's own receipt after a lost response; another actor's receipt does not exist.

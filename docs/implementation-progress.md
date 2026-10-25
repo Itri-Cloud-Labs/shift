@@ -405,3 +405,21 @@ Acceptance coverage:
 - **Access:** no token is `401` on `/runs`, and `/api/v0/admin/runs` over TCP is `404`. The CLI on the socket still works alongside.
 - **Schemas against real output:** every existing engine, CLI and end-to-end test now goes through validated responses on the socket.
 - **Totals:** `pnpm check` passed 154 tests (145 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`.
+
+## Event snapshot, replay and stream
+
+Status: complete; M05's server half (prompt 10) is done. The client half (prompt 11) remains. Date: 2026-10-25.
+
+Changed files: the event log and SSE streams (`events/`); snapshot, history and stream routes on both listeners; stream closing on revocation and shutdown; `--event-keepalive-ms`; the shared protocol schema, fixtures and generated validators for both apps; `shift event list`; event, device API, server and protocol type tests; the API reference, server README, prompts status and decision log.
+
+Acceptance coverage:
+
+- **Cursors:** these all get `RESYNC_REQUIRED`: a missing cursor, an empty one, a malformed one, one with a leading zero, one from another epoch, and one past the newest event. Pages split at `limit` with `next` and `highWater`. A snapshot carries the newest cursor.
+- **Snapshot and live race:** twenty phrases are issued while the device takes a snapshot and opens the stream, and one more after that. Every event after the snapshot's cursor arrives once, in order, with no gap; at least 21 arrive. Each SSE `id` equals its event's cursor, and every event validates.
+- **Reconnect:** from a cursor in the middle, only the later events are replayed.
+- **Keepalive and headers:** an idle stream sends keepalive comments. Responses are `text/event-stream` with `no-store, no-transform` and `X-Accel-Buffering: no`.
+- **Slow client:** a client that never reads is closed once its pending output passes the bound, and the stream is removed.
+- **Revocation:** revoking the device closes its open stream, and reconnecting with the token is `401`. The token never appears in server output.
+- **Proxy:** behind a streaming reverse proxy that drops connections after one second idle, keepalives hold the stream for 2.5 s, and a new event arrives within 1.5 s.
+- **Aborted client:** aborting a device's stream leaves its waiting approval run `WAITING`.
+- **Totals:** `pnpm check` passed 158 tests (149 server, 9 app) with zero skips. `pnpm --filter @shift/server test:opencode` passed 12 of 12 in host mode with `openai/gpt-6-luna`. One of nine repeated runs of the event tests failed right after the OpenCode suite, without output kept, and later runs did not reproduce it. The slow-client test's 500 ms close window was the likeliest cause and now waits up to 10 s. Thirteen further runs passed.

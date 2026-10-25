@@ -29,6 +29,9 @@ export type {
   InteractionList,
   WorkspaceList,
   ExecutionPage,
+  Event,
+  EventPage,
+  Snapshot,
 } from './generated/types.js';
 export {
   validateProtocolError,
@@ -53,6 +56,9 @@ export {
   validateInteractionList,
   validateWorkspaceList,
   validateExecutionPage,
+  validateEvent,
+  validateEventPage,
+  validateSnapshot,
 } from './generated/validators.js';
 
 export const protocolRange = { min: 0, max: 0 } as const;
