@@ -29,7 +29,10 @@ export type FoundationPayload =
   | RunList
   | InteractionList
   | WorkspaceList
-  | ExecutionPage;
+  | ExecutionPage
+  | Event
+  | EventPage
+  | Snapshot;
 export type Uuid = string;
 export type Readiness = {
   ready: boolean;
@@ -63,6 +66,7 @@ export type Readiness1 =
     };
 export type DeviceName = string;
 export type CommandId = string;
+export type EventCursor = string;
 
 export interface ServerInfo {
   schemaVersion: 1;
@@ -81,7 +85,7 @@ export interface ProtocolRange {
 }
 export interface ServerCapabilities {
   commands: boolean;
-  events: false;
+  events: boolean;
   pairing: boolean;
   /**
    * @maxItems 0
@@ -459,4 +463,49 @@ export interface ExecutionPage {
    */
   executions: Execution[];
   next: number | null;
+}
+export interface Event {
+  cursor: EventCursor;
+  epoch: Uuid;
+  sequence: number;
+  type: string;
+  schemaVersion: number;
+  runId: Uuid | null;
+  executionId: Uuid | null;
+  sessionId: Uuid | null;
+  payload: {
+    [k: string]: unknown;
+  };
+  createdAt: number;
+}
+export interface EventPage {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 1000
+   */
+  events: Event[];
+  next: EventCursor | null;
+  highWater: EventCursor;
+}
+export interface Snapshot {
+  schemaVersion: 1;
+  requestId: Uuid;
+  cursor: EventCursor;
+  /**
+   * @maxItems 10000
+   */
+  projects: Project[];
+  /**
+   * @maxItems 10000
+   */
+  workflows: WorkflowSummary[];
+  /**
+   * @maxItems 10000
+   */
+  runs: RunSummary[];
+  /**
+   * @maxItems 10000
+   */
+  interactions: Interaction[];
 }

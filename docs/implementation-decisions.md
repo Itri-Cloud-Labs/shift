@@ -474,3 +474,24 @@ Decided 2026-10-24 for the second part of M05 (prompt 10), following specificati
 - **Capabilities.** `commands` is now true. `events` stays false until the stream exists.
 
 Events follow next: `epoch:sequence` cursors, a consistent snapshot with its high-water mark, replay and SSE.
+
+## Event snapshot, replay and stream
+
+Decided 2026-10-25 to finish M05's server half (prompt 10), following specification section 13.3.
+
+- **Cursors** are `<eventEpoch>:<sequence>`, with the store's existing event epoch and SQLite's `events.sequence`. Each of these gets `409 RESYNC_REQUIRED` before any stream opens:
+  - a missing or malformed cursor;
+  - another epoch's cursor;
+  - a sequence above the newest event, as after a restore.
+
+  All events are kept, so every valid cursor can be continued.
+
+- **Snapshot.** `GET /snapshot` reads projects, workflows, the 100 newest runs, pending interactions and `MAX(sequence)` in one transaction. Event writes commit with their state, so streaming after that cursor covers exactly what the snapshot does not show.
+- **History.** `GET /events?after&limit` pages oldest first, up to 1,000 per page, with `next` and `highWater`.
+- **Stream.** `GET /events/stream` takes `Last-Event-ID` or `?after=`. Each stream is one loop: it reads up to 500 events after its cursor, writes them as SSE records (`id` = cursor, `event: shift`, validated JSON `data`), and reads again at once if the batch was full. Otherwise it sleeps 200 ms. Replay and live delivery are the same loop, so there is no handoff gap.
+  - Polling SQLite every 200 ms per stream was chosen over a commit notifier, because events are written from many repositories inside their own transactions. It is simple and correct for a few streams per owner, and it never touches a worker. A shared tailer can replace it if stream counts grow.
+- **Backpressure.** The loop never waits for the client. When `res.writableLength` passes 8 MiB, the stream is closed and the client replays from its cursor. Workers and other streams never block.
+- **Keepalive.** A `: keepalive` comment is written after 15 s without output. It is configurable for tests with `--event-keepalive-ms`, and `retry: 3000` suggests the reconnect delay.
+- **Proxies.** Responses carry `Cache-Control: no-store, no-transform` and `X-Accel-Buffering: no`, and headers are flushed at once. A test puts a streaming Node reverse proxy with a one-second idle timeout in front: keepalives hold the stream for 2.5 s, and a new event arrives within 1.5 s. No nginx is available in CI; the API reference gives the nginx settings.
+- **Lifecycle.** The device registry's post-commit revocation listener closes that device's streams. Shutdown closes every stream before the listeners close. A client closing or aborting a stream only ends its loop; runs are unaffected.
+- **Protocol.** `EventCursor`, `Event`, `EventPage` and `Snapshot` join the shared schema, and `capabilities.events` is now true.

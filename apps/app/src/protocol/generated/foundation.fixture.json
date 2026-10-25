@@ -18,7 +18,7 @@
     },
     "capabilities": {
       "commands": true,
-      "events": false,
+      "events": true,
       "pairing": true,
       "nodeTypes": [],
       "harnesses": []
@@ -335,5 +335,45 @@
       },
       "createdAt": 1790985660000
     }
+  },
+  "eventPage": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000050",
+    "events": [
+      {
+        "cursor": "00000000-0000-4000-8000-000000000003:42",
+        "epoch": "00000000-0000-4000-8000-000000000003",
+        "sequence": 42,
+        "type": "interaction.responded",
+        "schemaVersion": 1,
+        "runId": "00000000-0000-4000-8000-000000000032",
+        "executionId": "00000000-0000-4000-8000-000000000030",
+        "sessionId": null,
+        "payload": {
+          "interactionId": "00000000-0000-4000-8000-000000000040",
+          "decision": "approved"
+        },
+        "createdAt": 1790985660000
+      }
+    ],
+    "next": null,
+    "highWater": "00000000-0000-4000-8000-000000000003:42"
+  },
+  "snapshot": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000051",
+    "cursor": "00000000-0000-4000-8000-000000000003:42",
+    "projects": [],
+    "workflows": [],
+    "runs": [
+      {
+        "id": "00000000-0000-4000-8000-000000000032",
+        "state": "COMPLETED",
+        "workflowId": null,
+        "createdAt": 1790985600000,
+        "finishedAt": 1790985660000
+      }
+    ],
+    "interactions": []
   }
 }

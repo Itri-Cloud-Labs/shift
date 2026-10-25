@@ -282,6 +282,14 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
           )
         )['workspace'],
       );
+    case 'event list': {
+      const query = new URLSearchParams();
+      if (values.after !== undefined) query.set('after', values.after);
+      if (values.limit !== undefined) query.set('limit', values.limit);
+      const suffix = query.size > 0 ? `?${query.toString()}` : '';
+      const { events, next, highWater } = await get(`/api/v0/admin/events${suffix}`);
+      return print({ events, next, highWater });
+    }
     case 'device pair': {
       const { pairing } = (await send('POST', '/api/v0/admin/pairing', {})) as {
         pairing: { phrase: string; expiresAt: number };

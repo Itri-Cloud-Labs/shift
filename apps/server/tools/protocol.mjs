@@ -52,6 +52,9 @@ const names = [
   'InteractionList',
   'WorkspaceList',
   'ExecutionPage',
+  'Event',
+  'EventPage',
+  'Snapshot',
 ];
 const definitions = Object.fromEntries(
   names.map((name) => [`validate${name}`, `${schema.$id}#/$defs/${name}`]),
@@ -71,6 +74,8 @@ for (const [name, value] of [
   ['ExecutionPage', fixture.executionPage],
   ['InteractionResponse', fixture.interactionResponse],
   ['CommandReceiptResponse', fixture.commandReceiptResponse],
+  ['EventPage', fixture.eventPage],
+  ['Snapshot', fixture.snapshot],
 ]) {
   if (!ajv.getSchema(`${schema.$id}#/$defs/${name}`)(value))
     throw new Error(`Invalid ${name} fixture`);

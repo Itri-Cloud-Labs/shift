@@ -39,6 +39,7 @@ shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
+shift event list [--after CURSOR] [--limit N]
 shift device pair
 shift device list
 shift device revoke DEVICE_ID
@@ -92,7 +93,9 @@ async function main(): Promise<void> {
     process.stdout.write(usage);
     return;
   }
-  if (['project', 'workflow', 'run', 'workspace', 'interaction', 'device'].includes(command)) {
+  if (
+    ['project', 'workflow', 'run', 'workspace', 'interaction', 'device', 'event'].includes(command)
+  ) {
     const { adminCommand } = await import('./cli-admin.js');
     return adminCommand(command, args.slice(1));
   }
@@ -117,6 +120,7 @@ async function main(): Promise<void> {
         'opencode-executable': { type: 'string' },
         'opencode-environment': { type: 'string' },
         'systemd-manager': { type: 'string' },
+        'event-keepalive-ms': { type: 'string' },
       },
     }));
   } catch {
@@ -172,6 +176,9 @@ async function main(): Promise<void> {
     ),
     logLevel: values['log-level'] ?? process.env['SHIFT_LOG_LEVEL'] ?? 'info',
     ...(nativeBinding === undefined ? {} : { sqliteNativeBinding: nativeBinding }),
+    ...(values['event-keepalive-ms'] === undefined
+      ? {}
+      : { eventKeepaliveMs: integer(values['event-keepalive-ms'], 15000) }),
     harness,
   });
   let requestedStop = false;

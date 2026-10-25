@@ -1,6 +1,6 @@
 # Shift server
 
-`shift serve` is the Linux server. It stores projects, versioned workflows and runs in SQLite, executes workflows durably, runs agents through a supervised OpenCode runtime, and gives each run its own Git worktree. It is administered through the `shift` CLI over a private Unix socket. Desktop clients pair with a one-time phrase and use the same resources over TCP with device tokens; SSE events are not implemented yet.
+`shift serve` is the Linux server. It stores projects, versioned workflows and runs in SQLite, executes workflows durably, runs agents through a supervised OpenCode runtime, and gives each run its own Git worktree. It is administered through the `shift` CLI over a private Unix socket. Desktop clients pair with a one-time phrase, use the same resources over TCP with device tokens, and follow changes through a replayable SSE event stream.
 
 See [Workflows and runs](../../docs/workflows.md) for what a workflow can do and [Server API](../../docs/server-api.md) for every endpoint and CLI command.
 

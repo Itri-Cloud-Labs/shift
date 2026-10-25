@@ -85,6 +85,17 @@ test('a paired device drives runs and answers approvals with its own command rec
   assert(validateRunResponse(started.body));
   const runId = started.body.run.id;
 
+  // A stream opened and dropped by the client leaves the waiting run as it was.
+  const snapshot = await call(desktop, 'GET', '/snapshot');
+  const aborted = new AbortController();
+  const stream = await fetch(`${server.url}/api/v0/events/stream`, {
+    headers: { authorization: `Bearer ${desktop}`, 'last-event-id': snapshot.body['cursor'] },
+    signal: aborted.signal,
+  });
+  assert.equal(stream.status, 200);
+  aborted.abort();
+  assert.equal((await call(desktop, 'GET', `/runs/${runId}`)).body['run'].state, 'WAITING');
+
   const pending = await call(desktop, 'GET', '/interactions');
   assert(validateInteractionList(pending.body));
   const [request] = pending.body.interactions;

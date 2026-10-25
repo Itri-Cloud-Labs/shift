@@ -20,6 +20,8 @@ import { CommandReceipts } from './persistence/receipts.js';
 import { DeviceRegistry } from './devices/registry.js';
 import { DeviceService } from './devices/service.js';
 import { SecretBox } from './secrets/secret-box.js';
+import { EventLog } from './events/log.js';
+import { EventStreams } from './events/streams.js';
 import { RunEngine } from './runs/engine.js';
 import { DefinitionRepository } from './workflows/repository.js';
 import { WorkspaceService } from './workspaces/service.js';
@@ -89,6 +91,7 @@ export async function startServer(
   let tcp: Server | undefined;
   let admin: Server | undefined;
   let sweeper: NodeJS.Timeout | undefined;
+  let streams: EventStreams | undefined;
   let stopping = false;
   let resolveStopped!: () => void;
   let rejectStopped!: (error: unknown) => void;
@@ -102,6 +105,8 @@ export async function startServer(
     // runtime scope is immediate, so it still happens after the deadline has passed.
     const deadline = Date.now() + config.shutdownTimeoutMs;
     clearInterval(sweeper);
+    // Open event streams would otherwise hold their listeners open until the deadline.
+    streams?.closeAll();
     const remaining = () => Math.max(0, deadline - Date.now());
     // The engine cancels active turns through the harness while the store is still open.
     for (const step of [() => engine?.stop(remaining()), () => runtime?.stop(remaining())]) {
@@ -196,6 +201,12 @@ export async function startServer(
     const registry = new DeviceRegistry(store.db, clock, await SecretBox.open(state.path));
     const devices = new DeviceService(registry, receipts);
     const workspaceService = new WorkspaceService(workspaces, receipts);
+    const eventLog = new EventLog(store.db, store.identity.eventEpoch);
+    streams = new EventStreams(eventLog, logger, {
+      ...(config.eventKeepaliveMs === undefined ? {} : { keepaliveMs: config.eventKeepaliveMs }),
+    });
+    const events = { log: eventLog, streams };
+    registry.onRevoked((deviceId) => streams?.closeDevice(deviceId));
     // Enrollment delivery copies are cleared once their phrase's original expiry passes.
     registry.sweep();
     sweeper = setInterval(() => registry.sweep(), 60_000);
@@ -226,6 +237,7 @@ export async function startServer(
       workspaces: workspaceService,
       devices,
       receipts,
+      events,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
@@ -238,6 +250,7 @@ export async function startServer(
       stop: requestStop,
       devices,
       receipts,
+      events,
       engine,
       definitions: { service: definitionService, repository: definitions },
       workspaces: workspaceService,
