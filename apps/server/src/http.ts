@@ -18,6 +18,7 @@ import {
   validateProjectResponse,
   validateProjectList,
   validateWorkflowResponse,
+  validateWorkflowVersionResponse,
   validateWorkflowList,
   validateRunResponse,
   validateRunList,
@@ -214,6 +215,19 @@ export function createHttpServer(options: {
     });
     router.get('/workflows/:id', guard, (req, res) => {
       reply(res, 200, { workflow: repository.workflow(id(req)) }, validateWorkflowResponse);
+    });
+    // A published version's frozen document, so a run can be shown as it was started.
+    router.get('/workflows/:id/versions/:versionId', guard, (req, res) => {
+      const version = repository.version(String(req.params['versionId']));
+      if (version.workflowId !== id(req))
+        throw new ShiftError('NOT_FOUND', 'Workflow version not found.', 404);
+      const { workflowId, number, hash, createdAt, document } = version;
+      reply(
+        res,
+        200,
+        { version: { id: version.id, workflowId, number, hash, createdAt, document } },
+        validateWorkflowVersionResponse,
+      );
     });
     router.put('/workflows/:id/draft', guard, json, (req, res) => {
       command(res, service.saveDraft(id(req), body(req), actorOf(res)), validateWorkflowResponse);

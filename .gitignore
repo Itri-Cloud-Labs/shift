@@ -10,3 +10,6 @@ coverage/
 .DS_Store
 Thumbs.db
 release/
+
+# Local design-tool cache
+**/.impeccable/hook.cache.json

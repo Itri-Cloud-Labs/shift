@@ -13,6 +13,7 @@ import type {
   DeviceResponse,
   ProjectResponse,
   WorkflowResponse,
+  WorkflowVersionResponse,
   RunResponse,
   InteractionResponse,
   WorkspaceResponse,
@@ -52,6 +53,7 @@ export const validateDeviceList: Validator<DeviceList>;
 export const validateDeviceResponse: Validator<DeviceResponse>;
 export const validateProjectResponse: Validator<ProjectResponse>;
 export const validateWorkflowResponse: Validator<WorkflowResponse>;
+export const validateWorkflowVersionResponse: Validator<WorkflowVersionResponse>;
 export const validateRunResponse: Validator<RunResponse>;
 export const validateInteractionResponse: Validator<InteractionResponse>;
 export const validateWorkspaceResponse: Validator<WorkspaceResponse>;

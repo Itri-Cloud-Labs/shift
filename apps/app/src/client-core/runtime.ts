@@ -2,25 +2,50 @@ import {
   withinLimit,
   RESPONSE_LIMIT,
   type FoundationQuery,
+  type Overview,
+  type ResourceKind,
   type ShellState,
 } from '../shared/contracts.js';
 import { createShell } from './fixtures.js';
-import { validateServerInfo, validateServerHealth } from '../protocol/generated/validators.js';
+import {
+  validateRunResponse,
+  validateServerHealth,
+  validateServerInfo,
+  validateWorkflowResponse,
+  validateWorkflowVersionResponse,
+} from '../protocol/generated/validators.js';
 import type { ServerInfo, ServerHealth } from '../protocol/generated/types.js';
 import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
-import { SyncRuntime } from './sync.js';
+import { SyncFailure, SyncRuntime, type CommandView } from './sync.js';
 
 export class ClientFailure extends Error {
-  constructor(readonly code: 'DISCONNECTED' | 'INVALID_RESPONSE') {
+  constructor(readonly code: 'DISCONNECTED' | 'INVALID_RESPONSE' | 'NOT_FOUND') {
     super(
       code === 'DISCONNECTED'
         ? 'Connect to a server before querying it.'
-        : 'The server response is invalid.',
+        : code === 'NOT_FOUND'
+          ? 'The resource was not found.'
+          : 'The server response is invalid.',
     );
   }
 }
+
+export interface ResourceRead {
+  value: unknown;
+  stale: boolean;
+  fetchedAt: number;
+}
+
+const validators: Record<ResourceKind, (value: unknown) => boolean> = {
+  workflow: validateWorkflowResponse,
+  version: validateWorkflowVersionResponse,
+  run: validateRunResponse,
+};
+
+// The last copy of each resource read, shown read-only while the connection is not live.
+const cacheLimit = 50;
 export function validFoundationResponse(operation: FoundationQuery, value: unknown): boolean {
   if (!withinLimit(value, RESPONSE_LIMIT)) return false;
   if (operation === 'info') return validateServerInfo(value);
@@ -41,6 +66,62 @@ export class ClientCore {
     this.#samples = samples;
     this.sync = new SyncRuntime({ connection, http, store });
   }
+  readonly #cache = new Map<string, ResourceRead>();
+
+  // The synchronized summaries the shell navigates by, live or cached.
+  overview(): Overview {
+    const projection = this.sync.projection;
+    if (!projection) return { projects: [], workflows: [], runs: [], attention: 0 };
+    const pending = projection.interactions.filter((item) => item.state === 'PENDING').length;
+    const stuck = projection.runs.filter((run) => run.state === 'NEEDS_HUMAN').length;
+    return {
+      projects: projection.projects.map(({ id, name }) => ({ id, name })),
+      workflows: projection.workflows,
+      runs: projection.runs,
+      attention: pending + stuck,
+    };
+  }
+
+  // Reads a workflow, version or run from the live server, or its last copy while not live.
+  async resource(kind: ResourceKind, path: string): Promise<ResourceRead> {
+    const key = `${this.connection.state.profileId}:${path}`;
+    let exchange;
+    try {
+      exchange = await this.sync.query(path);
+    } catch (error) {
+      const cached = this.#cache.get(key);
+      if (cached) return { ...cached, stale: true };
+      throw new ClientFailure(
+        error instanceof TransportFailure && error.kind === 'invalid'
+          ? 'INVALID_RESPONSE'
+          : 'DISCONNECTED',
+      );
+    }
+    if (exchange.status === 404) throw new ClientFailure('NOT_FOUND');
+    if (exchange.status !== 200 || !validators[kind](exchange.body))
+      throw new ClientFailure('INVALID_RESPONSE');
+    const read = { value: exchange.body, stale: false, fetchedAt: Date.now() };
+    this.#cache.delete(key);
+    this.#cache.set(key, read);
+    for (const old of [...this.#cache.keys()].slice(0, -cacheLimit)) this.#cache.delete(old);
+    return read;
+  }
+
+  // Sends a command through the sync runtime, which confirms it if its answer is lost.
+  async command(
+    method: 'POST',
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<{ command: CommandView; response: unknown }> {
+    try {
+      const command = await this.sync.send({ method, path, body });
+      return { command, response: this.sync.response(command.commandId) };
+    } catch (error) {
+      if (error instanceof SyncFailure) throw new ClientFailure('DISCONNECTED');
+      throw error;
+    }
+  }
+
   shell(): ShellState {
     return createShell(this.#samples);
   }

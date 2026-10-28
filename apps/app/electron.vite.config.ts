@@ -57,6 +57,8 @@ export default defineConfig({
       outDir: resolve('dist/renderer'),
       minify: true,
       emptyOutDir: true,
+      // Loaded from disk in one piece; a code-splitting warning does not apply.
+      chunkSizeWarningLimit: 1024,
       rollupOptions: { input: resolve('src/client-ui/index.html') },
     },
   },

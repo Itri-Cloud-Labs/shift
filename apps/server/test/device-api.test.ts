@@ -8,6 +8,7 @@ import {
   validateInteractionList,
   validateProtocolError,
   validateRunResponse,
+  validateWorkflowVersionResponse,
 } from '../src/protocol/index.js';
 import { runCli, startChild, temporaryState } from './helpers.js';
 
@@ -80,6 +81,19 @@ test('a paired device drives runs and answers approvals with its own command rec
       .status,
     200,
   );
+  // A published version's frozen document is readable for showing runs.
+  const published = await call(laptop, 'GET', `/workflows/${workflowId}`);
+  const versionId = published.body['workflow'].activeVersionId as string;
+  const version = await call(desktop, 'GET', `/workflows/${workflowId}/versions/${versionId}`);
+  assert.equal(version.status, 200);
+  assert(validateWorkflowVersionResponse(version.body));
+  assert.equal(version.body.version.number, 1);
+  assert.deepEqual(
+    (version.body.version.document['nodes'] as { id: string }[]).map((node) => node.id),
+    ['start', 'review'],
+  );
+  const elsewhere = await call(desktop, 'GET', `/workflows/${versionId}/versions/${versionId}`);
+  assert.equal(elsewhere.status, 404);
   const started = await call(laptop, 'POST', '/runs', { workflowId, commandId: 'start-run-1' });
   assert.equal(started.status, 201);
   assert(validateRunResponse(started.body));

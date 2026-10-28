@@ -34,7 +34,9 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,openDocumentation,queryServer,readShell,setSamples,sync', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync', 'Broad bridge');
+    assert(Object.keys(window.shift.data).sort().join(',') === 'overview,run,version,workflow', 'Broad data bridge');
+    assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,start', 'Broad run bridge');
     assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');
     assert(Object.keys(window.shift.connection).sort().join(',') === 'abandonPairing,changeAddress,clear,connect,pair,read', 'Broad connection bridge');
     const connection = await window.shift.connection.read();
@@ -50,16 +52,23 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const state = await window.shift.setSamples(true);
     assert(state.kind === 'shell' && state.state.connection === 'unconfigured', 'Bad fixture state');
     assert(!/bearer|credentialHandle|authorization|accessToken/.test(JSON.stringify(state)), 'Credential leaked');
-    await wait(() => document.querySelector('h2'));
-    for (const section of ['Projects', 'Workflows', 'Runs', 'Sessions', 'Attention', 'Settings']) {
-      const button = [...document.querySelectorAll('nav button')].find(item => item.textContent === section);
-      assert(button, 'Missing shell section ' + section);
-      button.click();
-      await wait(() => document.querySelector('h2').textContent === section);
-      assert(button.getAttribute('aria-current') === 'page', 'Section selection failed');
-      assert(document.querySelector('main').textContent.includes('No server connected.'), 'Missing disconnected state');
-    }
-    assert(!document.querySelector('input, [role="dialog"], .resource-row, .sidebar'), 'Product UI remains');
+    // Without a saved connection the app opens on the full-screen pairing step.
+    await wait(() => document.querySelector('.pairing h1'));
+    assert(document.querySelector('.pairing h1').textContent === 'Pair this computer with your server', 'Missing pairing step');
+    for (const id of ['server-url', 'pairing-phrase', 'device-name'])
+      assert(document.querySelector('label[for="' + id + '"]') && document.getElementById(id), 'Unlabelled field ' + id);
+    const submit = document.querySelector('.pairing button[type=submit]');
+    assert(submit.disabled, 'Pairing allowed without a phrase');
+    assert(!document.querySelector('.react-flow, .island'), 'Canvas shown before pairing');
+    assert((await window.shift.data.workflow('00000000-0000-4000-8000-000000000001')).code === 'DISCONNECTED', 'Unexpected resource');
+    assert((await window.shift.run.start('00000000-0000-4000-8000-000000000001', {})).code === 'DISCONNECTED', 'Run started without a connection');
+    assert((await window.shift.data.workflow('../etc')).code === 'INVALID_REQUEST', 'Path-like workflow ID accepted');
+    const overview = await window.shift.data.overview();
+    assert(overview.kind === 'overview' && overview.overview.projects.length === 0 && overview.overview.attention === 0, 'Unexpected overview');
+    let notified = 0;
+    const stop = window.shift.onChange(() => notified++);
+    assert(typeof stop === 'function', 'onChange returns no unsubscribe');
+    stop();
     let blocked = false;
     try { await fetch('https://example.com'); } catch { blocked = true; }
     assert(blocked, 'Renderer network allowed');
@@ -70,13 +79,13 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const link = document.createElement('a'); link.href = 'https://example.com'; document.body.append(link); link.click(); link.remove();
     await new Promise(resolve => setTimeout(resolve, 80));
     assert(location.href === '${APP_URL}', 'Navigation escaped');
-    return { views: 6, sandbox: true, bridge: 'narrow', connection: 'unconfigured', credentialStorage: connection.connection.credentialStorage };
+    return { view: 'pairing', sandbox: true, bridge: 'narrow', connection: 'unconfigured', credentialStorage: connection.connection.credentialStorage };
   })()`);
-  window.setSize(780, 600);
+  window.setSize(720, 480);
   const overflow = await window.webContents.executeJavaScript(
     'document.documentElement.scrollWidth > window.innerWidth',
   );
-  if (overflow) throw new Error('Shell overflows at its minimum desktop width');
-  window.setSize(1240, 820);
+  if (overflow) throw new Error('The window overflows at its minimum size');
+  window.setSize(1280, 800);
   console.log(JSON.stringify(report));
 }

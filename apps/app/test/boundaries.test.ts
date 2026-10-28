@@ -165,6 +165,42 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     },
   );
   assert.equal(parseRequest({ kind: 'sync.read', profileId: '../x' }), undefined);
+  // Resource reads take identifiers only, never paths; they need a live connection.
+  const id = '00000000-0000-4000-8000-000000000001';
+  for (const value of [
+    { kind: 'data.run', runId: '../../admin/shutdown' },
+    { kind: 'data.version', workflowId: id },
+    { kind: 'data.workflow', workflowId: id, path: '/api/v0/admin' },
+    { kind: 'run.cancel', runId: `${id}/x` },
+  ])
+    assert.equal(parseRequest(value), undefined, JSON.stringify(value));
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'data.run', runId: id }, async () => assert.fail()),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'run.start', workflowId: id, input: {} }, async () =>
+      assert.fail(),
+    ),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'data.overview' }, async () => assert.fail()),
+    { kind: 'overview', overview: { projects: [], workflows: [], runs: [], attention: 0 } },
+  );
+  // A resource answer may be large and deep, but stays bounded.
+  const deep = (depth: number): unknown => (depth === 0 ? 1 : { next: deep(depth - 1) });
+  const resource = (value: unknown) => ({
+    kind: 'resource',
+    resource: 'workflow',
+    value,
+    stale: false,
+    fetchedAt: 1,
+  });
+  assert.ok(parseResponse(resource(deep(40))));
+  assert.equal(parseResponse(resource(deep(60))), undefined);
+  assert.equal(parseResponse(resource({ text: 'x'.repeat(9 * 1024 * 1024) })), undefined);
+  assert.equal(parseResponse({ kind: 'overview', overview: deep(40) }), undefined);
   const failure = await dispatch(
     client,
     trusted,

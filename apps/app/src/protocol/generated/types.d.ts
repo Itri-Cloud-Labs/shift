@@ -20,6 +20,7 @@ export type FoundationPayload =
   | CommandReceipt
   | ProjectResponse
   | WorkflowResponse
+  | WorkflowVersionResponse
   | RunResponse
   | InteractionResponse
   | WorkspaceResponse
@@ -372,6 +373,20 @@ export interface WorkflowResponse {
   schemaVersion: 1;
   requestId: Uuid;
   workflow: Workflow;
+}
+export interface WorkflowVersionResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  version: {
+    id: Uuid;
+    workflowId: Uuid;
+    number: number;
+    hash: string;
+    createdAt: number;
+    document: {
+      [k: string]: unknown;
+    };
+  };
 }
 export interface RunResponse {
   schemaVersion: 1;

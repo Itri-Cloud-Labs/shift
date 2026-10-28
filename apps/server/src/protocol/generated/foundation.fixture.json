@@ -142,6 +142,22 @@
       "createdAt": 1790985600000
     }
   },
+  "workflowVersionResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000036",
+    "version": {
+      "id": "00000000-0000-4000-8000-000000000034",
+      "workflowId": "00000000-0000-4000-8000-000000000033",
+      "number": 1,
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "createdAt": 1790985600000,
+      "document": {
+        "formatVersion": 1,
+        "nodes": [],
+        "connections": []
+      }
+    }
+  },
   "runResponse": {
     "schemaVersion": 1,
     "requestId": "00000000-0000-4000-8000-000000000037",

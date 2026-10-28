@@ -24,6 +24,7 @@ export interface VersionRow {
   projectId: string;
   number: number;
   hash: string;
+  createdAt: number;
   document: WorkflowDocument;
 }
 
@@ -178,7 +179,7 @@ export class DefinitionRepository {
   version(id: string): VersionRow {
     const row = this.db
       .prepare(
-        'SELECT v.id, v.workflow_id, w.project_id, v.version_number, v.document_hash, v.document_json FROM workflow_versions v JOIN workflows w ON w.id = v.workflow_id WHERE v.id = ?',
+        'SELECT v.id, v.workflow_id, w.project_id, v.version_number, v.document_hash, v.document_json, v.created_at FROM workflow_versions v JOIN workflows w ON w.id = v.workflow_id WHERE v.id = ?',
       )
       .get(id) as
       | {
@@ -188,6 +189,7 @@ export class DefinitionRepository {
           version_number: number;
           document_hash: string;
           document_json: string;
+          created_at: number;
         }
       | undefined;
     if (!row) throw notFound('Workflow version');
@@ -197,6 +199,7 @@ export class DefinitionRepository {
       projectId: row.project_id,
       number: row.version_number,
       hash: row.document_hash,
+      createdAt: row.created_at,
       document: JSON.parse(row.document_json) as WorkflowDocument,
     };
   }

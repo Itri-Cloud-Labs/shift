@@ -1,5 +1,10 @@
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
+  validateRunResponse,
+  validateWorkflowResponse,
+  validateWorkflowVersionResponse,
+} from '../protocol/generated/validators.js';
+import {
   parseRequest,
   parseResponse,
   type ConnectionView,
@@ -43,6 +48,12 @@ function syncView(core: ClientCore): SyncView {
     },
     commands: sync.commands(),
   };
+}
+
+export function validResource(kind: 'workflow' | 'version' | 'run', value: unknown): boolean {
+  if (kind === 'workflow') return validateWorkflowResponse(value);
+  if (kind === 'version') return validateWorkflowVersionResponse(value);
+  return validateRunResponse(value);
 }
 
 export async function dispatch(
@@ -98,6 +109,45 @@ export async function dispatch(
       case 'sync.read':
         response = { kind: 'sync', sync: syncView(core) };
         break;
+      case 'data.overview':
+        response = { kind: 'overview', overview: core.overview() };
+        break;
+      case 'data.workflow':
+      case 'data.version':
+      case 'data.run': {
+        const kind =
+          request.kind === 'data.workflow'
+            ? 'workflow'
+            : request.kind === 'data.version'
+              ? 'version'
+              : 'run';
+        const path =
+          request.kind === 'data.workflow'
+            ? `/api/v0/workflows/${request.workflowId}`
+            : request.kind === 'data.version'
+              ? `/api/v0/workflows/${request.workflowId}/versions/${request.versionId}`
+              : `/api/v0/runs/${request.runId}`;
+        const read = await core.resource(kind, path);
+        response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'run.start':
+      case 'run.cancel': {
+        const { command, response: answer } =
+          request.kind === 'run.start'
+            ? await core.command('POST', '/api/v0/runs', {
+                workflowId: request.workflowId,
+                input: request.input,
+              })
+            : await core.command('POST', `/api/v0/runs/${request.runId}/cancel`, {});
+        const run = (answer as { run?: { id?: unknown } } | null)?.run;
+        response = {
+          kind: 'command',
+          command,
+          runId: typeof run?.id === 'string' ? run.id : null,
+        };
+        break;
+      }
       case 'samples.set':
         response = { kind: 'shell', state: core.setSamples(request.enabled) };
         break;
@@ -116,7 +166,9 @@ export async function dispatch(
     }
     if (
       !parseResponse(response) ||
-      (response.kind === 'server' && !validFoundationResponse(response.operation, response.value))
+      (response.kind === 'server' &&
+        !validFoundationResponse(response.operation, response.value)) ||
+      (response.kind === 'resource' && !validResource(response.resource, response.value))
     ) {
       return {
         kind: 'error',
@@ -133,7 +185,9 @@ export async function dispatch(
         message:
           error.code === 'DISCONNECTED'
             ? 'Connect to a server before querying it.'
-            : 'The server response is invalid.',
+            : error.code === 'NOT_FOUND'
+              ? 'The resource was not found.'
+              : 'The server response is invalid.',
       };
     return { kind: 'error', code: 'UNAVAILABLE', message: 'The desktop operation is unavailable.' };
   }

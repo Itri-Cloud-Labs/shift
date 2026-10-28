@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme, protocol, session, shell } from 'electron';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,19 +6,34 @@ import { ClientCore } from '../client-core/runtime.js';
 import { ConnectionRuntime } from '../client-core/connection.js';
 import { ServerHttp } from '../client-core/http.js';
 import { credentialStore, FileProfileStore, FileSyncStore } from './storage.js';
-import { IPC_CHANNEL } from '../shared/contracts.js';
+import { CHANGE_CHANNEL, IPC_CHANNEL } from '../shared/contracts.js';
 import { dispatch } from './dispatcher.js';
 import { APP_URL, CSP, assetPath, securePreferences } from './security.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const smoke = process.argv.includes('--shift-smoke');
+// Development screenshots (tools/capture.mjs); never in a packaged app.
+const capture = !app.isPackaged && process.argv.includes('--shift-capture');
 protocol.registerSchemesAsPrivileged([
   { scheme: 'shift', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 app.enableSandbox();
 // Chromium process sandbox flags are never disabled by the application.
-if (smoke && process.env.SHIFT_SMOKE_STATE) app.setPath('userData', process.env.SHIFT_SMOKE_STATE);
+if ((smoke || capture) && process.env.SHIFT_SMOKE_STATE)
+  app.setPath('userData', process.env.SHIFT_SMOKE_STATE);
 let window: BrowserWindow | undefined;
+
+// The canvas color of the current theme, so the window never flashes another color.
+function canvasColor(): string {
+  return nativeTheme.shouldUseDarkColors ? '#0e1211' : '#f4f6f5';
+}
+function titleBarOverlay() {
+  return {
+    color: canvasColor(),
+    symbolColor: nativeTheme.shouldUseDarkColors ? '#c9d1ce' : '#3a4340',
+    height: 44,
+  };
+}
 let core: ClientCore;
 
 // Created once the app is ready: safeStorage and userData are only available then.
@@ -73,18 +88,42 @@ async function createWindow(): Promise<void> {
     callback({ cancel: !assetPath(details.url, allowed) });
   });
   desktopSession.on('will-download', (event) => event.preventDefault());
+  // Frameless: the canvas runs edge to edge under the system window controls.
   window = new BrowserWindow({
-    width: 800,
-    height: 600,
-    minWidth: 600,
-    minHeight: 400,
+    width: 1280,
+    height: 800,
+    minWidth: 720,
+    minHeight: 480,
     show: false,
     title: 'Shift',
-    backgroundColor: '#ffffff',
+    backgroundColor: canvasColor(),
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 16, y: 16 } }
+      : { titleBarOverlay: titleBarOverlay() }),
     webPreferences: { ...securePreferences, preload: join(root, 'preload/index.cjs') },
   });
   window.removeMenu();
   const contents = window.webContents;
+  const owned = window;
+  const followTheme = () => {
+    if (owned.isDestroyed()) return;
+    owned.setBackgroundColor(canvasColor());
+    if (process.platform !== 'darwin') owned.setTitleBarOverlay(titleBarOverlay());
+  };
+  nativeTheme.on('updated', followTheme);
+  owned.on('closed', () => nativeTheme.removeListener('updated', followTheme));
+  // Change notifications carry no data, and bursts are coalesced.
+  let pending: NodeJS.Timeout | undefined;
+  const changed = () => {
+    if (pending) return;
+    pending = setTimeout(() => {
+      pending = undefined;
+      if (!contents.isDestroyed()) contents.send(CHANGE_CHANNEL);
+    }, 50);
+  };
+  const unsubscribe = [core.connection.subscribe(changed), core.sync.subscribe(changed)];
+  owned.on('closed', () => unsubscribe.forEach((stop) => stop()));
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   contents.on('will-navigate', (event) => event.preventDefault());
   contents.on('will-frame-navigate', (event) => event.preventDefault());
@@ -107,6 +146,13 @@ async function createWindow(): Promise<void> {
   });
   await window.loadURL(APP_URL);
   window.show();
+  if (capture) {
+    const { runCapture } = await import('./capture.js');
+    await runCapture(window, core);
+    window.destroy();
+    app.quit();
+    return;
+  }
   if (smoke) {
     const { runSmoke } = await import('./smoke.js');
     await runSmoke(window, core);
@@ -138,7 +184,7 @@ void app
     await createWindow();
   })
   .catch((error) => {
-    if (smoke) console.error(error);
+    if (smoke || capture) console.error(error);
     console.error('The desktop could not start.');
     app.exit(1);
   });

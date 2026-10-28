@@ -553,3 +553,15 @@ Decided 2026-10-28 at the owner's request. CI runs on [Blacksmith](https://docs.
 - **Windows:** `blacksmith-4vcpu-windows-2025`, a public beta on Windows Server 2025, replacing GitHub's `windows-2022`.
 - **macOS:** `blacksmith-6vcpu-macos-15` for arm64. Blacksmith has no Intel Macs, so macOS x64 stays on GitHub's `macos-15-intel`.
 - **Caching:** unchanged. Blacksmith serves `actions/setup-node`'s pnpm cache from its own cache without workflow changes, and its `useblacksmith/*` actions are archived.
+
+## Canvas shell (12a)
+
+Decided 2026-10-28 for the first part of prompt 12, from the [desktop UI direction](ui-direction.md), `PRODUCT.md` and `DESIGN.md`. The owner split prompt 12 in two and kept the canvas view-only until prompt 13.
+
+- **Libraries.** `@xyflow/react` 12.12.0, chosen in the dependency review, for the canvas, read-only for now. `@dagrejs/dagre` 3.1.3 lays out graphs without saved positions, left to right; ELK was heavier than a first layout needs. `lucide-react` 1.62.0 is the one icon set; 1.63.0 was younger than the one-day minimum release age, and the policy was kept rather than excepted. Inter and JetBrains Mono come from `@fontsource-variable`, bundled locally, because the CSP allows fonts only from the app.
+- **Server row.** The server fills missing positions with `x = index × 240, y = 0`, which overlaps 248-pixel cards. The client treats exactly that row as "no layout". Positions the editor saves later are used as they are.
+- **Frozen graphs.** A run is shown with its version's document. Runs carry only `versionId`, so the server gained `GET /workflows/{id}/versions/{versionId}`, checked against a new `WorkflowVersionResponse` schema, and refusing a version of another workflow.
+- **Data across IPC.** The renderer gets summaries (`data.overview`) from the sync cache, and reads workflows, versions and runs by ID. Main validates each answer with the generated validators, keeps the last 50 in memory, and returns the last copy marked `stale` when not live. Main pushes an empty change notification, coalesced to 50 ms, and the renderer reads again; a ticket per hook drops reads that finish late. Resource answers may be up to 8 MiB and 48 levels deep, since documents nest 32 levels. Other answers keep the 256 KiB and 16-level limits.
+- **Runs from the UI.** Start and cancel go through the sync runtime's commands, so a lost answer is confirmed by its receipt and never resent. A trigger with an input schema asks for JSON input until prompt 14's forms exist.
+- **Window.** Frameless (`titleBarStyle: 'hidden'`), with a title-bar overlay on Windows and Linux and traffic lights on macOS. The islands leave room for both. The window background follows the theme, so it never flashes white.
+- **Screenshots.** `tools/capture.mjs` drives the built app in a capture mode that only unpackaged builds honor. It stages Electron as `nobody` under root like the smoke test (shared in `tools/stage.mjs`), against a real server started from source.

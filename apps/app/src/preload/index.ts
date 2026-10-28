@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import {
+  CHANGE_CHANNEL,
   IPC_CHANNEL,
   parseRequest,
   parseResponse,
@@ -7,7 +8,19 @@ import {
   type DesktopRequest,
   type DesktopResponse,
 } from '../shared/contracts.js';
-import { validateServerInfo, validateServerHealth } from '../protocol/generated/validators.js';
+import {
+  validateRunResponse,
+  validateServerHealth,
+  validateServerInfo,
+  validateWorkflowResponse,
+  validateWorkflowVersionResponse,
+} from '../protocol/generated/validators.js';
+
+const resourceValidators = {
+  workflow: validateWorkflowResponse,
+  version: validateWorkflowVersionResponse,
+  run: validateRunResponse,
+};
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
   if (!parseRequest(request))
@@ -18,7 +31,8 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
     (response.kind === 'server' &&
       !(response.operation === 'info'
         ? validateServerInfo(response.value)
-        : validateServerHealth(response.value)))
+        : validateServerHealth(response.value))) ||
+    (response.kind === 'resource' && !resourceValidators[response.resource](response.value))
   ) {
     return { kind: 'error', code: 'INVALID_RESPONSE', message: 'The server response is invalid.' };
   }
@@ -44,6 +58,26 @@ const bridge: DesktopBridge = {
   sync: Object.freeze({
     read: () => invoke({ kind: 'sync.read' }),
   }),
+  data: Object.freeze({
+    overview: () => invoke({ kind: 'data.overview' }),
+    workflow: (workflowId: string) => invoke({ kind: 'data.workflow', workflowId }),
+    version: (workflowId: string, versionId: string) =>
+      invoke({ kind: 'data.version', workflowId, versionId }),
+    run: (runId: string) => invoke({ kind: 'data.run', runId }),
+  }),
+  run: Object.freeze({
+    start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
+    cancel: (runId: string) => invoke({ kind: 'run.cancel', runId }),
+  }),
+  // The notification carries nothing; the listener reads what it needs through the bridge.
+  onChange: (listener: () => void) => {
+    if (typeof listener !== 'function') return () => undefined;
+    const handler = () => listener();
+    ipcRenderer.on(CHANGE_CHANNEL, handler);
+    return () => {
+      ipcRenderer.removeListener(CHANGE_CHANNEL, handler);
+    };
+  },
   setSamples: (enabled) => invoke({ kind: 'samples.set', enabled }),
   queryServer: (operation) => invoke({ kind: 'server.query', operation }),
   openDocumentation: () => invoke({ kind: 'desktop.openDocumentation' }),

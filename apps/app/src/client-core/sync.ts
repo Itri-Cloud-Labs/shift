@@ -792,6 +792,19 @@ export class SyncRuntime {
     return true;
   }
 
+  // Reads from the live server for a view, with the live session's credential. An answer that
+  // arrives after its connection was replaced is refused.
+  async query(path: string): Promise<Exchange> {
+    const target = this.#target;
+    if (!target || this.#state.status !== 'live') throw new SyncFailure('NOT_LIVE');
+    const exchange = await this.#http.request(target.url, 'GET', path, {
+      bearer: target.bearer,
+      signal: target.signal,
+    });
+    if (target.signal.aborted || this.#target !== target) throw new SyncFailure('NOT_LIVE');
+    return exchange;
+  }
+
   // Sends a command once, with a new command ID. If its answer is lost it becomes `unknown`
   // until its receipt is checked; it is never resent automatically.
   async send(request: CommandRequest): Promise<CommandView> {
