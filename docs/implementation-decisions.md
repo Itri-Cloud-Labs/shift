@@ -518,3 +518,11 @@ Decided 2026-10-25 for the first part of M05's client half (prompt 11), followin
   Clearing a profile deletes its credential and profile locally and sends nothing to the server.
 
 The sync runtime follows next: the connection supervisor, snapshot and replayable events, cursor and projection persistence, receipt reconciliation, backoff and keepalive. It ends with live tests against the server.
+
+## Desktop UI direction
+
+Decided 2026-10-28 with the owner, before prompt 12, through several rounds of questions. Recorded in [Desktop UI direction](ui-direction.md).
+
+- **Canvas-first.** The graph canvas is the whole app, and every other view floats over it as an anchored, collapsible island. This replaces the project sidebar from client specification section 5. The owner wanted no dashboard, so there are no list or overview screens. Projects, workflows and runs are reached from the location island and one switcher island.
+- **One canvas, two modes.** A draft is edited in place. A run shows its frozen graph with live status. A separate editor screen and a separate run viewer were considered and rejected.
+- **Style.** n8n-style node cards, Figma-style islands, and T3 Code's neutral dark surfaces, soft rounded panels and typography. The window is frameless.

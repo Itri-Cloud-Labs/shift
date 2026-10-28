@@ -11,6 +11,7 @@
 
 - [Shift Server v0](shift-server-v0.md): architecture, domain model, execution semantics, persistence, recovery and the implementation roadmap (section 18).
 - [Shift Client v0](shift-client-v0.md): the Electron client, visual workflow editor and remote connection.
+- [Desktop UI direction](ui-direction.md): the canvas-first layout, its islands and the visual style. It replaces the client specification's sidebar layout.
 
 Both specifications are approved as working documents: implementation evidence can still revise them, and each revision is recorded in the decision log.
 

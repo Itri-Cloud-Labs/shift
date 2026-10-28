@@ -96,7 +96,7 @@ Every mutation receives a new UUID command ID once. While its acknowledgement is
 
 ## 5. Information architecture and screens
 
-Use a project sidebar inspired by T3's project/thread organization. Within a selected project, expose Workflows, Runs, and Sessions as separate resources. A global attention inbox collects human requests, uncertain recovery, exhausted limits, and actionable failures. Settings remains accessible outside a run.
+The screen layout is defined by [Desktop UI direction](ui-direction.md): the graph canvas is the whole app, and everything else floats over it as islands. The project sidebar first proposed here was replaced on 2026-10-28. Within a selected project, expose Workflows, Runs, and Sessions as separate resources. A global attention inbox collects human requests, uncertain recovery, exhausted limits, and actionable failures. Settings remains accessible outside a run.
 
 ### 5.1 Projects and settings
 
