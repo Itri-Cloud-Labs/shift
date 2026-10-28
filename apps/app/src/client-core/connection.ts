@@ -59,6 +59,16 @@ export interface PairingForm {
   deviceName: string;
 }
 
+export interface AuthenticatedTarget {
+  profileId: string;
+  url: string;
+  serverId: string;
+  deviceId: string;
+  eventEpoch: string;
+  bearer: string;
+  signal: AbortSignal;
+}
+
 interface PendingPairing {
   url: string;
   serverId: string;
@@ -411,14 +421,25 @@ export class ConnectionRuntime {
     return this.state;
   }
 
-  // The active profile's address and token for an authenticated request, while online.
-  async authenticated(): Promise<{ url: string; bearer: string; signal: AbortSignal } | undefined> {
+  // The active profile's address, identities and token for an authenticated request, while
+  // online. The signal aborts when this connection is replaced.
+  async authenticated(): Promise<AuthenticatedTarget | undefined> {
     if (this.#state.status !== 'online' || !this.#state.profileId) return undefined;
     const signal = this.#abort.signal;
+    const profileId = this.#state.profileId;
     const data = await this.#options.profiles.load();
-    const profile = data.profiles.find((candidate) => candidate.localId === this.#state.profileId);
+    const profile = data.profiles.find((candidate) => candidate.localId === profileId);
     const bearer = profile && (await this.#options.credentials.resolve(profile.credentialHandle));
-    return profile && bearer ? { url: profile.url, bearer, signal } : undefined;
+    if (!profile || !bearer || signal.aborted) return undefined;
+    return {
+      profileId,
+      url: profile.url,
+      serverId: profile.serverId,
+      deviceId: profile.deviceId,
+      eventEpoch: profile.eventEpoch,
+      bearer,
+      signal,
+    };
   }
 
   // Stops using the connection, for example when the window closes. Nothing on the server changes.

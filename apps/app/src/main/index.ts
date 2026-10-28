@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientCore } from '../client-core/runtime.js';
 import { ConnectionRuntime } from '../client-core/connection.js';
 import { ServerHttp } from '../client-core/http.js';
-import { credentialStore, FileProfileStore } from './storage.js';
+import { credentialStore, FileProfileStore, FileSyncStore } from './storage.js';
 import { IPC_CHANNEL } from '../shared/contracts.js';
 import { dispatch } from './dispatcher.js';
 import { APP_URL, CSP, assetPath, securePreferences } from './security.js';
@@ -31,7 +31,12 @@ function createCore(): ClientCore {
     // Plain HTTP to this computer is for development; remote servers always need HTTPS.
     allowLoopbackHttp: !app.isPackaged,
   });
-  return new ClientCore(connection, http, !app.isPackaged);
+  return new ClientCore(
+    connection,
+    http,
+    !app.isPackaged,
+    new FileSyncStore(join(app.getPath('userData'), 'sync')),
+  );
 }
 
 async function createWindow(): Promise<void> {
@@ -126,7 +131,10 @@ void app
   .then(async () => {
     core = createCore();
     // The smoke test starts without any saved connection.
-    if (!smoke) void core.connection.start().catch(() => undefined);
+    if (!smoke) {
+      core.sync.start();
+      void core.connection.start().catch(() => undefined);
+    }
     await createWindow();
   })
   .catch((error) => {

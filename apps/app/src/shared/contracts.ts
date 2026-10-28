@@ -23,6 +23,7 @@ export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('connection.clear'), profileId }),
   v.strictObject({ kind: v.literal('samples.set'), enabled: v.boolean() }),
   v.strictObject({ kind: v.literal('server.query'), operation: querySchema }),
+  v.strictObject({ kind: v.literal('sync.read') }),
   v.strictObject({ kind: v.literal('desktop.openDocumentation') }),
 ]);
 export type DesktopRequest = v.InferOutput<typeof requestSchema>;
@@ -80,6 +81,40 @@ export const connectionViewSchema = v.strictObject({
   ),
 });
 export type ConnectionView = v.InferOutput<typeof connectionViewSchema>;
+const count = v.pipe(v.number(), v.integer(), v.minValue(0));
+// What the renderer may know about synchronization: its state, the size of the cache and the
+// commands still being confirmed. Command bodies stay in main.
+export const syncViewSchema = v.strictObject({
+  status: v.picklist(['stopped', 'syncing', 'live', 'reconnecting']),
+  problem: v.nullable(
+    v.picklist([
+      'UNREACHABLE',
+      'INVALID_RESPONSE',
+      'KEEPALIVE_TIMEOUT',
+      'RESYNC_REQUIRED',
+      'DEVICE_UNAUTHORIZED',
+    ]),
+  ),
+  updatedAt: v.nullable(v.number()),
+  cached: v.nullable(
+    v.strictObject({ projects: count, workflows: count, runs: count, interactions: count }),
+  ),
+  commands: v.pipe(
+    v.array(
+      v.strictObject({
+        commandId: v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{8,100}$/)),
+        method: v.picklist(['POST', 'PUT']),
+        path: v.pipe(v.string(), v.maxLength(2048)),
+        state: v.picklist(['sending', 'unknown', 'accepted', 'rejected', 'not_applied']),
+        code: v.nullable(v.pipe(v.string(), v.maxLength(100))),
+        createdAt: v.number(),
+        resendable: v.boolean(),
+      }),
+    ),
+    v.maxLength(100),
+  ),
+});
+export type SyncView = v.InferOutput<typeof syncViewSchema>;
 export const errorSchema = v.strictObject({
   kind: v.literal('error'),
   code: v.picklist([
@@ -101,6 +136,7 @@ export type DesktopError = v.InferOutput<typeof errorSchema>;
 export const responseSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('shell'), state: shellSchema }),
   v.strictObject({ kind: v.literal('connection'), connection: connectionViewSchema }),
+  v.strictObject({ kind: v.literal('sync'), sync: syncViewSchema }),
   v.strictObject({ kind: v.literal('opened') }),
   // Generated protocol validators validate the value before this crosses IPC.
   v.strictObject({ kind: v.literal('server'), operation: querySchema, value: v.unknown() }),
@@ -116,6 +152,9 @@ export interface DesktopBridge {
     connect(profileId: string): Promise<DesktopResponse>;
     changeAddress(profileId: string, url: string): Promise<DesktopResponse>;
     clear(profileId: string): Promise<DesktopResponse>;
+  };
+  sync: {
+    read(): Promise<DesktopResponse>;
   };
   setSamples(enabled: boolean): Promise<DesktopResponse>;
   queryServer(operation: FoundationQuery): Promise<DesktopResponse>;

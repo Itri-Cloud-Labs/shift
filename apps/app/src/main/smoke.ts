@@ -34,7 +34,8 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,openDocumentation,queryServer,readShell,setSamples', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,openDocumentation,queryServer,readShell,setSamples,sync', 'Broad bridge');
+    assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');
     assert(Object.keys(window.shift.connection).sort().join(',') === 'abandonPairing,changeAddress,clear,connect,pair,read', 'Broad connection bridge');
     const connection = await window.shift.connection.read();
     assert(connection.kind === 'connection' && connection.connection.status === 'unconfigured' && connection.connection.profiles.length === 0, 'Unexpected saved connection');
@@ -42,6 +43,8 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.connection.connect('../../etc/passwd')).code === 'INVALID_REQUEST', 'Profile path accepted');
     assert(!/bearer|credentialHandle|authorization|accessToken|token/i.test(JSON.stringify(connection)), 'Credential leaked');
     assert((await window.shift.queryServer('info')).code === 'DISCONNECTED', 'Unexpected live transport');
+    const sync = await window.shift.sync.read();
+    assert(sync.kind === 'sync' && sync.sync.status === 'stopped' && sync.sync.cached === null, 'Unexpected sync state');
     assert((await window.shift.queryServer('admin/shutdown')).code === 'INVALID_REQUEST', 'Operation accepted');
     assert((await window.shift.setSamples('bearer-secret')).code === 'INVALID_REQUEST', 'Invalid sample request accepted');
     const state = await window.shift.setSamples(true);

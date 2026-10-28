@@ -4,6 +4,7 @@ import {
   parseResponse,
   type ConnectionView,
   type DesktopResponse,
+  type SyncView,
 } from '../shared/contracts.js';
 import {
   DOCUMENTATION_URL,
@@ -23,6 +24,24 @@ async function connectionView(core: ClientCore): Promise<ConnectionView> {
     pairingPending: state.pairingPending,
     credentialStorage: connection.credentialStorage,
     profiles: await connection.profiles(),
+  };
+}
+
+function syncView(core: ClientCore): SyncView {
+  const { sync } = core;
+  const state = sync.state;
+  const projection = sync.projection;
+  return {
+    status: state.status,
+    problem: state.problem,
+    updatedAt: state.updatedAt,
+    cached: projection && {
+      projects: projection.projects.length,
+      workflows: projection.workflows.length,
+      runs: projection.runs.length,
+      interactions: projection.interactions.length,
+    },
+    commands: sync.commands(),
   };
 }
 
@@ -72,7 +91,12 @@ export async function dispatch(
         break;
       case 'connection.clear':
         await core.connection.clear(request.profileId);
+        // The cached server state goes with the profile.
+        await core.sync.forget(request.profileId);
         response = { kind: 'connection', connection: await connectionView(core) };
+        break;
+      case 'sync.read':
+        response = { kind: 'sync', sync: syncView(core) };
         break;
       case 'samples.set':
         response = { kind: 'shell', state: core.setSamples(request.enabled) };

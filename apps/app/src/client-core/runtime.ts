@@ -9,6 +9,8 @@ import { validateServerInfo, validateServerHealth } from '../protocol/generated/
 import type { ServerInfo, ServerHealth } from '../protocol/generated/types.js';
 import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
+import { MemorySyncStore, type SyncStore } from './projection.js';
+import { SyncRuntime } from './sync.js';
 
 export class ClientFailure extends Error {
   constructor(readonly code: 'DISCONNECTED' | 'INVALID_RESPONSE') {
@@ -29,12 +31,15 @@ export function validFoundationResponse(operation: FoundationQuery, value: unkno
 // device credential; an answer from another server or a replaced connection is refused.
 export class ClientCore {
   #samples: boolean;
+  readonly sync: SyncRuntime;
   constructor(
     readonly connection: ConnectionRuntime,
     private readonly http: ServerHttp,
     samples = false,
+    store: SyncStore = new MemorySyncStore(),
   ) {
     this.#samples = samples;
+    this.sync = new SyncRuntime({ connection, http, store });
   }
   shell(): ShellState {
     return createShell(this.#samples);
