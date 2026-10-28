@@ -477,12 +477,12 @@ Acceptance coverage, against a scripted fake server with manual timers:
 - **Epochs and resync:**
   - A restored database (new epoch) takes a new snapshot and updates the profile's epoch.
   - A refused cursor takes a snapshot.
-  - An unknown event type or version takes a snapshot.
+  - An unknown event type (including a new type in a known family) or version takes a snapshot.
 - **Stale and replaced:**
   - A slow refresh answering with older state cannot overwrite a newer one.
   - After `disconnect`, a held fetch lands without changing the cache or the saved cursor, and the stream is closed.
 - **Keepalive:** traffic re-arms the timer. Silence past the timeout reconnects from the saved cursor without a snapshot.
-- **Backoff:** 100, 200, 400, 800, 800, 800 ms with the test cap, and back to 100 ms after a working stream.
+- **Backoff:** 100, 200, 400, 800, 800, 800 ms with the test cap, a stream that opens and drops without traffic keeps the 800 ms wait, and one that carried a keepalive goes back to 100 ms.
 - **Revocation:** the device ends up `revoked`, sync stops, the cache and token are deleted, and nothing retries.
 - **Restart:** a new runtime with the saved stores catches up 1,201 events in three pages, without a snapshot.
 - **Live** (real server, Linux): two paired clients, a lost approval acknowledgement across a server restart, a single POST confirmed by its receipt, convergence on both devices, a refused late answer, and a restart from the saved cursor.

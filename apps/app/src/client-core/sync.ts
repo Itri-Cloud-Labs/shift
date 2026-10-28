@@ -134,8 +134,41 @@ const maxSettledInteractions = 100;
 const maxCommands = 100;
 const pageLimit = 500;
 const fetchConcurrency = 8;
-const knownEvent =
-  /^(project|workflow|run|execution|attempt|invocation|result|session|interaction|device|pairing)\./;
+// Every event type the server emits. Any other type may change anything, so it resyncs.
+const knownEvents = new Set([
+  'project.created',
+  'workflow.created',
+  'workflow.draft_saved',
+  'workflow.published',
+  'run.created',
+  'run.completed',
+  'run.failed',
+  'run.needs_human',
+  'run.cancel_requested',
+  'run.cancelled',
+  'run.control',
+  'run.active_time_charged',
+  'execution.scheduled',
+  'execution.started',
+  'execution.completed',
+  'execution.failed',
+  'execution.waiting',
+  'execution.retrying',
+  'execution.retry_requested',
+  'execution.retry_scheduled',
+  'attempt.recovering',
+  'invocation.created',
+  'invocation.state',
+  'result.submitted',
+  'session.bound',
+  'interaction.requested',
+  'interaction.responded',
+  'interaction.expired',
+  'device.paired',
+  'device.revoked',
+  'pairing.issued',
+  'pairing.withdrawn',
+]);
 
 function key(resource: Resource): string {
   return resource.kind === 'projects' ? 'projects' : `${resource.kind}:${resource.id}`;
@@ -520,8 +553,10 @@ export class SyncRuntime {
     const reader = opening.body.getReader();
     const decoder = new TextDecoder();
     this.#target = target;
-    connected();
     this.#set({ status: 'live', problem: null, updatedAt: this.#options.now() });
+    // Backoff resets only once the stream carries traffic, so a stream that opens and drops at
+    // once keeps backing off.
+    let healthy = false;
     let pending: string[] = [];
     let parseError: ParseError | undefined;
     const parser = createParser({
@@ -551,6 +586,10 @@ export class SyncRuntime {
           cancel();
         }
         if (chunk.done) throw new SessionEnd('transport');
+        if (!healthy) {
+          healthy = true;
+          connected();
+        }
         try {
           parser.feed(decoder.decode(chunk.value, { stream: true }));
         } catch {
@@ -598,7 +637,7 @@ export class SyncRuntime {
     const add = (resource: Resource) => resources.set(key(resource), resource);
     for (const event of ordered) {
       // An event this client does not understand may change anything: start over.
-      if (event.schemaVersion !== 1 || !knownEvent.test(event.type)) {
+      if (event.schemaVersion !== 1 || !knownEvents.has(event.type)) {
         await this.#dropProjection();
         throw new SessionEnd('resync');
       }

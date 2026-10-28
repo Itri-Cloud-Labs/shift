@@ -527,7 +527,8 @@ test('an unknown event type or version is not guessed at: the client resynchroni
   const server = new FakeServer();
   const { sync } = await setup({ server });
   await until(live(sync), 'live');
-  server.emit('quantum.entangled');
+  // A new type in a known family is just as unknown.
+  server.emit('run.future_change', { runId: uuid(1) });
   await until(
     () =>
       server.calls.filter((call) => call.path === '/api/v0/snapshot').length === 2 && live(sync)(),
@@ -632,8 +633,19 @@ test('reconnect backoff doubles up to its cap and resets once live', async () =>
   // The sixth wait is over; the server answers the reconnect it started.
   server.reachable = true;
   await until(live(sync), 'live');
+  // A stream that opens and drops without traffic does not reset the backoff.
   server.closeStreams();
-  // The first retry after a working stream starts at the shortest delay again.
+  await until(() => timers.active((ms) => ms < keepaliveMs).length === 1, 'still backing off');
+  assert.equal(timers.active((ms) => ms < keepaliveMs)[0]!.ms, 800);
+  timers.fire((ms) => ms < keepaliveMs);
+  await until(live(sync), 'live again');
+  // After traffic, the first retry starts at the shortest delay again.
+  const armed = () => timers.pending.filter((timer) => timer.ms === keepaliveMs).length;
+  const before = armed();
+  server.keepalive();
+  // The keepalive timer is re-armed once the chunk has been read.
+  await until(() => armed() > before, 'traffic');
+  server.closeStreams();
   server.reachable = false;
   await until(() => timers.active((ms) => ms < keepaliveMs).length === 1, 'reset backoff');
   assert.equal(timers.active((ms) => ms < keepaliveMs)[0]!.ms, 100);
