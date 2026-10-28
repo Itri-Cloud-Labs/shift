@@ -14,16 +14,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
+          # Blacksmith runners, except macOS Intel, which Blacksmith does not offer.
+          - runner: blacksmith-4vcpu-ubuntu-2204
             platform: linux
             arch: x64
-          - runner: windows-2022
+          - runner: blacksmith-4vcpu-windows-2025
             platform: win32
             arch: x64
           - runner: macos-15-intel
             platform: darwin
             arch: x64
-          - runner: macos-15
+          - runner: blacksmith-6vcpu-macos-15
             platform: darwin
             arch: arm64
     runs-on: ${{ matrix.runner }}

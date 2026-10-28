@@ -544,3 +544,12 @@ Decided 2026-10-28 for the second part of M05's client half (prompt 11), followi
 - **Backoff.** Starts at 0.5 s, doubles to a 30 s cap, and keeps a random half of each wait. It resets once a stream carries traffic, so a stream that opens and drops at once keeps backing off. Three resyncs in a row also count as failures, so a server that keeps refusing cursors does not spin. An offline connection keeps retrying at the cap; revoked and incompatible ones stop.
 - **IPC.** `sync.read` returns the status, problem, last-updated time, cache counts and command states. Projection data crosses IPC in prompt 12, sized to the views that need it.
 - **Live test.** `test/sync-live.test.ts` starts the server from source with `tsx` on a free loopback port and pairs two clients with CLI-issued phrases. The laptop creates a project, a workflow and a run. It approves, and the answer and network are lost after the server commits. The server then restarts on the same port. The laptop confirms the receipt without resending, and both clients converge on the decision and the completed run. The desktop's late answer is `INTERACTION_CONFLICT`. A restarted client resumes from its saved cursor without a snapshot. The test is skipped off Linux, where the server does not run.
+
+## CI on Blacksmith
+
+Decided 2026-10-28 at the owner's request. CI runs on [Blacksmith](https://docs.blacksmith.sh/blacksmith-runners/overview) runners, which boot GitHub's runner images, wherever Blacksmith offers the platform.
+
+- **Linux:** `blacksmith-4vcpu-ubuntu-2204` and `blacksmith-4vcpu-ubuntu-2204-arm`. Blacksmith has deprecated its 22.04 runners, but they keep the glibc 2.35 baseline that the native SQLite binding is checked against. Moving to 24.04 raises that baseline and needs its own decision.
+- **Windows:** `blacksmith-4vcpu-windows-2025`, a public beta on Windows Server 2025, replacing GitHub's `windows-2022`.
+- **macOS:** `blacksmith-6vcpu-macos-15` for arm64. Blacksmith has no Intel Macs, so macOS x64 stays on GitHub's `macos-15-intel`.
+- **Caching:** unchanged. Blacksmith serves `actions/setup-node`'s pnpm cache from its own cache without workflow changes, and its `useblacksmith/*` actions are archived.
