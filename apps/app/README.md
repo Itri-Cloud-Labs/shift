@@ -76,9 +76,9 @@ Main serves only build-listed files below the renderer directory using `shift://
 
 Local Linux x64 build, strict type checks, tests, and actual built/packaged Electron smoke are recorded in [implementation progress](../../docs/implementation-progress.md). The [client CI workflow](../../.github/workflows/app.yml) builds and smoke-tests an unsigned unpacked application on matching runners:
 
-- Linux x64: `ubuntu-22.04`, with Xvfb.
-- Windows x64: `windows-2022`.
-- macOS x64: `macos-15-intel`.
-- macOS arm64: `macos-15`.
+- Linux x64: `blacksmith-4vcpu-ubuntu-2204`, with Xvfb.
+- Windows x64: `blacksmith-4vcpu-windows-2025`.
+- macOS x64: `macos-15-intel`, a GitHub runner; Blacksmith has no Intel Macs.
+- macOS arm64: `blacksmith-6vcpu-macos-15`.
 
-Runner labels match GitHub's published catalog. Their availability to this repository and successful execution remain unverified until CI runs; missing runners are not skipped or treated as passing. This task did not trigger remote CI. Windows/macOS are untested locally. These unpacked packages are foundation smoke artifacts, not signed installers. Windows signing, macOS signing/notarization, Linux distribution artifacts, OS secret-service behavior, and minimum-OS validation remain release prerequisites in prompt 31.
+Runner labels match [Blacksmith's](https://docs.blacksmith.sh/blacksmith-runners/overview) and GitHub's published catalogs. Their availability to this repository and successful execution remain unverified until CI runs; missing runners are not skipped or treated as passing. This task did not trigger remote CI. Windows/macOS are untested locally. These unpacked packages are foundation smoke artifacts, not signed installers. Windows signing, macOS signing/notarization, Linux distribution artifacts, OS secret-service behavior, and minimum-OS validation remain release prerequisites in prompt 31.
