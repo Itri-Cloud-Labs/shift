@@ -156,6 +156,15 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     { kind: 'opened' },
   );
   assert.equal(opened, DOCUMENTATION_URL);
+  // The sync view is state and counts only: no cursor credential, command body or token.
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'sync.read' }, async () => assert.fail()),
+    {
+      kind: 'sync',
+      sync: { status: 'stopped', problem: null, updatedAt: null, cached: null, commands: [] },
+    },
+  );
+  assert.equal(parseRequest({ kind: 'sync.read', profileId: '../x' }), undefined);
   const failure = await dispatch(
     client,
     trusted,

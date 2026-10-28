@@ -455,3 +455,35 @@ Acceptance coverage (fake `fetch` server from the shared fixtures):
 - **Status queries:** sent with the device token. Info from another server is refused.
 - **Electron smoke** (built app, Linux under Xvfb): the bridge exposes exactly the connection methods. With no saved connection the state is `unconfigured`. Remote HTTP is refused, a path-like profile ID is an invalid request, and no credential field reaches the renderer. With the `basic_text` backend, credential storage is `session`.
 - **Totals:** `pnpm check` passed 163 tests (149 server, 14 app) with zero skips.
+
+## Client sync runtime
+
+Status: complete for the sync part of M05's client half, which completes prompt 11. No renderer change. Date: 2026-10-28.
+
+Changed files:
+
+- **client-core:** the sync supervisor, event application, receipts and commands (`sync.ts`); the cache types and memory store (`projection.ts`); the SSE request in `http.ts`; and identities from `authenticated()` in `connection.ts`. `ClientCore` owns a `SyncRuntime`.
+- **main:** the per-profile cache file (`FileSyncStore` in `storage.ts`), starting sync at launch, `sync.read` in the dispatcher, forgetting the cache when a profile is cleared, and the smoke checks.
+- **preload and contracts:** the `sync.read` bridge method and the sync view schema.
+- **Dependency:** eventsource-parser 4.1.3, bundled into main.
+- **Tests and docs:** `test/sync.test.ts`, `test/sync-live.test.ts`, a boundary check, the app README, the prompts status and the decision log.
+
+Acceptance coverage, against a scripted fake server with manual timers:
+
+- **Snapshot and events:** a snapshot goes live. Each event refetches the run it names, and the cache and cursor are saved together. New runs are added and deleted runs removed. Device and pairing events fetch nothing.
+- **Duplicates and order:** a repeated event, an older one and one below the cursor are applied once, with one fetch.
+- **Lost after commit:** the server applies an approval, then the answer and the network are lost. The command is `unknown`, reconnects back off, and the receipt confirms `accepted` with no second POST. The cached form becomes `RESPONDED`.
+- **Never arrived:** a dropped POST is `not_applied` from its receipt. `resend` repeats the same command ID. A conflict with another device's answer is `rejected` with `INTERACTION_CONFLICT`. A send while not live is refused.
+- **Epochs and resync:**
+  - A restored database (new epoch) takes a new snapshot and updates the profile's epoch.
+  - A refused cursor takes a snapshot.
+  - An unknown event type or version takes a snapshot.
+- **Stale and replaced:**
+  - A slow refresh answering with older state cannot overwrite a newer one.
+  - After `disconnect`, a held fetch lands without changing the cache or the saved cursor, and the stream is closed.
+- **Keepalive:** traffic re-arms the timer. Silence past the timeout reconnects from the saved cursor without a snapshot.
+- **Backoff:** 100, 200, 400, 800, 800, 800 ms with the test cap, and back to 100 ms after a working stream.
+- **Revocation:** the device ends up `revoked`, sync stops, the cache and token are deleted, and nothing retries.
+- **Restart:** a new runtime with the saved stores catches up 1,201 events in three pages, without a snapshot.
+- **Live** (real server, Linux): two paired clients, a lost approval acknowledgement across a server restart, a single POST confirmed by its receipt, convergence on both devices, a refused late answer, and a restart from the saved cursor.
+- **Electron smoke** (Linux, Xvfb): the bridge adds exactly `sync.read`, and sync is `stopped` with no cache when nothing is connected.

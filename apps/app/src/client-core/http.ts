@@ -5,6 +5,8 @@
 export interface FetchResponse {
   status: number;
   text(): Promise<string>;
+  // Present on streaming answers such as the event stream.
+  body?: ReadableStream<Uint8Array> | null;
 }
 
 export type Fetch = (
@@ -30,6 +32,10 @@ export interface Exchange {
   status: number;
   body: unknown;
 }
+
+// An opened event stream, or the JSON answer that refused it.
+export type StreamOpening =
+  { status: 200; body: ReadableStream<Uint8Array> } | { status: number; error: unknown };
 
 export class ServerHttp {
   constructor(
@@ -70,6 +76,47 @@ export class ServerHttp {
     if (text.length > this.options.maxBytes) throw new TransportFailure('invalid');
     try {
       return { status: response.status, body: JSON.parse(text) as unknown };
+    } catch {
+      throw new TransportFailure('invalid');
+    }
+  }
+
+  // Opens a long-lived SSE stream. It has no overall timeout: the caller watches keepalives and
+  // aborts the signal to close it.
+  async stream(
+    base: string,
+    path: string,
+    init: { bearer: string; lastEventId: string; signal: AbortSignal },
+  ): Promise<StreamOpening> {
+    // The timeout covers only the wait for headers; aborting later would cut the stream.
+    const opening = new AbortController();
+    const timer = setTimeout(() => opening.abort(), this.options.timeoutMs);
+    let response: FetchResponse;
+    try {
+      response = await this.fetch(`${base}${path}`, {
+        method: 'GET',
+        headers: {
+          accept: 'text/event-stream',
+          authorization: `Bearer ${init.bearer}`,
+          'last-event-id': init.lastEventId,
+        },
+        signal: AbortSignal.any([init.signal, opening.signal]),
+        redirect: 'error',
+      });
+    } catch {
+      throw new TransportFailure('unreachable');
+    } finally {
+      clearTimeout(timer);
+    }
+    if (response.status === 200 && response.body) return { status: 200, body: response.body };
+    let text: string;
+    try {
+      text = await response.text();
+    } catch {
+      throw new TransportFailure('unreachable');
+    }
+    try {
+      return { status: response.status, error: JSON.parse(text) as unknown };
     } catch {
       throw new TransportFailure('invalid');
     }

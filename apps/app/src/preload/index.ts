@@ -41,6 +41,9 @@ const bridge: DesktopBridge = {
       invoke({ kind: 'connection.changeAddress', profileId, url }),
     clear: (profileId: string) => invoke({ kind: 'connection.clear', profileId }),
   }),
+  sync: Object.freeze({
+    read: () => invoke({ kind: 'sync.read' }),
+  }),
   setSamples: (enabled) => invoke({ kind: 'samples.set', enabled }),
   queryServer: (operation) => invoke({ kind: 'server.query', operation }),
   openDocumentation: () => invoke({ kind: 'desktop.openDocumentation' }),
