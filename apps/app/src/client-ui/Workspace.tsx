@@ -116,8 +116,15 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const select = (nodeId: string | null) => navigate({ nodeId });
   const selected = document?.nodes.some((node) => node.id === route.nodeId) ? route.nodeId : null;
 
-  const trigger = workflow?.value
-    ? readDocument(workflow.value.draft).nodes.find((node) => node.type === 'manual_trigger')
+  // Run starts the published version, so its trigger decides whether input is needed.
+  const activeVersionId = workflow?.value.activeVersionId ?? null;
+  const active = useResource<unknown>(
+    workflowId && activeVersionId ? () => bridge().data.version(workflowId, activeVersionId) : null,
+    (value) => (value as { version: { document: unknown } }).version.document,
+    `version:${activeVersionId}`,
+  );
+  const trigger = active?.value
+    ? readDocument(active.value).nodes.find((node) => node.type === 'manual_trigger')
     : undefined;
   const published = Boolean(workflow?.value.activeVersionId);
   const canRun = live && published;
@@ -225,9 +232,9 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           select={select}
         />
       )}
-      {inputOpen && trigger && (
+      {inputOpen && (
         <RunInput
-          schema={trigger.config['inputSchema']}
+          schema={trigger?.config['inputSchema']}
           start={(input) => void start(input)}
           close={() => setInputOpen(false)}
         />

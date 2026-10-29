@@ -34,20 +34,22 @@ export async function ask(call: Promise<DesktopResponse>): Promise<DesktopRespon
 }
 
 // Calls `read` now and again after each change notification.
+// A value belongs to the deps it was read for: when they change, the old value is not shown.
 export function useLive<T>(read: () => Promise<T | undefined>, deps: unknown[]): T | undefined {
-  const [value, setValue] = useState<T>();
+  const key = JSON.stringify(deps);
+  const [state, setState] = useState<{ key: string; value: T }>();
   const latest = useRef(0);
   const refresh = useCallback(async () => {
     const ticket = ++latest.current;
     const next = await read();
     // An older read that finishes late never replaces a newer one.
-    if (ticket === latest.current && next !== undefined) setValue(next);
-  }, deps);
+    if (ticket === latest.current && next !== undefined) setState({ key, value: next });
+  }, [key]);
   useEffect(() => {
     void refresh();
     return window.shift?.onChange(() => void refresh());
   }, [refresh]);
-  return value;
+  return state?.key === key ? state.value : undefined;
 }
 
 export interface DesktopState {
