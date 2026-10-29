@@ -1,58 +1,34 @@
-import { useEffect, useState } from 'react';
-import { parseResponse, type ShellState } from '../shared/contracts.js';
+import { useEffect } from 'react';
+import { useDesktop } from './bridge.js';
+import { Pairing } from './Pairing.js';
+import { Workspace } from './Workspace.js';
 
-const sections = ['Projects', 'Workflows', 'Runs', 'Sessions', 'Attention', 'Settings'] as const;
-
+// The canvas is the app; pairing is the one full-screen step before it.
 export function App() {
-  const [section, setSection] = useState<(typeof sections)[number]>('Projects');
-  const [state, setState] = useState<ShellState>();
-  const [error, setError] = useState('');
-
+  const desktop = useDesktop();
   useEffect(() => {
-    let mounted = true;
-    if (!window.shift) {
-      setError('The desktop bridge is unavailable.');
-      return;
-    }
-    void window.shift
-      .readShell()
-      .then((value) => {
-        if (!mounted) return;
-        const response = parseResponse(value);
-        if (response?.kind === 'shell') setState(response.state);
-        else setError('The shell could not be loaded.');
-      })
-      .catch(() => {
-        if (mounted) setError('The desktop bridge is unavailable.');
-      });
-    return () => {
-      mounted = false;
-    };
+    const platform = navigator.userAgent.includes('Mac')
+      ? 'darwin'
+      : navigator.userAgent.includes('Windows')
+        ? 'win32'
+        : 'linux';
+    document.documentElement.classList.add(`platform-${platform}`);
   }, []);
-
-  return (
-    <>
-      <header>
-        <h1>Shift</h1>
-        <p>Disconnected</p>
-        {state?.samples && <p role="status">Development fixtures enabled.</p>}
-        {error && <p role="alert">{error}</p>}
-      </header>
-      <nav aria-label="Sections">
-        {sections.map((name) => (
-          <button
-            key={name}
-            aria-current={section === name ? 'page' : undefined}
-            onClick={() => setSection(name)}
-          >
-            {name}
-          </button>
-        ))}
-      </nav>
-      <main>
-        <h2>{section}</h2>
-        <p>No server connected.</p>
+  if (!window.shift)
+    return (
+      <main className="pairing">
+        <p role="alert" className="pairing-panel">
+          The desktop bridge is unavailable.
+        </p>
       </main>
-    </>
-  );
+    );
+  if (!desktop) return <div className="canvas" aria-busy="true" />;
+  const { connection } = desktop;
+  const paired =
+    connection.profileId !== null &&
+    (connection.status === 'online' ||
+      connection.status === 'offline' ||
+      connection.status === 'connecting' ||
+      connection.status === 'incompatible');
+  return paired ? <Workspace desktop={desktop} /> : <Pairing connection={connection} />;
 }

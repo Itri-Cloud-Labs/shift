@@ -58,46 +58,47 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 
 ## Endpoints
 
-| Method and path                                | CLI                         | Purpose                                           |
-| ---------------------------------------------- | --------------------------- | ------------------------------------------------- |
-| `GET /api/v0/info`                             | `shift info`                | Server identity, protocol range and capabilities  |
-| `GET /api/v0/health`                           | `shift health`              | Liveness and readiness                            |
-| `GET /api/v0/ready`                            | `shift ready`               | Readiness; `503` when not ready                   |
-| `POST /api/v0/admin/shutdown`                  | `shift stop`                | Graceful shutdown                                 |
-| `POST /api/v0/pair`                            | none                        | Pair a device with a phrase (TCP, no token)       |
-| `GET /api/v0/devices`                          | none                        | Paired devices (TCP, token)                       |
-| `POST /api/v0/devices/{id}/revoke`             | none                        | Revoke a device (TCP, token)                      |
-| `POST /api/v0/pairing`                         | none                        | Issue a pairing phrase (TCP, token)               |
-| `POST /api/v0/admin/pairing`                   | `shift device pair`         | Issue a pairing phrase                            |
-| `GET /api/v0/admin/devices`                    | `shift device list`         | Paired devices                                    |
-| `POST /api/v0/admin/devices/{id}/revoke`       | `shift device revoke`       | Revoke a device                                   |
-| `GET /api/v0/commands/{commandId}`             | none                        | The device's own command receipt (TCP, token)     |
-| `GET /api/v0/admin/commands/{commandId}`       | none                        | The CLI's own command receipt                     |
-| `GET /api/v0/snapshot`                         | none                        | State with the cursor to stream from (TCP, token) |
-| `GET /api/v0/events`                           | `shift event list`          | Event history (`/admin/events` on the socket)     |
-| `GET /api/v0/events/stream`                    | none                        | SSE event stream (TCP, token)                     |
-| `POST /api/v0/admin/projects`                  | `shift project add`         | Register a repository                             |
-| `GET /api/v0/admin/projects`                   | `shift project list`        | List projects                                     |
-| `POST /api/v0/admin/workflows`                 | `shift workflow create`     | Create a workflow with a draft                    |
-| `GET /api/v0/admin/workflows[?projectId=]`     | `shift workflow list`       | List workflows                                    |
-| `GET /api/v0/admin/workflows/{id}`             | `shift workflow show`       | Workflow with its draft and versions              |
-| `PUT /api/v0/admin/workflows/{id}/draft`       | `shift workflow save`       | Replace the draft at an expected revision         |
-| `POST /api/v0/admin/workflows/{id}/publish`    | `shift workflow publish`    | Publish the draft as a version                    |
-| `POST /api/v0/admin/runs`                      | `shift run start`           | Start a run of the active version                 |
-| `GET /api/v0/admin/runs`                       | `shift run list`            | List runs                                         |
-| `GET /api/v0/admin/runs/{id}`                  | `shift run show`            | Run with executions and invocations               |
-| `GET /api/v0/admin/runs/{id}/executions`       | `shift run executions`      | A page of a run's execution history               |
-| `POST /api/v0/admin/runs/{id}/cancel`          | `shift run cancel`          | Cancel a run                                      |
-| `POST /api/v0/admin/runs/{id}/retry`           | `shift run retry`           | Retry a stuck step                                |
-| `POST /api/v0/admin/runs/{id}/fail`            | `shift run fail`            | Abandon a stuck step                              |
-| `POST /api/v0/admin/runs/{id}/complete`        | `shift run complete`        | Record a verified result for a stuck step         |
-| `POST /api/v0/admin/runs/{id}/extend`          | `shift run extend`          | Raise the limit a run reached                     |
-| `GET /api/v0/admin/interactions[?all=true]`    | `shift interaction list`    | Pending human requests                            |
-| `GET /api/v0/admin/interactions/{id}`          | `shift interaction show`    | One request with its response                     |
-| `POST /api/v0/admin/interactions/{id}/respond` | `shift interaction respond` | Answer a form or approval                         |
-| `GET /api/v0/admin/workspaces[?projectId=]`    | `shift workspace list`      | List run workspaces                               |
-| `GET /api/v0/admin/workspaces/{id}`            | `shift workspace show`      | One workspace                                     |
-| `POST /api/v0/admin/workspaces/{id}/remove`    | `shift workspace remove`    | Remove a finished run's worktree                  |
+| Method and path                                         | CLI                         | Purpose                                           |
+| ------------------------------------------------------- | --------------------------- | ------------------------------------------------- |
+| `GET /api/v0/info`                                      | `shift info`                | Server identity, protocol range and capabilities  |
+| `GET /api/v0/health`                                    | `shift health`              | Liveness and readiness                            |
+| `GET /api/v0/ready`                                     | `shift ready`               | Readiness; `503` when not ready                   |
+| `POST /api/v0/admin/shutdown`                           | `shift stop`                | Graceful shutdown                                 |
+| `POST /api/v0/pair`                                     | none                        | Pair a device with a phrase (TCP, no token)       |
+| `GET /api/v0/devices`                                   | none                        | Paired devices (TCP, token)                       |
+| `POST /api/v0/devices/{id}/revoke`                      | none                        | Revoke a device (TCP, token)                      |
+| `POST /api/v0/pairing`                                  | none                        | Issue a pairing phrase (TCP, token)               |
+| `POST /api/v0/admin/pairing`                            | `shift device pair`         | Issue a pairing phrase                            |
+| `GET /api/v0/admin/devices`                             | `shift device list`         | Paired devices                                    |
+| `POST /api/v0/admin/devices/{id}/revoke`                | `shift device revoke`       | Revoke a device                                   |
+| `GET /api/v0/commands/{commandId}`                      | none                        | The device's own command receipt (TCP, token)     |
+| `GET /api/v0/admin/commands/{commandId}`                | none                        | The CLI's own command receipt                     |
+| `GET /api/v0/snapshot`                                  | none                        | State with the cursor to stream from (TCP, token) |
+| `GET /api/v0/events`                                    | `shift event list`          | Event history (`/admin/events` on the socket)     |
+| `GET /api/v0/events/stream`                             | none                        | SSE event stream (TCP, token)                     |
+| `POST /api/v0/admin/projects`                           | `shift project add`         | Register a repository                             |
+| `GET /api/v0/admin/projects`                            | `shift project list`        | List projects                                     |
+| `POST /api/v0/admin/workflows`                          | `shift workflow create`     | Create a workflow with a draft                    |
+| `GET /api/v0/admin/workflows[?projectId=]`              | `shift workflow list`       | List workflows                                    |
+| `GET /api/v0/admin/workflows/{id}`                      | `shift workflow show`       | Workflow with its draft and versions              |
+| `GET /api/v0/admin/workflows/{id}/versions/{versionId}` | none                        | A published version's document                    |
+| `PUT /api/v0/admin/workflows/{id}/draft`                | `shift workflow save`       | Replace the draft at an expected revision         |
+| `POST /api/v0/admin/workflows/{id}/publish`             | `shift workflow publish`    | Publish the draft as a version                    |
+| `POST /api/v0/admin/runs`                               | `shift run start`           | Start a run of the active version                 |
+| `GET /api/v0/admin/runs`                                | `shift run list`            | List runs                                         |
+| `GET /api/v0/admin/runs/{id}`                           | `shift run show`            | Run with executions and invocations               |
+| `GET /api/v0/admin/runs/{id}/executions`                | `shift run executions`      | A page of a run's execution history               |
+| `POST /api/v0/admin/runs/{id}/cancel`                   | `shift run cancel`          | Cancel a run                                      |
+| `POST /api/v0/admin/runs/{id}/retry`                    | `shift run retry`           | Retry a stuck step                                |
+| `POST /api/v0/admin/runs/{id}/fail`                     | `shift run fail`            | Abandon a stuck step                              |
+| `POST /api/v0/admin/runs/{id}/complete`                 | `shift run complete`        | Record a verified result for a stuck step         |
+| `POST /api/v0/admin/runs/{id}/extend`                   | `shift run extend`          | Raise the limit a run reached                     |
+| `GET /api/v0/admin/interactions[?all=true]`             | `shift interaction list`    | Pending human requests                            |
+| `GET /api/v0/admin/interactions/{id}`                   | `shift interaction show`    | One request with its response                     |
+| `POST /api/v0/admin/interactions/{id}/respond`          | `shift interaction respond` | Answer a form or approval                         |
+| `GET /api/v0/admin/workspaces[?projectId=]`             | `shift workspace list`      | List run workspaces                               |
+| `GET /api/v0/admin/workspaces/{id}`                     | `shift workspace show`      | One workspace                                     |
+| `POST /api/v0/admin/workspaces/{id}/remove`             | `shift workspace remove`    | Remove a finished run's worktree                  |
 
 The CLI prints the resource from each response as one JSON line: the `project`, `workflow`, `run`, or list, without the envelope. On failure it prints the error object to stderr and exits with status 1.
 
@@ -200,7 +201,7 @@ A `Workflow`:
 }
 ```
 
-`hash` is the SHA-256 of the version's canonical JSON. Key order does not affect it. `GET /api/v0/admin/workflows` returns a summary per workflow (`id`, `projectId`, `name`, `activeVersionId`). Filter by project with `?projectId=`. `GET /api/v0/admin/workflows/{id}` returns the full `Workflow`.
+`hash` is the SHA-256 of the version's canonical JSON. Key order does not affect it. `GET /api/v0/admin/workflows` returns a summary per workflow (`id`, `projectId`, `name`, `activeVersionId`). Filter by project with `?projectId=`. `GET /api/v0/admin/workflows/{id}` returns the full `Workflow`. `GET /api/v0/admin/workflows/{id}/versions/{versionId}` returns one published version with its frozen document as `{"version": {"id", "workflowId", "number", "hash", "createdAt", "document"}}`, so a run can be shown with the graph it started on; a version of another workflow is `404 NOT_FOUND`.
 
 `PUT /api/v0/admin/workflows/{id}/draft` replaces the draft: `{"revision": N, "draft": {…}, "commandId"?}`. It succeeds only if the draft is still at revision `N`, and the revision then increases by one. Otherwise it fails with `409 REVISION_CONFLICT`. Read the workflow again and reapply your change.
 

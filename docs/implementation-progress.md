@@ -487,3 +487,25 @@ Acceptance coverage, against a scripted fake server with manual timers:
 - **Restart:** a new runtime with the saved stores catches up 1,201 events in three pages, without a snapshot.
 - **Live** (real server, Linux): two paired clients, a lost approval acknowledgement across a server restart, a single POST confirmed by its receipt, convergence on both devices, a refused late answer, and a restart from the saved cursor.
 - **Electron smoke** (Linux, Xvfb): the bridge adds exactly `sync.read`, and sync is `stopped` with no cache when nothing is connected.
+
+## Canvas shell (12a)
+
+Status: the first of two parts of prompt 12 (M06). The canvas is view-only; editing is prompt 13. Date: 2026-10-28.
+
+Changed files:
+
+- **Product and design context:** `PRODUCT.md` (users, purpose, personality, anti-references, principles, WCAG 2.2 AA) and a seed `DESIGN.md` at the repository root.
+- **Server:** `GET /workflows/{id}/versions/{versionId}` and the `WorkflowVersionResponse` schema, fixture and generated validators; the API reference.
+- **client-core:** `SyncRuntime.query` for live reads, and resource reads with a last-copy cache and run commands in `ClientCore`.
+- **main and preload:** data and run IPC requests, resource validation, change notifications, the frameless window, capture mode and the smoke checks.
+- **Renderer:** pairing, the canvas, node cards, the location island with the switcher and runs menu, the run status island, the status chip and attention count, the connection banner, the inspector, the list view, the toolbar, the run input island, empty-state hints and the stylesheet with both themes.
+- **Tools and tests:** `tools/capture.mjs`, `tools/stage.mjs`, `test/graph.test.ts`, boundary checks and a stale-read test.
+
+Verification:
+
+- **Graph model:** lenient reading of invalid drafts, ports for every node type including switch cases and approval outcomes, the server's default row laid out again while saved positions are kept, per-node run state with loop passes, followed connections, wait and attention reasons, and route round-trips that reject anything but identifiers.
+- **Boundaries:** path-like or extra-field data requests are refused; reads and runs without a connection are `DISCONNECTED`; resource answers are bounded in size and depth.
+- **Stale reads:** a run read live is returned marked stale, unchanged, after the connection drops; an unknown one is `NOT_FOUND`.
+- **Server:** a device reads a published version's document; a version under another workflow is `404`.
+- **Electron smoke** (Linux, Xvfb): the pairing step with labelled fields, no canvas before pairing, the exact bridge, disconnected resource and run requests, no overflow at 720×480.
+- **Screenshots** from `tools/capture.mjs` against a real server, inspected in both themes at 1440×900 and 900×640: pairing, the draft, the draft inspector, a waiting run with completed, waiting and unreached nodes, the run inspector, the switcher, the runs menu and the list view. Fixes made after inspection: the server's default row overlapped cards, edges were hidden under them, the run status island collided with the location island, the initial zoom made cards unreadable, and on narrow windows the wrapped run status covered the side islands.

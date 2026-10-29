@@ -694,3 +694,27 @@ test('a restart resumes from the saved cursor and catches up page by page', asyn
   assert.equal(server.calls.filter((call) => call.path.startsWith('/api/v0/events?')).length, 3);
   second.sync.stop();
 });
+
+test('views read resources live, and see the last copy marked stale when not live', async () => {
+  const { ClientCore, ClientFailure } = await import('../src/client-core/runtime.js');
+  const server = new FakeServer();
+  server.addRun(uuid(1), 'RUNNING');
+  const { sync, connection } = await setup({ server });
+  await until(live(sync), 'live');
+  // A core around this test's runtime; its own runtime is never started.
+  const real = new ClientCore(connection, new ServerHttp(server.fetch));
+  Object.defineProperty(real, 'sync', { value: sync });
+  const path = `/api/v0/runs/${uuid(1)}`;
+  const first = await real.resource('run', path);
+  assert.equal(first.stale, false);
+  assert.equal((first.value as { run: { state: string } }).run.state, 'RUNNING');
+  await assert.rejects(real.resource('run', `/api/v0/runs/${uuid(2)}`), { code: 'NOT_FOUND' });
+  server.reachable = false;
+  server.closeStreams();
+  await until(() => sync.state.status !== 'live', 'not live');
+  const cached = await real.resource('run', path);
+  assert.equal(cached.stale, true);
+  assert.deepEqual(cached.value, first.value);
+  await assert.rejects(real.resource('run', `/api/v0/runs/${uuid(3)}`), ClientFailure);
+  sync.stop();
+});
