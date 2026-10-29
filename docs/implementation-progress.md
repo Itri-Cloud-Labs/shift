@@ -520,3 +520,17 @@ Status: drafts can be rearranged on the canvas; the rest of the editor is prompt
   - Move requests are bounded in node count, size, coordinate range and revision.
   - A device saves a draft and a stale revision is `REVISION_CONFLICT` (server test).
   - Against a real server, a real mouse drag in the built app saved the new position, which was still there after switching to a run and back; the run kept its frozen layout. The first attempt found the server bug above.
+
+## Attention and human requests (12b)
+
+Status: the second of three parts of prompt 12 (M06); settings and ⌘K remain. Date: 2026-10-29.
+
+- **Changed:** `interaction.list`, `interaction.respond` and `run.control` IPC requests and bridge methods; rejection messages on commands; the form model (`client-ui/forms.ts`) and attention rules (`client-ui/attention.ts`); the Request tab, inbox, toast and decision island; a clickable attention count; capture steps for each.
+- **Verified:**
+  - Form drafts convert to typed responses, leave out empty optional fields, report missing and malformed values by path, and take defaults, including nested ones.
+  - Each attention code offers exactly the decisions the server accepts, and a run being cancelled offers none.
+  - The inbox lists pending requests and stuck runs from the projection, oldest first, with their project and workflow.
+  - Answer and decision requests are bounded and carry IDs, never paths; without a connection they are `DISCONNECTED`; malformed interaction lists never cross IPC.
+  - The existing live sync test already covers two devices racing an approval and a lost acknowledgement confirmed by its receipt without a second send.
+  - Screenshots against a real server: the approval form, the inbox with a request and a stuck run, a toast for a run started while the app was open, the decision island in both themes for a loop stopped by its limit, and an approval sent from the app that the server accepted ("Approved by this device"). Fixes after inspection: the first snapshot was announced as new, the limited node was marked instead of the node before it, and the run status slid under the status cluster.
+  - Electron smoke with the new bridge surface. `pnpm check` passed 188 tests (149 server, 39 app).

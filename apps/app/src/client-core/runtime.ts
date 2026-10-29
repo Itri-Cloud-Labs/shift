@@ -14,7 +14,7 @@ import {
   validateWorkflowResponse,
   validateWorkflowVersionResponse,
 } from '../protocol/generated/validators.js';
-import type { ServerInfo, ServerHealth } from '../protocol/generated/types.js';
+import type { Interaction, ServerInfo, ServerHealth } from '../protocol/generated/types.js';
 import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
@@ -81,6 +81,12 @@ export class ClientCore {
       runs: projection.runs,
       attention: pending + stuck,
     };
+  }
+
+  // Pending human requests, and settled ones seen since the snapshot, live or cached. The
+  // attention inbox is this projection, never local notification state.
+  interactions(): Interaction[] {
+    return this.sync.projection?.interactions ?? [];
   }
 
   // Reads a workflow, version or run from the live server, or its last copy while not live.

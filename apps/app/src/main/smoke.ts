@@ -34,10 +34,11 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,interaction,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
     assert(Object.keys(window.shift.workflow).join(',') === 'move', 'Broad workflow bridge');
     assert(Object.keys(window.shift.data).sort().join(',') === 'overview,run,version,workflow', 'Broad data bridge');
-    assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,start', 'Broad run bridge');
+    assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,control,start', 'Broad run bridge');
+    assert(Object.keys(window.shift.interaction).sort().join(',') === 'list,respond', 'Broad interaction bridge');
     assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');
     assert(Object.keys(window.shift.connection).sort().join(',') === 'abandonPairing,changeAddress,clear,connect,pair,read', 'Broad connection bridge');
     const connection = await window.shift.connection.read();

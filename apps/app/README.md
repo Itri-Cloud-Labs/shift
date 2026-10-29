@@ -2,7 +2,7 @@
 
 The Electron client follows the [desktop UI direction](../../docs/ui-direction.md): the workflow graph canvas is the whole app, and everything else floats over it as islands. Its visual system is in [DESIGN.md](../../DESIGN.md), and who it is for in [PRODUCT.md](../../PRODUCT.md).
 
-The app never starts a Shift server, harness, or agent. The main process pairs with a server, keeps the device token in the OS keychain, reconnects, and keeps a synchronized cache of the server's state. The renderer shows that state. Nodes of a draft can be moved; other editing, the inbox with human forms and approvals, settings and the command palette are later milestones.
+The app never starts a Shift server, harness, or agent. The main process pairs with a server, keeps the device token in the OS keychain, reconnects, and keeps a synchronized cache of the server's state. The renderer shows that state. Nodes of a draft can be moved, human requests answered and stuck runs decided; other editing, settings and the command palette are later milestones.
 
 ## The canvas shell
 
@@ -10,10 +10,12 @@ The app never starts a Shift server, harness, or agent. The main process pairs w
 - **Canvas:** a frameless window with a React Flow canvas edge to edge. A workflow's draft opens by default; a run shows the graph of the version it started on, fetched from `GET /workflows/{id}/versions/{versionId}`. Nodes are cards with their type, one line of configuration and named ports. In a run each shows its state in a word, an icon and a color, how many times it ran, and which port it took. Followed connections are solid; others are dashed. Graphs without saved positions, including the server's default row, are laid out left to right with dagre.
 - **Islands:**
   - Top left: the location (Project › Workflow › Run ▾). It opens the switcher (projects and their workflows, searchable) and the runs menu, with the draft first. In a run, the run status island sits beside it: state, why it waits, active time, version and Cancel with a confirmation.
-  - Top right: the connection chip and the number of things that need the owner.
+  - Top right: the connection chip and the number of things that need the owner, which opens the inbox: every pending request and stuck run, oldest first. Choosing one opens its run and node. A new item while the app is open also shows as a toast in the corner.
   - Right edge: the inspector for the selected node, with its output per loop pass, attempts, connections and configuration.
   - Bottom: zoom, fit, the node and connection list (the keyboard and screen-reader view of the graph), the published version and Run. A trigger with an input schema asks for its input first.
   - When not live, a banner says why, offers Retry when offline, and the last copy of each view stays visible.
+- **Human requests:** a node with a request has a Request tab in the inspector, opened first while the request is pending. It shows the frozen title, instructions and form with typed fields, and one button per approval outcome. The answer is sent at the request's revision; a lost acknowledgement is confirmed by its receipt, and an answer from another device replaces the form.
+- **Decisions:** a run stopped for the owner shows Decide… in its status island, offering only what the server accepts: retry, raise a limit, record a verified result for an agent step, or fail the step.
 - **Moving nodes:** while live, a draft's nodes can be dragged, or nudged with the arrow keys once selected. Shortly after the last movement, main re-reads the latest draft, writes every node's position into it, and saves it at the revision on screen. A draft changed elsewhere is refused with `REVISION_CONFLICT` and the nodes return to its layout; a lost answer is confirmed by its receipt. A run's graph stays as it was frozen.
 - **Routes** live in the URL fragment (`#/p/<project>/w/<workflow>/r/<run>/n/<node>`), so every island links to the same place.
 - **Look:** Inter and JetBrains Mono, bundled locally. Dark and light themes follow the OS, with tinted neutrals and one signal-green accent; status colors only mean state. Motion is limited to island open/close and state changes, and stops with reduced motion.

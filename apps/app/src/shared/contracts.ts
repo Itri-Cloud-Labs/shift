@@ -4,8 +4,9 @@ export const IPC_CHANNEL = 'shift:desktop:v1';
 // Main tells the renderer that connection or synchronized state changed; it carries no data.
 export const CHANGE_CHANNEL = 'shift:desktop:v1:changed';
 export const REQUEST_LIMIT = 8 * 1024;
-// Moving nodes sends every node's position at once.
+// Moving nodes sends every node's position at once; answers and verified results carry form data.
 export const MOVE_LIMIT = 64 * 1024;
+export const ANSWER_LIMIT = 64 * 1024;
 export const RESPONSE_LIMIT = 256 * 1024;
 // Workflow documents and runs with their executions can be larger than other answers.
 export const RESOURCE_LIMIT = 8 * 1024 * 1024;
@@ -37,6 +38,35 @@ export const requestSchema = v.variant('kind', [
   // The trigger input is any JSON value; the request size limit bounds it.
   v.strictObject({ kind: v.literal('run.start'), workflowId: profileId, input: v.unknown() }),
   v.strictObject({ kind: v.literal('run.cancel'), runId: profileId }),
+  // The owner's decision for a run that needs them. The server checks that it applies.
+  v.strictObject({
+    kind: v.literal('run.control'),
+    runId: profileId,
+    control: v.variant('kind', [
+      v.strictObject({ kind: v.literal('retry') }),
+      v.strictObject({
+        kind: v.literal('fail'),
+        reason: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(1000))),
+      }),
+      v.strictObject({ kind: v.literal('complete'), data: v.unknown() }),
+      v.strictObject({
+        kind: v.literal('extend'),
+        executions: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000))),
+        activeMs: v.optional(
+          v.pipe(v.number(), v.integer(), v.minValue(1000), v.maxValue(30 * 24 * 3_600_000)),
+        ),
+      }),
+    ]),
+  }),
+  v.strictObject({ kind: v.literal('data.interactions') }),
+  // An answer to a human request, at the revision the form showed.
+  v.strictObject({
+    kind: v.literal('interaction.respond'),
+    interactionId: profileId,
+    revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+    decision: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
+    response: v.record(v.string(), v.unknown()),
+  }),
   v.strictObject({
     kind: v.literal('workflow.move'),
     workflowId: profileId,
@@ -56,6 +86,11 @@ export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('desktop.openDocumentation') }),
 ]);
 export type DesktopRequest = v.InferOutput<typeof requestSchema>;
+export type RunControl = Extract<DesktopRequest, { kind: 'run.control' }>['control'];
+export type Answer = Pick<
+  Extract<DesktopRequest, { kind: 'interaction.respond' }>,
+  'revision' | 'decision' | 'response'
+>;
 export const shellSchema = v.strictObject({
   connection: v.literal('unconfigured'),
   samples: v.boolean(),
@@ -158,6 +193,8 @@ export const commandViewSchema = v.strictObject({
   code: v.nullable(v.pipe(v.string(), v.maxLength(100))),
   createdAt: v.number(),
   resendable: v.boolean(),
+  // The server's explanation of a rejected command, while this session still holds it.
+  message: v.nullable(v.pipe(v.string(), v.maxLength(2000))),
 });
 export const syncViewSchema = v.strictObject({
   status: v.picklist(['stopped', 'syncing', 'live', 'reconnecting']),
@@ -211,6 +248,9 @@ export const responseSchema = v.variant('kind', [
     stale: v.boolean(),
     fetchedAt: v.number(),
   }),
+  // Pending human requests and the settled ones seen since the snapshot, checked by the
+  // generated interaction list validator.
+  v.strictObject({ kind: v.literal('interactions'), value: v.unknown() }),
   v.strictObject({
     kind: v.literal('command'),
     command: commandViewSchema,
@@ -244,6 +284,11 @@ export interface DesktopBridge {
   run: {
     start(workflowId: string, input: unknown): Promise<DesktopResponse>;
     cancel(runId: string): Promise<DesktopResponse>;
+    control(runId: string, control: RunControl): Promise<DesktopResponse>;
+  };
+  interaction: {
+    list(): Promise<DesktopResponse>;
+    respond(interactionId: string, answer: Answer): Promise<DesktopResponse>;
   };
   workflow: {
     // Saves node positions on the draft at `revision`; refused if the draft moved on.
@@ -288,20 +333,24 @@ export function withinLimit(value: unknown, limit: number, maxDepth = 16): boole
   }
 }
 export function parseRequest(value: unknown): DesktopRequest | undefined {
-  const move =
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { kind?: unknown }).kind === 'workflow.move';
-  if (!withinLimit(value, move ? MOVE_LIMIT : REQUEST_LIMIT)) return undefined;
+  const kind =
+    typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
+  const limit =
+    kind === 'workflow.move'
+      ? MOVE_LIMIT
+      : kind === 'interaction.respond' || kind === 'run.control'
+        ? ANSWER_LIMIT
+        : REQUEST_LIMIT;
+  if (!withinLimit(value, limit)) return undefined;
   const result = v.safeParse(requestSchema, value);
   return result.success ? result.output : undefined;
 }
 export function parseResponse(value: unknown): DesktopResponse | undefined {
-  // Resources carry workflow documents, which may nest 32 levels below their envelope.
-  const resource =
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { kind?: unknown }).kind === 'resource';
+  // Resources carry workflow documents, which may nest 32 levels below their envelope, and
+  // requests carry their frozen forms.
+  const kind =
+    typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
+  const resource = kind === 'resource' || kind === 'interactions';
   if (!withinLimit(value, resource ? RESOURCE_LIMIT : RESPONSE_LIMIT, resource ? 48 : 16))
     return undefined;
   const result = v.safeParse(responseSchema, value);

@@ -4,10 +4,13 @@ import {
   IPC_CHANNEL,
   parseRequest,
   parseResponse,
+  type Answer,
   type DesktopBridge,
   type DesktopRequest,
   type DesktopResponse,
+  type RunControl,
 } from '../shared/contracts.js';
+import { validInteractions } from '../shared/interactions.js';
 import {
   validateRunResponse,
   validateServerHealth,
@@ -32,7 +35,8 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
       !(response.operation === 'info'
         ? validateServerInfo(response.value)
         : validateServerHealth(response.value))) ||
-    (response.kind === 'resource' && !resourceValidators[response.resource](response.value))
+    (response.kind === 'resource' && !resourceValidators[response.resource](response.value)) ||
+    (response.kind === 'interactions' && !validInteractions(response.value))
   ) {
     return { kind: 'error', code: 'INVALID_RESPONSE', message: 'The server response is invalid.' };
   }
@@ -68,6 +72,19 @@ const bridge: DesktopBridge = {
   run: Object.freeze({
     start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
     cancel: (runId: string) => invoke({ kind: 'run.cancel', runId }),
+    control: (runId: string, control: RunControl) =>
+      invoke({ kind: 'run.control', runId, control }),
+  }),
+  interaction: Object.freeze({
+    list: () => invoke({ kind: 'data.interactions' }),
+    respond: (interactionId: string, answer: Answer) =>
+      invoke({
+        kind: 'interaction.respond',
+        interactionId,
+        revision: answer?.revision,
+        ...(answer?.decision === undefined ? {} : { decision: answer.decision }),
+        response: answer?.response,
+      } as DesktopRequest),
   }),
   workflow: Object.freeze({
     move: (

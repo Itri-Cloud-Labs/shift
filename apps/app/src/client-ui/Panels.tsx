@@ -1,6 +1,8 @@
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { Execution } from '../protocol/generated/types.js';
+import type { Execution, Interaction } from '../protocol/generated/types.js';
+import type { SyncView } from '../shared/contracts.js';
+import { HumanRequest } from './Attention.js';
 import {
   outputPorts,
   statusLabels,
@@ -20,6 +22,10 @@ export function Inspector({
   run,
   close,
   select,
+  requests = [],
+  live = false,
+  deviceId = null,
+  commands = [],
 }: {
   document: GraphDocument;
   nodeId: string;
@@ -27,21 +33,39 @@ export function Inspector({
   run: NodeRun | null | undefined;
   close: () => void;
   select: (nodeId: string) => void;
+  // The human requests of this node in the run, from the synchronized projection.
+  requests?: Interaction[];
+  live?: boolean;
+  deviceId?: string | null;
+  commands?: SyncView['commands'];
 }) {
   const node = document.nodes.find((item) => item.id === nodeId);
   const inRun = run !== undefined;
-  const [tab, setTab] = useState<'overview' | 'output' | 'config'>(inRun ? 'output' : 'overview');
   const passes = run?.executions ?? [];
   const [pass, setPass] = useState(passes.length - 1);
   useEffect(() => setPass(passes.length - 1), [nodeId, passes.length]);
+  const execution = passes[pass];
+  // The request of the chosen pass; a pending one opens first.
+  const request =
+    requests.find((item) => item.executionId === execution?.id) ??
+    requests.find((item) => item.state === 'PENDING') ??
+    null;
+  const pendingId = request?.state === 'PENDING' ? request.id : null;
+  const [tab, setTab] = useState<'overview' | 'output' | 'config' | 'request'>(
+    pendingId ? 'request' : inRun ? 'output' : 'overview',
+  );
   useEffect(() => {
-    if (!inRun && tab === 'output') setTab('overview');
-  }, [inRun, tab]);
+    if (pendingId) setTab('request');
+  }, [nodeId, pendingId]);
+  useEffect(() => {
+    if (!inRun && (tab === 'output' || tab === 'request')) setTab('overview');
+    else if (tab === 'request' && !request) setTab('output');
+  }, [inRun, tab, request]);
   if (!node) return null;
   const incoming = document.connections.filter((item) => item.toNodeId === node.id);
   const outgoing = document.connections.filter((item) => item.fromNodeId === node.id);
-  const execution = passes[pass];
   const tabs = [
+    ...(inRun && request ? [['request', 'Request'] as const] : []),
     ...(inRun ? [['output', 'Output'] as const] : []),
     ['overview', 'Overview'] as const,
     ['config', 'Configuration'] as const,
@@ -74,6 +98,15 @@ export function Inspector({
         ))}
       </div>
       <div className="inspector-body" role="tabpanel">
+        {tab === 'request' && request && (
+          <HumanRequest
+            key={request.id}
+            interaction={request}
+            live={live}
+            deviceId={deviceId}
+            commands={commands}
+          />
+        )}
         {tab === 'output' && (
           <RunOutput passes={passes} pass={pass} setPass={setPass} execution={execution} />
         )}

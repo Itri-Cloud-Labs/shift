@@ -65,6 +65,8 @@ export interface CommandView {
   createdAt: number;
   // Whether the identical command can be sent again: its body is still in memory.
   resendable: boolean;
+  // The server's explanation of a rejection; kept in memory only.
+  message: string | null;
 }
 
 export interface CommandRequest {
@@ -121,6 +123,7 @@ interface Command extends SavedCommand {
   live: 'sending' | null;
   body: Record<string, unknown> | null;
   response: unknown;
+  message: string | null;
 }
 
 interface Fetched {
@@ -412,7 +415,7 @@ export class SyncRuntime {
     this.#commands = new Map(
       (record?.commands ?? []).map((command) => [
         command.commandId,
-        { ...command, live: null, body: null, response: null },
+        { ...command, live: null, body: null, response: null, message: null },
       ]),
     );
     this.#set({ updatedAt: this.#projection?.updatedAt ?? null });
@@ -821,6 +824,7 @@ export class SyncRuntime {
       live: 'sending',
       body: structuredClone(request.body),
       response: null,
+      message: null,
     };
     this.#commands.set(command.commandId, command);
     for (const old of [...this.#commands.values()].slice(0, -maxCommands))
@@ -840,6 +844,7 @@ export class SyncRuntime {
     if (!target || this.#state.status !== 'live') throw new SyncFailure('NOT_LIVE');
     command.live = 'sending';
     command.state = 'unknown';
+    command.message = null;
     this.#notify();
     return this.#deliver(target, command);
   }
@@ -874,6 +879,7 @@ export class SyncRuntime {
         command.body !== null &&
         command.live === null &&
         (command.state === 'unknown' || command.state === 'not_applied'),
+      message: command.message,
     };
   }
 
@@ -902,6 +908,7 @@ export class SyncRuntime {
       // Failed commands store nothing on the server; the same ID can be retried later.
       command.state = 'rejected';
       command.code = exchange.body.code;
+      command.message = exchange.body.message.slice(0, 2000);
     } else {
       command.state = 'unknown';
     }
