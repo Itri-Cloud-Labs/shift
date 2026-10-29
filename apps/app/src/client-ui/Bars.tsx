@@ -316,11 +316,30 @@ export function Hint({ title, children }: { title: string; children: React.React
   );
 }
 
-export function Notice({ text }: { text: string }) {
+export interface NoticeState {
+  text: string;
+  // `busy` while something is being confirmed; `problem` when it did not happen.
+  tone: 'busy' | 'problem';
+}
+
+export function Notice({ notice, dismiss }: { notice: NoticeState; dismiss: () => void }) {
   return (
-    <div className="island banner notice" role="status" data-status="waiting">
-      <LoaderCircle className="spin" aria-hidden="true" />
-      <span>{text}</span>
+    <div
+      className="island banner notice"
+      role={notice.tone === 'problem' ? 'alert' : 'status'}
+      data-status={notice.tone === 'problem' ? 'failed' : 'waiting'}
+    >
+      {notice.tone === 'busy' ? (
+        <LoaderCircle className="spin" aria-hidden="true" />
+      ) : (
+        <CircleAlert aria-hidden="true" />
+      )}
+      <span>{notice.text}</span>
+      {notice.tone === 'problem' && (
+        <button className="button quiet" onClick={dismiss}>
+          Dismiss
+        </button>
+      )}
     </div>
   );
 }

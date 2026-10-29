@@ -565,3 +565,13 @@ Decided 2026-10-28 for the first part of prompt 12, from the [desktop UI directi
 - **Runs from the UI.** Start and cancel go through the sync runtime's commands, so a lost answer is confirmed by its receipt and never resent. A trigger with an input schema asks for JSON input until prompt 14's forms exist.
 - **Window.** Frameless (`titleBarStyle: 'hidden'`), with a title-bar overlay on Windows and Linux and traffic lights on macOS. The islands leave room for both. The window background follows the theme, so it never flashes white.
 - **Screenshots.** `tools/capture.mjs` drives the built app in a capture mode that only unpackaged builds honor. It stages Electron as `nobody` under root like the smoke test (shared in `tools/stage.mjs`), against a real server started from source.
+
+## Moving nodes on the canvas
+
+Decided 2026-10-29, at the owner's request, as the first editing step ahead of prompt 13.
+
+- **What is saved.** Positions are editor data in the draft. A move saves every node's position, not only the dragged one, because the other nodes may still sit on the server's default row, which the canvas otherwise lays out again.
+- **How.** The renderer sends node IDs and positions only (`workflow.move`, at most 500 nodes and 64 KiB). Main re-reads the workflow, writes the positions into the latest draft, and sends `PUT /workflows/{id}/draft` at the revision the view showed. The renderer never sends a document, so it cannot overwrite fields it did not show. A draft changed elsewhere fails with `REVISION_CONFLICT`, and the view returns to the server's layout. The save goes through the sync runtime, so a lost answer is confirmed by its receipt.
+- **When.** 300 ms after the last movement, so a drag or a series of arrow-key nudges saves once. Dragging is paused while a save is in flight, and only possible while live, on a draft.
+- **Server fix.** The device transport refused a body on every `PUT`, so drafts could not be saved by a paired device at all. It now accepts `PUT` bodies like the socket does; the device API test saves a draft and checks the revision conflict.
+- **Publishing.** Positions are part of the document hash, so a rearranged draft publishes as a new version. Execution ignores them.

@@ -81,6 +81,27 @@ test('a paired device drives runs and answers approvals with its own command rec
       .status,
     200,
   );
+  // A device saves the draft, here with node positions, at its revision.
+  const shown = (await call(laptop, 'GET', `/workflows/${workflowId}`)).body['workflow'];
+  const placed = (shown.draft.nodes as { id: string }[]).map((node, index) => ({
+    ...node,
+    position: { x: index * 320, y: 40 },
+  }));
+  const saved = await call(laptop, 'PUT', `/workflows/${workflowId}/draft`, {
+    revision: shown.draftRevision,
+    draft: { ...shown.draft, nodes: placed },
+    commandId: 'save-draft-1',
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body['workflow'].draftRevision, shown.draftRevision + 1);
+  assert.deepEqual(saved.body['workflow'].draft.nodes[1].position, { x: 320, y: 40 });
+  const outdated = await call(desktop, 'PUT', `/workflows/${workflowId}/draft`, {
+    revision: shown.draftRevision,
+    draft: shown.draft,
+    commandId: 'save-draft-2',
+  });
+  assert.equal(outdated.status, 409);
+  assert.equal(outdated.body['code'], 'REVISION_CONFLICT');
   // A published version's frozen document is readable for showing runs.
   const published = await call(laptop, 'GET', `/workflows/${workflowId}`);
   const versionId = published.body['workflow'].activeVersionId as string;

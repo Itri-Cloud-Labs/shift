@@ -5,8 +5,9 @@ import {
   ReactFlowProvider,
   useReactFlow,
   type Edge,
+  type NodeChange,
 } from '@xyflow/react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Run, Workflow } from '../protocol/generated/types.js';
 import type { DesktopResponse } from '../shared/contracts.js';
 import {
@@ -14,6 +15,7 @@ import {
   Hint,
   Notice,
   RunInput,
+  type NoticeState,
   RunStatus,
   StatusCluster,
   Toolbar,
@@ -25,6 +27,8 @@ import { LocationIsland } from './Location.js';
 import { NodeCard, type CardNode } from './NodeCard.js';
 import { Inspector, ListView } from './Panels.js';
 import { useRoute } from './route.js';
+
+type NodePosition = { nodeId: string; x: number; y: number };
 
 const nodeTypes = { card: NodeCard };
 
@@ -111,7 +115,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const [listOpen, setListOpen] = useState(false);
   const [inputOpen, setInputOpen] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<NoticeState | null>(null);
 
   const select = (nodeId: string | null) => navigate({ nodeId });
   const selected = document?.nodes.some((node) => node.id === route.nodeId) ? route.nodeId : null;
@@ -144,13 +148,33 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       setNotice(null);
       navigate({ runId: answer.runId, nodeId: null });
     } else if (answer.kind === 'command' && answer.command.state === 'unknown') {
-      setNotice('Checking whether the run started…');
+      setNotice({ text: 'Checking whether the run started…', tone: 'busy' });
     } else if (answer.kind === 'command' && answer.command.code === 'INVALID_INPUT') {
       setNotice(null);
       setInputOpen(true);
     } else {
       setNotice(null);
     }
+  };
+
+  // Saves node positions on the draft at the revision on screen.
+  const move = async (positions: NodePosition[]): Promise<boolean> => {
+    if (!workflowId || !workflow?.value) return false;
+    const answer = await ask(
+      bridge().workflow.move(workflowId, workflow.value.draftRevision, positions),
+    );
+    if (answer.kind === 'command' && answer.command.state === 'accepted') {
+      setNotice(null);
+      return true;
+    }
+    setNotice(
+      answer.kind === 'command' && answer.command.state === 'unknown'
+        ? { text: 'Checking whether the layout was saved…', tone: 'busy' }
+        : answer.kind === 'command' && answer.command.code === 'REVISION_CONFLICT'
+          ? { text: 'This draft changed elsewhere, so the move was not saved.', tone: 'problem' }
+          : { text: 'The move could not be saved.', tone: 'problem' },
+    );
+    return false;
   };
 
   const latestVersion = workflow?.value.versions.at(-1);
@@ -195,6 +219,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           }
           selected={selected}
           select={select}
+          move={!inRun && live && workflow?.value && !workflow.stale ? move : null}
         />
       ) : workflowId && document === null && health(connection, sync) !== 'offline' ? (
         <Skeleton />
@@ -239,7 +264,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           close={() => setInputOpen(false)}
         />
       )}
-      {notice && <Notice text={notice} />}
+      {notice && <Notice notice={notice} dismiss={() => setNotice(null)} />}
       {workflowId && (
         <Toolbar
           listOpen={listOpen}
@@ -275,6 +300,7 @@ function Canvas({
   needsYou,
   selected,
   select,
+  move,
 }: {
   document: GraphDocument;
   runs: ReturnType<typeof nodeRuns> | null;
@@ -283,9 +309,53 @@ function Canvas({
   needsYou: string | null;
   selected: string | null;
   select: (nodeId: string | null) => void;
+  // Present when the draft can be rearranged; resolves whether the positions were saved.
+  move: ((positions: NodePosition[]) => Promise<boolean>) | null;
 }) {
   const flow = useReactFlow();
-  const positions = useMemo(() => layout(document), [document]);
+  const laid = useMemo(() => layout(document), [document]);
+  // Positions moved on screen and not yet in the document the server returned.
+  const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
+  const [saving, setSaving] = useState(false);
+  const dragging = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const positions = useMemo(() => {
+    const merged = new Map(laid);
+    for (const [id, position] of Object.entries(moved)) merged.set(id, position);
+    return merged;
+  }, [laid, moved]);
+  // A newer document carries the saved positions; local ones are no longer needed.
+  useEffect(() => {
+    if (!dragging.current && !saving) setMoved({});
+  }, [document]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const latestPositions = useRef(positions);
+  latestPositions.current = positions;
+  const save = () => {
+    if (!move) return;
+    clearTimeout(timer.current);
+    // Shortly after the last movement, so arrow-key nudges save once.
+    timer.current = setTimeout(async () => {
+      setSaving(true);
+      const saved = await move(
+        [...latestPositions.current].map(([nodeId, { x, y }]) => ({ nodeId, x, y })),
+      );
+      setSaving(false);
+      if (!saved) setMoved({});
+    }, 300);
+  };
+  const onNodesChange = (changes: NodeChange<CardNode>[]) => {
+    if (!move) return;
+    for (const change of changes) {
+      if (change.type !== 'position' || !change.position) continue;
+      const { id, position } = change;
+      setMoved((current) => ({ ...current, [id]: position }));
+      // Any movement postpones a pending save until the node is still again.
+      clearTimeout(timer.current);
+      dragging.current = change.dragging === true;
+      if (!dragging.current) save();
+    }
+  };
   const nodes = useMemo<CardNode[]>(
     () =>
       document.nodes.map((node) => ({
@@ -333,7 +403,12 @@ function Canvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        nodesDraggable={false}
+        nodesDraggable={move !== null && !saving}
+        onNodesChange={onNodesChange}
+        onNodeDragStop={() => {
+          dragging.current = false;
+          save();
+        }}
         nodesConnectable={false}
         elementsSelectable
         onNodeClick={(_, node) => select(node.id)}

@@ -18,6 +18,7 @@ import type { ServerInfo, ServerHealth } from '../protocol/generated/types.js';
 import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
+import { withPositions, type NodePosition } from './positions.js';
 import { SyncFailure, SyncRuntime, type CommandView } from './sync.js';
 
 export class ClientFailure extends Error {
@@ -107,9 +108,24 @@ export class ClientCore {
     return read;
   }
 
+  // Saves node positions: merges them into the latest draft and replaces it at the revision the
+  // view was showing, so a draft changed elsewhere is refused rather than overwritten.
+  async moveNodes(
+    workflowId: string,
+    revision: number,
+    positions: NodePosition[],
+  ): Promise<{ command: CommandView; response: unknown }> {
+    const { value } = await this.resource('workflow', `/api/v0/workflows/${workflowId}`);
+    const draft = (value as { workflow: { draft: unknown } }).workflow.draft;
+    return this.command('PUT', `/api/v0/workflows/${workflowId}/draft`, {
+      revision,
+      draft: withPositions(draft, positions),
+    });
+  }
+
   // Sends a command through the sync runtime, which confirms it if its answer is lost.
   async command(
-    method: 'POST',
+    method: 'POST' | 'PUT',
     path: string,
     body: Record<string, unknown>,
   ): Promise<{ command: CommandView; response: unknown }> {

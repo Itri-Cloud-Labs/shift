@@ -4,6 +4,8 @@ export const IPC_CHANNEL = 'shift:desktop:v1';
 // Main tells the renderer that connection or synchronized state changed; it carries no data.
 export const CHANGE_CHANNEL = 'shift:desktop:v1:changed';
 export const REQUEST_LIMIT = 8 * 1024;
+// Moving nodes sends every node's position at once.
+export const MOVE_LIMIT = 64 * 1024;
 export const RESPONSE_LIMIT = 256 * 1024;
 // Workflow documents and runs with their executions can be larger than other answers.
 export const RESOURCE_LIMIT = 8 * 1024 * 1024;
@@ -35,6 +37,22 @@ export const requestSchema = v.variant('kind', [
   // The trigger input is any JSON value; the request size limit bounds it.
   v.strictObject({ kind: v.literal('run.start'), workflowId: profileId, input: v.unknown() }),
   v.strictObject({ kind: v.literal('run.cancel'), runId: profileId }),
+  v.strictObject({
+    kind: v.literal('workflow.move'),
+    workflowId: profileId,
+    revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+    positions: v.pipe(
+      v.array(
+        v.strictObject({
+          nodeId: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
+          x: v.pipe(v.number(), v.minValue(-1e6), v.maxValue(1e6)),
+          y: v.pipe(v.number(), v.minValue(-1e6), v.maxValue(1e6)),
+        }),
+      ),
+      v.minLength(1),
+      v.maxLength(500),
+    ),
+  }),
   v.strictObject({ kind: v.literal('desktop.openDocumentation') }),
 ]);
 export type DesktopRequest = v.InferOutput<typeof requestSchema>;
@@ -227,6 +245,14 @@ export interface DesktopBridge {
     start(workflowId: string, input: unknown): Promise<DesktopResponse>;
     cancel(runId: string): Promise<DesktopResponse>;
   };
+  workflow: {
+    // Saves node positions on the draft at `revision`; refused if the draft moved on.
+    move(
+      workflowId: string,
+      revision: number,
+      positions: { nodeId: string; x: number; y: number }[],
+    ): Promise<DesktopResponse>;
+  };
   // Calls the listener whenever connection or synchronized state may have changed.
   onChange(listener: () => void): () => void;
   setSamples(enabled: boolean): Promise<DesktopResponse>;
@@ -262,7 +288,11 @@ export function withinLimit(value: unknown, limit: number, maxDepth = 16): boole
   }
 }
 export function parseRequest(value: unknown): DesktopRequest | undefined {
-  if (!withinLimit(value, REQUEST_LIMIT)) return undefined;
+  const move =
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === 'workflow.move';
+  if (!withinLimit(value, move ? MOVE_LIMIT : REQUEST_LIMIT)) return undefined;
   const result = v.safeParse(requestSchema, value);
   return result.success ? result.output : undefined;
 }

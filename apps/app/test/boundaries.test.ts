@@ -165,6 +165,28 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     },
   );
   assert.equal(parseRequest({ kind: 'sync.read', profileId: '../x' }), undefined);
+  // Moving nodes sends positions only, bounded in count, size and range.
+  const move = (positions: unknown[], revision: unknown = 3) => ({
+    kind: 'workflow.move',
+    workflowId: '00000000-0000-4000-8000-000000000001',
+    revision,
+    positions,
+  });
+  const many = Array.from({ length: 500 }, (_, index) => ({
+    nodeId: `node_${index}`,
+    x: index,
+    y: -index,
+  }));
+  assert.ok(parseRequest(move(many)));
+  for (const value of [
+    move([]),
+    move([...many, { nodeId: 'one_more', x: 0, y: 0 }]),
+    move([{ nodeId: 'a', x: 1e7, y: 0 }]),
+    move([{ nodeId: 'a', x: 0, y: 0, draft: {} }]),
+    move([{ nodeId: 'a', x: 0, y: 0 }], -1),
+    move([{ nodeId: 'a', x: 0, y: 0 }], 1.5),
+  ])
+    assert.equal(parseRequest(value), undefined);
   // Resource reads take identifiers only, never paths; they need a live connection.
   const id = '00000000-0000-4000-8000-000000000001';
   for (const value of [

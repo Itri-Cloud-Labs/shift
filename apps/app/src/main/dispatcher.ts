@@ -148,6 +148,15 @@ export async function dispatch(
         };
         break;
       }
+      case 'workflow.move': {
+        const { command } = await core.moveNodes(
+          request.workflowId,
+          request.revision,
+          request.positions,
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
       case 'samples.set':
         response = { kind: 'shell', state: core.setSamples(request.enabled) };
         break;

@@ -188,3 +188,27 @@ test('routes round-trip and ignore anything that is not an identifier', () => {
     nodeId: null,
   });
 });
+
+test('moving nodes rewrites only their positions on the latest draft', async () => {
+  const { withPositions } = await import('../src/client-core/positions.js');
+  const draft = {
+    formatVersion: 1,
+    nodes: [
+      { id: 'a', type: 'transform', config: { data: 1 }, position: { x: 0, y: 0 } },
+      { id: 'b', type: 'end', position: { x: 240, y: 0 } },
+      'malformed',
+    ],
+    connections: [{ id: 'c1' }],
+    presentation: { note: 'kept' },
+  };
+  const moved = withPositions(draft, [
+    { nodeId: 'b', x: 410.6, y: -79.4 },
+    { nodeId: 'gone', x: 1, y: 1 },
+  ]);
+  assert.deepEqual(moved, {
+    ...draft,
+    nodes: [draft.nodes[0], { id: 'b', type: 'end', position: { x: 411, y: -79 } }, 'malformed'],
+  });
+  // The input is not changed.
+  assert.deepEqual(draft.nodes[1], { id: 'b', type: 'end', position: { x: 240, y: 0 } });
+});

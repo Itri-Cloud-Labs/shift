@@ -195,6 +195,11 @@ try {
       wait: 800,
     },
     { name: '11-narrow', size: [900, 640], hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
+    // Rearranging the draft: drag a node, then leave and come back to see it was saved.
+    { name: '12-draft-before-move', size: [1440, 900], hash: base, wait: 1500 },
+    { name: '13-draft-moved', drag: { node: 'summarize', by: [0, -160] }, wait: 1500 },
+    { name: '14-draft-reloaded', hash: `${base}/r/${run.id}`, wait: 800 },
+    { name: '15-draft-after-reload', hash: base, wait: 1500 },
   ];
 
   // Launch the built app in capture mode, staged like the smoke test.
