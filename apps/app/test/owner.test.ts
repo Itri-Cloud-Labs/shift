@@ -76,8 +76,26 @@ test('a form draft becomes a typed response, and what is missing is reported by 
   assert.equal(fieldLabel('x', { title: 'Comment' }), 'Comment');
 });
 
+test('an optional group left untouched is left out, with its required fields', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      address: {
+        type: 'object',
+        required: ['street'],
+        properties: { street: { type: 'string' } },
+      },
+    },
+  };
+  const draft = initialDraft(schema);
+  assert.deepEqual(toResponse(schema, draft), { value: {}, problems: new Map() });
+  assert.deepEqual(toResponse(schema, setAt(draft, ['address', 'street'], 'Main')).value, {
+    address: { street: 'Main' },
+  });
+});
+
 test('defaults fill the draft, including nested objects and arrays', () => {
-  const draft = initialDraft({
+  const schema = {
     type: 'object',
     properties: {
       group: {
@@ -87,8 +105,59 @@ test('defaults fill the draft, including nested objects and arrays', () => {
       },
       list: { type: 'array', items: { type: 'number' }, default: [1, 2] },
     },
-  });
+  };
+  const draft = initialDraft(schema);
   assert.deepEqual(draft, { group: { flag: true }, list: ['1', '2'] });
+  // A group showing defaults is sent, not taken for an untouched one.
+  assert.deepEqual(toResponse(schema, draft).value, {
+    group: { flag: true },
+    list: [1, 2],
+  });
+  // Even a default that matches a blank field, such as false.
+  const unchecked = {
+    type: 'object',
+    properties: {
+      group: { type: 'object', properties: { flag: { type: 'boolean', default: false } } },
+    },
+  };
+  assert.deepEqual(toResponse(unchecked, initialDraft(unchecked)).value, {
+    group: { flag: false },
+  });
+  // And a default given by an enclosing group.
+  const inherited = {
+    type: 'object',
+    properties: {
+      group: {
+        type: 'object',
+        default: { nested: { flag: false } },
+        properties: {
+          nested: { type: 'object', properties: { flag: { type: 'boolean' } } },
+        },
+      },
+    },
+  };
+  assert.deepEqual(toResponse(inherited, initialDraft(inherited)).value, {
+    group: { nested: { flag: false } },
+  });
+  // And one given by a list to its items.
+  const listed = {
+    type: 'object',
+    properties: {
+      items: {
+        type: 'array',
+        default: [{ nested: { flag: false } }],
+        items: {
+          type: 'object',
+          properties: {
+            nested: { type: 'object', properties: { flag: { type: 'boolean' } } },
+          },
+        },
+      },
+    },
+  };
+  assert.deepEqual(toResponse(listed, initialDraft(listed)).value, {
+    items: [{ nested: { flag: false } }],
+  });
 });
 
 const execution = (sequence: number, node: string, type: string, state: string) => ({

@@ -78,9 +78,20 @@ export function toResponse(form: Schema, draft: Draft): Converted {
   const convert = (schema: Schema, value: Draft, at: string, required: boolean): unknown => {
     switch (schema['type']) {
       case 'object': {
+        // An optional group left blank is left out, so its required fields do not apply. One that
+        // shows defaults is an answer.
+        if (
+          !required &&
+          !hasDefault(schema) &&
+          JSON.stringify(value) === JSON.stringify(initialDraft(schema))
+        )
+          return undefined;
         const record = typeof value === 'object' && !Array.isArray(value) ? value : {};
         const result: Record<string, unknown> = {};
-        for (const [name, child] of properties(schema)) {
+        for (const [name, inner] of properties(schema)) {
+          // A default given by this object applies to its field, as when the draft was made.
+          const given = asSchema(schema['default'])[name];
+          const child = given === undefined ? inner : { ...inner, default: given };
           const converted = convert(
             child,
             record[name] ?? initialDraft(child),
@@ -94,7 +105,13 @@ export function toResponse(form: Schema, draft: Draft): Converted {
       case 'array': {
         const items = asSchema(schema['items']);
         const list = Array.isArray(value) ? value : [];
-        return list.map((item, index) => convert(items, item, `${at}/${index}`, true) ?? null);
+        const given = Array.isArray(schema['default']) ? schema['default'] : [];
+        return list.map((item, index) => {
+          // An item the array's default filled in carries that default, as in the draft.
+          const schemaOfItem =
+            given[index] === undefined ? items : { ...items, default: given[index] };
+          return convert(schemaOfItem, item, `${at}/${index}`, true) ?? null;
+        });
       }
       case 'boolean':
         return value === true;
@@ -131,6 +148,14 @@ export function toResponse(form: Schema, draft: Draft): Converted {
   };
   const value = convert({ ...form, type: 'object' }, draft, '', true) as Record<string, unknown>;
   return { value, problems };
+}
+
+function hasDefault(schema: Schema): boolean {
+  return (
+    schema['default'] !== undefined ||
+    properties(schema).some(([, child]) => hasDefault(child)) ||
+    (schema['type'] === 'array' && hasDefault(asSchema(schema['items'])))
+  );
 }
 
 // Changes one value in a draft by its path of names and indexes.
