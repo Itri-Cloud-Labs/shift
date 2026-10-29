@@ -20,7 +20,7 @@ import {
   runControls,
   type AttentionItem,
   type RunControls,
-} from './attention.js';
+} from './owner.js';
 import { ask, bridge, useLive } from './bridge.js';
 import {
   asSchema,

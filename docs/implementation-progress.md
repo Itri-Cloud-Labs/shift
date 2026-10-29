@@ -525,7 +525,7 @@ Status: drafts can be rearranged on the canvas; the rest of the editor is prompt
 
 Status: the second of three parts of prompt 12 (M06); settings and ⌘K remain. Date: 2026-10-29.
 
-- **Changed:** `interaction.list`, `interaction.respond` and `run.control` IPC requests and bridge methods; rejection messages on commands; the form model (`client-ui/forms.ts`) and attention rules (`client-ui/attention.ts`); the Request tab, inbox, toast and decision island; a clickable attention count; capture steps for each.
+- **Changed:** `interaction.list`, `interaction.respond` and `run.control` IPC requests and bridge methods; rejection messages on commands; the form model (`client-ui/forms.ts`) and attention rules (`client-ui/owner.ts`); the Request tab, inbox, toast and decision island; a clickable attention count; capture steps for each.
 - **Verified:**
   - Form drafts convert to typed responses, leave out empty optional fields, report missing and malformed values by path, and take defaults, including nested ones.
   - Each attention code offers exactly the decisions the server accepts, and a run being cancelled offers none.

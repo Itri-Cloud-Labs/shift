@@ -2,12 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import type { Interaction, Run } from '../src/protocol/generated/types.js';
-import {
-  actorLabel,
-  attentionItems,
-  outcomeLabel,
-  runControls,
-} from '../src/client-ui/attention.js';
+import { actorLabel, attentionItems, outcomeLabel, runControls } from '../src/client-ui/owner.js';
 import { fieldLabel, initialDraft, setAt, toResponse } from '../src/client-ui/forms.js';
 
 const fixtures = JSON.parse(

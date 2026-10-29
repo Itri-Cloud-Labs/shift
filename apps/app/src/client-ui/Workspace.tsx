@@ -22,7 +22,7 @@ import {
   health,
 } from './Bars.js';
 import { AttentionToast, Inbox, Resolve } from './Attention.js';
-import { attentionItems, runControls, type AttentionItem } from './attention.js';
+import { attentionItems, runControls, type AttentionItem } from './owner.js';
 import { ask, bridge, useLive, type DesktopState } from './bridge.js';
 import { followed, layout, nodeRuns, readDocument, type GraphDocument } from './graph.js';
 import { LocationIsland } from './Location.js';
