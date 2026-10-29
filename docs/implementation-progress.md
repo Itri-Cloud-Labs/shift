@@ -509,3 +509,14 @@ Verification:
 - **Server:** a device reads a published version's document; a version under another workflow is `404`.
 - **Electron smoke** (Linux, Xvfb): the pairing step with labelled fields, no canvas before pairing, the exact bridge, disconnected resource and run requests, no overflow at 720×480.
 - **Screenshots** from `tools/capture.mjs` against a real server, inspected in both themes at 1440×900 and 900×640: pairing, the draft, the draft inspector, a waiting run with completed, waiting and unreached nodes, the run inspector, the switcher, the runs menu and the list view. Fixes made after inspection: the server's default row overlapped cards, edges were hidden under them, the run status island collided with the location island, the initial zoom made cards unreadable, and on narrow windows the wrapped run status covered the side islands.
+
+## Moving nodes
+
+Status: drafts can be rearranged on the canvas; the rest of the editor is prompt 13. Date: 2026-10-29.
+
+- **Changed:** `client-core/positions.ts` and `ClientCore.moveNodes`, the `workflow.move` IPC request and bridge method, dragging and arrow-key moves in the canvas, a notice island with a dismissible problem tone, the capture tool's drag step, and the device transport accepting `PUT` bodies.
+- **Verified:**
+  - The position merge leaves every other field of the draft untouched and rounds to whole pixels.
+  - Move requests are bounded in node count, size, coordinate range and revision.
+  - A device saves a draft and a stale revision is `REVISION_CONFLICT` (server test).
+  - Against a real server, a real mouse drag in the built app saved the new position, which was still there after switching to a run and back; the run kept its frozen layout. The first attempt found the server bug above.

@@ -34,7 +34,8 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
+    assert(Object.keys(window.shift.workflow).join(',') === 'move', 'Broad workflow bridge');
     assert(Object.keys(window.shift.data).sort().join(',') === 'overview,run,version,workflow', 'Broad data bridge');
     assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,start', 'Broad run bridge');
     assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');
@@ -63,6 +64,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.data.workflow('00000000-0000-4000-8000-000000000001')).code === 'DISCONNECTED', 'Unexpected resource');
     assert((await window.shift.run.start('00000000-0000-4000-8000-000000000001', {})).code === 'DISCONNECTED', 'Run started without a connection');
     assert((await window.shift.data.workflow('../etc')).code === 'INVALID_REQUEST', 'Path-like workflow ID accepted');
+    assert((await window.shift.workflow.move('00000000-0000-4000-8000-000000000001', 0, [{ nodeId: 'a', x: 1, y: 2 }])).code === 'DISCONNECTED', 'Moved without a connection');
     const overview = await window.shift.data.overview();
     assert(overview.kind === 'overview' && overview.overview.projects.length === 0 && overview.overview.attention === 0, 'Unexpected overview');
     let notified = 0;

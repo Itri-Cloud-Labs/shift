@@ -82,7 +82,7 @@ export function createHttpServer(options: {
       ? (req.method === 'POST' || req.method === 'PUT') &&
         req.path.startsWith(`${admin}/`) &&
         req.path !== `${admin}/shutdown`
-      : req.method === 'POST' &&
+      : (req.method === 'POST' || req.method === 'PUT') &&
         options.devices !== undefined &&
         req.path.startsWith('/api/v0/') &&
         !/^\/api\/v0\/(info|health|ready|admin(\/.*)?)$/.test(req.path);

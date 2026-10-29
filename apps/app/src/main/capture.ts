@@ -15,6 +15,8 @@ interface Step {
   hash?: string;
   script?: string;
   size?: [number, number];
+  // Drags a node by a distance with real mouse input.
+  drag?: { node: string; by: [number, number] };
   wait?: number;
 }
 
@@ -36,6 +38,29 @@ export async function runCapture(window: BrowserWindow, core: ClientCore): Promi
     if (step.hash !== undefined)
       await contents.executeJavaScript(`location.hash = ${JSON.stringify(step.hash)}`);
     if (step.script) await contents.executeJavaScript(step.script);
+    if (step.drag) {
+      const box = (await contents.executeJavaScript(
+        `(() => { const r = document.querySelector('.react-flow__node[data-id=${JSON.stringify(step.drag.node)}] .node-header').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`,
+      )) as [number, number];
+      const [x, y] = box.map(Math.round) as [number, number];
+      contents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      for (let index = 1; index <= 10; index++) {
+        contents.sendInputEvent({
+          type: 'mouseMove',
+          x: Math.round(x + (step.drag.by[0] * index) / 10),
+          y: Math.round(y + (step.drag.by[1] * index) / 10),
+          button: 'left',
+        });
+        await delay(30);
+      }
+      contents.sendInputEvent({
+        type: 'mouseUp',
+        x: x + step.drag.by[0],
+        y: y + step.drag.by[1],
+        button: 'left',
+        clickCount: 1,
+      });
+    }
     await delay(step.wait ?? 1200);
     const image = await contents.capturePage();
     await writeFile(join(directory, `${step.name}.png`), image.toPNG());

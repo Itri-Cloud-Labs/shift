@@ -69,6 +69,13 @@ const bridge: DesktopBridge = {
     start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
     cancel: (runId: string) => invoke({ kind: 'run.cancel', runId }),
   }),
+  workflow: Object.freeze({
+    move: (
+      workflowId: string,
+      revision: number,
+      positions: { nodeId: string; x: number; y: number }[],
+    ) => invoke({ kind: 'workflow.move', workflowId, revision, positions }),
+  }),
   // The notification carries nothing; the listener reads what it needs through the bridge.
   onChange: (listener: () => void) => {
     if (typeof listener !== 'function') return () => undefined;

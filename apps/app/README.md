@@ -2,7 +2,7 @@
 
 The Electron client follows the [desktop UI direction](../../docs/ui-direction.md): the workflow graph canvas is the whole app, and everything else floats over it as islands. Its visual system is in [DESIGN.md](../../DESIGN.md), and who it is for in [PRODUCT.md](../../PRODUCT.md).
 
-The app never starts a Shift server, harness, or agent. The main process pairs with a server, keeps the device token in the OS keychain, reconnects, and keeps a synchronized cache of the server's state. The renderer shows that state. The canvas is view-only for now; editing, the inbox with human forms and approvals, settings and the command palette are later milestones.
+The app never starts a Shift server, harness, or agent. The main process pairs with a server, keeps the device token in the OS keychain, reconnects, and keeps a synchronized cache of the server's state. The renderer shows that state. Nodes of a draft can be moved; other editing, the inbox with human forms and approvals, settings and the command palette are later milestones.
 
 ## The canvas shell
 
@@ -14,6 +14,7 @@ The app never starts a Shift server, harness, or agent. The main process pairs w
   - Right edge: the inspector for the selected node, with its output per loop pass, attempts, connections and configuration.
   - Bottom: zoom, fit, the node and connection list (the keyboard and screen-reader view of the graph), the published version and Run. A trigger with an input schema asks for its input first.
   - When not live, a banner says why, offers Retry when offline, and the last copy of each view stays visible.
+- **Moving nodes:** while live, a draft's nodes can be dragged, or nudged with the arrow keys once selected. Shortly after the last movement, main re-reads the latest draft, writes every node's position into it, and saves it at the revision on screen. A draft changed elsewhere is refused with `REVISION_CONFLICT` and the nodes return to its layout; a lost answer is confirmed by its receipt. A run's graph stays as it was frozen.
 - **Routes** live in the URL fragment (`#/p/<project>/w/<workflow>/r/<run>/n/<node>`), so every island links to the same place.
 - **Look:** Inter and JetBrains Mono, bundled locally. Dark and light themes follow the OS, with tinted neutrals and one signal-green accent; status colors only mean state. Motion is limited to island open/close and state changes, and stops with reduced motion.
 - **Screenshots for design review:** `pnpm --filter @shift/app build && xvfb-run -a node tools/capture.mjs <dir>` starts a server from source with throwaway state, creates a demo workflow and a waiting run, pairs the built app in capture mode (unpackaged builds only) and saves PNGs of the main views in both themes.
