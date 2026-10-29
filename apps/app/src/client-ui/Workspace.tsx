@@ -350,6 +350,8 @@ function Canvas({
       if (change.type !== 'position' || !change.position) continue;
       const { id, position } = change;
       setMoved((current) => ({ ...current, [id]: position }));
+      // Any movement postpones a pending save until the node is still again.
+      clearTimeout(timer.current);
       dragging.current = change.dragging === true;
       if (!dragging.current) save();
     }
