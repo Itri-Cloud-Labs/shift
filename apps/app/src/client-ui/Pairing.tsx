@@ -6,7 +6,10 @@ import { ask, bridge } from './bridge.js';
 type Problem = NonNullable<ConnectionView['problem']>;
 
 // What went wrong, and what to do about it.
-const problems: Record<Problem, { title: string; body: string; tone: 'failed' | 'waiting' }> = {
+export const problems: Record<
+  Problem,
+  { title: string; body: string; tone: 'failed' | 'waiting' }
+> = {
   INVALID_URL: {
     title: 'That address is not a URL',
     body: 'Enter the server address, for example https://shift.example.com.',

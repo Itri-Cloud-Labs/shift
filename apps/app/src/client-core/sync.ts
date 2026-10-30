@@ -254,6 +254,12 @@ export class SyncRuntime {
     return this.#projection;
   }
 
+  // The profile the projection belongs to. Right after a switch the connection has moved on
+  // while the projection has not.
+  get projectionProfile(): string | null {
+    return this.#cacheProfile;
+  }
+
   subscribe(listener: () => void): () => void {
     if (this.#listeners.size >= maxListeners) throw new Error('Too many sync subscriptions');
     this.#listeners.add(listener);

@@ -5,6 +5,7 @@ import {
   type ConnectionView,
   type DesktopResponse,
   type Overview,
+  type Preferences,
   type SyncView,
 } from '../shared/contracts.js';
 
@@ -59,21 +60,24 @@ export interface DesktopState {
   overview: Overview;
   // Pending human requests and settled ones seen since the snapshot; checked by preload.
   interactions: Interaction[];
+  preferences: Preferences;
 }
 
 export function useDesktop(): DesktopState | undefined {
   return useLive(async () => {
-    const [connection, sync, overview, interactions] = await Promise.all([
+    const [connection, sync, overview, interactions, preferences] = await Promise.all([
       ask(bridge().connection.read()),
       ask(bridge().sync.read()),
       ask(bridge().data.overview()),
       ask(bridge().interaction.list()),
+      ask(bridge().preferences.read()),
     ]);
     if (
       connection.kind !== 'connection' ||
       sync.kind !== 'sync' ||
       overview.kind !== 'overview' ||
-      interactions.kind !== 'interactions'
+      interactions.kind !== 'interactions' ||
+      preferences.kind !== 'preferences'
     )
       return undefined;
     return {
@@ -81,6 +85,7 @@ export function useDesktop(): DesktopState | undefined {
       sync: sync.sync,
       overview: overview.overview,
       interactions: (interactions.value as { interactions: Interaction[] }).interactions,
+      preferences: preferences.preferences,
     };
   }, []);
 }

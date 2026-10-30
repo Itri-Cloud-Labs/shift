@@ -291,6 +291,48 @@ try {
         "setTimeout(() => [...document.querySelectorAll('.request-actions button')].find((b) => b.textContent === 'Approve').click(), 1200)",
       wait: 3500,
     },
+    // ⌘K and Settings. The last step revokes this device through the app.
+    {
+      name: '22-palette',
+      hash: base,
+      script: "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'k', ctrlKey: true}))",
+      wait: 1500,
+    },
+    {
+      name: '23-palette-search',
+      script:
+        "(() => { const input = document.querySelector('.palette input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'review'); input.dispatchEvent(new Event('input', {bubbles: true})); })()",
+      wait: 500,
+    },
+    {
+      name: '24-settings-connection',
+      script:
+        "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); document.querySelector('.scrim')?.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true})); setTimeout(() => document.querySelector('[aria-label=Settings]').click(), 200)",
+      wait: 1500,
+    },
+    {
+      name: '25-settings-devices',
+      script: "document.querySelector('#settings-tab-devices').click()",
+      wait: 1200,
+    },
+    {
+      name: '26-revoke-confirm',
+      script:
+        "[...document.querySelectorAll('.settings-device button')].find((b) => b.textContent.includes('Revoke')).click()",
+      wait: 500,
+    },
+    {
+      name: '27-appearance-light',
+      script:
+        "document.querySelector('#settings-tab-appearance').click(); setTimeout(() => [...document.querySelectorAll('[role=radio]')].find((b) => b.textContent === 'Light').click(), 200)",
+      wait: 1200,
+    },
+    {
+      name: '28-revoked-returns-to-pairing',
+      script:
+        "document.querySelector('#settings-tab-devices').click(); setTimeout(() => [...document.querySelectorAll('.settings-device button')].find((b) => b.textContent.includes('Revoke')).click(), 900); setTimeout(() => [...document.querySelectorAll('.settings-confirm button')].find((b) => b.textContent === 'Revoke device').click(), 1300)",
+      wait: 4000,
+    },
   ];
 
   // Launch the built app in capture mode, staged like the smoke test.

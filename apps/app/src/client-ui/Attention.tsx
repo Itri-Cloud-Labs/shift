@@ -39,7 +39,7 @@ import { relativeTime } from './time.js';
 type Command = SyncView['commands'][number];
 
 // Closes an island on Escape.
-function useEscape(close: () => void) {
+export function useEscape(close: () => void) {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close();

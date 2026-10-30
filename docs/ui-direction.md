@@ -62,7 +62,7 @@ Nodes are added from the toolbar's "+" or by dragging out of a port onto empty c
 
 ## ⌘K palette
 
-Agreed with the owner on 2026-10-29: actions first. With an empty query it lists open attention items, then the actions that apply to what is on screen (Run, Cancel, Publish, Settings, Inbox, theme), then recent workflows and runs. Typing searches workflows, runs, nodes in the open graph, projects and actions together.
+Agreed with the owner on 2026-10-29: actions first. With an empty query it lists open attention items, then the actions that apply to what is on screen (Run, Cancel, Settings, Inbox, theme, and Publish once prompt 13 adds it), then recent workflows and runs. Typing searches workflows, runs, nodes in the open graph, projects and actions together.
 
 ## Still open
 
