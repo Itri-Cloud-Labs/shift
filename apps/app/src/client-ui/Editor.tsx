@@ -196,10 +196,12 @@ function TextField({
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
   const typing = useContext(Typing);
+  // From the first keystroke until the field loses focus, when it commits or shows its problem.
+  const [typed, setTyped] = useState(false);
   useEffect(() => {
-    typing(text !== value);
+    typing(typed && text !== value);
     return () => typing(false);
-  }, [text, value]);
+  }, [typed, text, value]);
   const props = {
     id,
     value: text,
@@ -207,8 +209,12 @@ function TextField({
     autoFocus,
     spellCheck: false,
     'aria-invalid': problem ? true : undefined,
-    onChange: (event: { target: { value: string } }) => setText(event.target.value),
+    onChange: (event: { target: { value: string } }) => {
+      setText(event.target.value);
+      setTyped(true);
+    },
     onBlur: () => {
+      setTyped(false);
       if (text !== value) commit(text);
     },
   };

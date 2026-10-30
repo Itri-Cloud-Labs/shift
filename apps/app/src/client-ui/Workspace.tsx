@@ -599,10 +599,10 @@ function Shell({ desktop }: { desktop: DesktopState }) {
               { id: 'add', label: 'Add a node', run: openPicker },
               ...(canUndo ? [{ id: 'undo', label: 'Undo', run: stepBack }] : []),
               ...(canRedo ? [{ id: 'redo', label: 'Redo', run: stepForward }] : []),
-              ...(dirty && live && !busy
+              ...((dirty || typing) && live && !busy
                 ? [{ id: 'save', label: 'Save the draft', run: () => void save() }]
                 : []),
-              ...(!dirty && live && !busy
+              ...(!dirty && !typing && live && !busy
                 ? [{ id: 'publish', label: 'Publish the draft', run: () => void publish() }]
                 : []),
             ]
@@ -679,6 +679,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       <div className="titlebar" />
       {document ? (
         <Canvas
+          key={`${workflowId}:${inRun}`}
           document={document}
           runs={runs}
           inRun={inRun}
@@ -902,7 +903,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                   add: openPicker,
                   undo: canUndo ? stepBack : null,
                   redo: canRedo ? stepForward : null,
-                  dirty,
+                  // Text still in a field is an edit too: it must be saved before publishing.
+                  dirty: dirty || typing,
                   busy,
                   live,
                   save: () => void save(),
@@ -978,16 +980,26 @@ function Canvas({
   useEffect(() => {
     if (!dragging.current) setMoved({});
   }, [document]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // A move still waiting goes to the draft it was made on: this canvas belongs to one workflow.
+  const pendingMove = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      pendingMove.current?.();
+    },
+    [],
+  );
   const latestPositions = useRef(positions);
   latestPositions.current = positions;
   const save = () => {
     if (!editing) return;
     clearTimeout(timer.current);
     // Shortly after the last movement, so arrow-key nudges make one undo step.
-    timer.current = setTimeout(() => {
+    pendingMove.current = () => {
+      pendingMove.current = null;
       editing.move([...latestPositions.current].map(([nodeId, { x, y }]) => ({ nodeId, x, y })));
-    }, 300);
+    };
+    timer.current = setTimeout(() => pendingMove.current?.(), 300);
   };
   const onNodesChange = (changes: NodeChange<CardNode>[]) => {
     if (!editing) return;
