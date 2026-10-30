@@ -146,6 +146,9 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const [locals, setLocals] = useState<Record<string, LocalDraft>>({});
   // Text typed into a field and not committed yet counts as a local edit.
   const [typing, setTyping] = useState(false);
+  // So is a moved node waiting for its debounce; `flushMove` makes it an edit at once.
+  const [moving, setMoving] = useState(false);
+  const flushMove = useRef<(() => void) | null>(null);
   const [pendingSave, setPendingSave] = useState<{
     workflowId: string;
     commandId: string | null;
@@ -164,7 +167,14 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const serverDraft = workflow?.value.draft as Draft | undefined;
   const serverRevision = workflow?.value.draftRevision;
   useEffect(() => {
-    if (!workflowId || !serverDraft || serverRevision === undefined || pendingSave || typing)
+    if (
+      !workflowId ||
+      !serverDraft ||
+      serverRevision === undefined ||
+      pendingSave ||
+      typing ||
+      moving
+    )
       return;
     setLocals((all) => {
       const current = all[workflowId];
@@ -173,7 +183,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         : startLocal(serverRevision, serverDraft);
       return next === current ? all : { ...all, [workflowId]: next };
     });
-  }, [workflowId, serverDraft, serverRevision, pendingSave, typing]);
+  }, [workflowId, serverDraft, serverRevision, pendingSave, typing, moving]);
   const dirty = local ? isDirty(local) : false;
   const present = local?.history.present;
 
@@ -503,7 +513,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       event.preventDefault();
       // A field being typed in commits when it loses focus.
       target?.blur?.();
-      if (live && !busy) setTimeout(() => void saveRef.current(), 0);
+      if (live && !busy) requestSave();
       return;
     }
     if (typing) return;
@@ -527,6 +537,11 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         removeNode(selected);
       }
     }
+  };
+  // Runs after what is pending has become an edit and rendered.
+  const requestSave = () => {
+    flushMove.current?.();
+    setTimeout(() => void saveRef.current(), 0);
   };
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -599,10 +614,10 @@ function Shell({ desktop }: { desktop: DesktopState }) {
               { id: 'add', label: 'Add a node', run: openPicker },
               ...(canUndo ? [{ id: 'undo', label: 'Undo', run: stepBack }] : []),
               ...(canRedo ? [{ id: 'redo', label: 'Redo', run: stepForward }] : []),
-              ...((dirty || typing) && live && !busy
-                ? [{ id: 'save', label: 'Save the draft', run: () => void save() }]
+              ...((dirty || typing || moving) && live && !busy
+                ? [{ id: 'save', label: 'Save the draft', run: requestSave }]
                 : []),
-              ...(!dirty && !typing && live && !busy
+              ...(!dirty && !typing && !moving && live && !busy
                 ? [{ id: 'publish', label: 'Publish the draft', run: () => void publish() }]
                 : []),
             ]
@@ -699,6 +714,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
             editable
               ? {
                   move: moveNodes,
+                  moving: setMoving,
+                  flushRef: flushMove,
                   connect: (connection) =>
                     tryEdit((draft) =>
                       connect(
@@ -797,7 +814,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           editor={
             editable ? (
               <NodeEditor
-                key={selected}
+                key={`${workflowId}:${selected}`}
                 document={document}
                 node={document.nodes.find((node) => node.id === selected)!}
                 problems={problems}
@@ -904,10 +921,10 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                   undo: canUndo ? stepBack : null,
                   redo: canRedo ? stepForward : null,
                   // Text still in a field is an edit too: it must be saved before publishing.
-                  dirty: dirty || typing,
+                  dirty: dirty || typing || moving,
                   busy,
                   live,
-                  save: () => void save(),
+                  save: requestSave,
                   publish: () => void publish(),
                   problems: problems.length,
                   problemsOpen,
@@ -955,6 +972,8 @@ function Canvas({
   // Present on an editable draft. Positions and connections go to local edits; only Save sends.
   editing: {
     move: (positions: NodePosition[]) => void;
+    moving: (moving: boolean) => void;
+    flushRef: { current: (() => void) | null };
     connect: (connection: Connection) => unknown;
     reconnect: (id: string, connection: Connection) => unknown;
     dropOnCanvas: (
@@ -995,8 +1014,12 @@ function Canvas({
     if (!editing) return;
     clearTimeout(timer.current);
     // Shortly after the last movement, so arrow-key nudges make one undo step.
-    pendingMove.current = () => {
+    editing.moving(true);
+    editing.flushRef.current = pendingMove.current = () => {
+      clearTimeout(timer.current);
       pendingMove.current = null;
+      editing.flushRef.current = null;
+      editing.moving(false);
       editing.move([...latestPositions.current].map(([nodeId, { x, y }]) => ({ nodeId, x, y })));
     };
     timer.current = setTimeout(() => pendingMove.current?.(), 300);
@@ -1076,6 +1099,7 @@ function Canvas({
         onNodeDragStop={() => {
           dragging.current = false;
           save();
+          pendingMove.current?.();
         }}
         nodesConnectable={editing !== null}
         elementsSelectable
