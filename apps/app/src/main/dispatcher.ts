@@ -176,11 +176,20 @@ export async function dispatch(
         response = { kind: 'command', command, runId: null };
         break;
       }
-      case 'workflow.move': {
-        const { command } = await core.moveNodes(
-          request.workflowId,
-          request.revision,
-          request.positions,
+      case 'workflow.save': {
+        const { command } = await core.command(
+          'PUT',
+          `/api/v0/workflows/${request.workflowId}/draft`,
+          { revision: request.revision, draft: request.draft },
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
+      case 'workflow.publish': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/workflows/${request.workflowId}/publish`,
+          { revision: request.revision },
         );
         response = { kind: 'command', command, runId: null };
         break;

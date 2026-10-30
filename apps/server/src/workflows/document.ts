@@ -462,6 +462,7 @@ export function validateDocument(input: unknown): WorkflowDocument {
       422,
       false,
       problems.map((problem) => problem.path),
+      Object.fromEntries(problems.map((problem) => [problem.path, problem.message])),
     );
   }
   return input as WorkflowDocument;
