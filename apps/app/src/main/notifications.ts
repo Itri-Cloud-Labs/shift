@@ -6,8 +6,13 @@ import { announcements } from '../client-core/announcements.js';
 // in front. Clicking one brings the window forward, where the attention count shows it.
 export function watchAttention(window: BrowserWindow, core: ClientCore): () => void {
   let known: Set<string> | null = null;
+  let profile: string | null = null;
   const look = () => {
     const projection = core.sync.projection;
+    // Another server's first look is a first look too: what is open there is not new.
+    const profileId = core.connection.state.profileId;
+    if (!projection || profileId !== profile) known = null;
+    profile = profileId;
     if (!projection) return;
     const result = announcements(known, projection.interactions, projection.runs);
     known = result.known;
