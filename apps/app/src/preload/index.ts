@@ -8,10 +8,12 @@ import {
   type DesktopBridge,
   type DesktopRequest,
   type DesktopResponse,
+  type Preferences,
   type RunControl,
 } from '../shared/contracts.js';
 import { validInteractions } from '../shared/interactions.js';
 import {
+  validateDeviceList,
   validateRunResponse,
   validateServerHealth,
   validateServerInfo,
@@ -36,7 +38,8 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
         ? validateServerInfo(response.value)
         : validateServerHealth(response.value))) ||
     (response.kind === 'resource' && !resourceValidators[response.resource](response.value)) ||
-    (response.kind === 'interactions' && !validInteractions(response.value))
+    (response.kind === 'interactions' && !validInteractions(response.value)) ||
+    (response.kind === 'devices' && !validateDeviceList(response.value))
   ) {
     return { kind: 'error', code: 'INVALID_RESPONSE', message: 'The server response is invalid.' };
   }
@@ -68,6 +71,7 @@ const bridge: DesktopBridge = {
     version: (workflowId: string, versionId: string) =>
       invoke({ kind: 'data.version', workflowId, versionId }),
     run: (runId: string) => invoke({ kind: 'data.run', runId }),
+    devices: () => invoke({ kind: 'data.devices' }),
   }),
   run: Object.freeze({
     start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
@@ -92,6 +96,13 @@ const bridge: DesktopBridge = {
       revision: number,
       positions: { nodeId: string; x: number; y: number }[],
     ) => invoke({ kind: 'workflow.move', workflowId, revision, positions }),
+  }),
+  device: Object.freeze({
+    revoke: (deviceId: string) => invoke({ kind: 'device.revoke', deviceId }),
+  }),
+  preferences: Object.freeze({
+    read: () => invoke({ kind: 'preferences.read' }),
+    set: (preferences: Preferences) => invoke({ kind: 'preferences.set', preferences }),
   }),
   // The notification carries nothing; the listener reads what it needs through the bridge.
   onChange: (listener: () => void) => {

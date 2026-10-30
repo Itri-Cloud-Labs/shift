@@ -34,9 +34,14 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,interaction,onChange,openDocumentation,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,device,interaction,onChange,openDocumentation,preferences,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
     assert(Object.keys(window.shift.workflow).join(',') === 'move', 'Broad workflow bridge');
-    assert(Object.keys(window.shift.data).sort().join(',') === 'overview,run,version,workflow', 'Broad data bridge');
+    assert(Object.keys(window.shift.data).sort().join(',') === 'devices,overview,run,version,workflow', 'Broad data bridge');
+    assert(Object.keys(window.shift.device).join(',') === 'revoke', 'Broad device bridge');
+    assert(Object.keys(window.shift.preferences).sort().join(',') === 'read,set', 'Broad preferences bridge');
+    assert((await window.shift.device.revoke('../../admin')).code === 'INVALID_REQUEST', 'Path-like device ID accepted');
+    assert((await window.shift.data.devices()).code === 'DISCONNECTED', 'Devices listed without a connection');
+    assert((await window.shift.preferences.set({ theme: 'neon', notifications: false })).code === 'INVALID_REQUEST', 'Unknown theme accepted');
     assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,control,start', 'Broad run bridge');
     assert(Object.keys(window.shift.interaction).sort().join(',') === 'list,respond', 'Broad interaction bridge');
     assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');

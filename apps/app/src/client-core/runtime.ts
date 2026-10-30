@@ -8,6 +8,7 @@ import {
 } from '../shared/contracts.js';
 import { createShell } from './fixtures.js';
 import {
+  validateDeviceList,
   validateRunResponse,
   validateServerHealth,
   validateServerInfo,
@@ -19,6 +20,7 @@ import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
 import { withPositions, type NodePosition } from './positions.js';
+import { MemoryPreferenceStore, PreferenceRuntime, type PreferenceStore } from './preferences.js';
 import { SyncFailure, SyncRuntime, type CommandView } from './sync.js';
 
 export class ClientFailure extends Error {
@@ -58,14 +60,17 @@ export function validFoundationResponse(operation: FoundationQuery, value: unkno
 export class ClientCore {
   #samples: boolean;
   readonly sync: SyncRuntime;
+  readonly preferences: PreferenceRuntime;
   constructor(
     readonly connection: ConnectionRuntime,
     private readonly http: ServerHttp,
     samples = false,
     store: SyncStore = new MemorySyncStore(),
+    preferences: PreferenceStore = new MemoryPreferenceStore(),
   ) {
     this.#samples = samples;
     this.sync = new SyncRuntime({ connection, http, store });
+    this.preferences = new PreferenceRuntime(preferences);
   }
   readonly #cache = new Map<string, ResourceRead>();
 
@@ -112,6 +117,23 @@ export class ClientCore {
     this.#cache.set(key, read);
     for (const old of [...this.#cache.keys()].slice(0, -cacheLimit)) this.#cache.delete(old);
     return read;
+  }
+
+  // The paired devices, always from the live server: they are not part of the projection.
+  async devices(): Promise<unknown> {
+    let exchange;
+    try {
+      exchange = await this.sync.query('/api/v0/devices');
+    } catch (error) {
+      throw new ClientFailure(
+        error instanceof TransportFailure && error.kind === 'invalid'
+          ? 'INVALID_RESPONSE'
+          : 'DISCONNECTED',
+      );
+    }
+    if (exchange.status !== 200 || !validateDeviceList(exchange.body))
+      throw new ClientFailure('INVALID_RESPONSE');
+    return exchange.body;
   }
 
   // Saves node positions: merges them into the latest draft and replaces it at the revision the

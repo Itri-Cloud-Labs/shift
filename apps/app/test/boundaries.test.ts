@@ -254,6 +254,36 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     await dispatch(client, trusted, { kind: 'data.interactions' }, async () => assert.fail()),
     { kind: 'interactions', value: { interactions: [] } },
   );
+  // Devices are named by ID, and preferences hold only the two known choices.
+  for (const value of [
+    { kind: 'device.revoke', deviceId: `${id}/../../admin` },
+    { kind: 'device.revoke', deviceId: id, commandId: 'mine' },
+    { kind: 'data.devices', path: '/api/v0/admin/devices' },
+    { kind: 'preferences.set', preferences: { theme: 'neon', notifications: true } },
+    { kind: 'preferences.set', preferences: { theme: 'dark', notifications: true, url: 'x' } },
+  ])
+    assert.equal(parseRequest(value), undefined, JSON.stringify(value));
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'device.revoke', deviceId: id }, async () =>
+      assert.fail(),
+    ),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'data.devices' }, async () => assert.fail()),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  const preferences = { theme: 'light', notifications: true } as const;
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'preferences.set', preferences }, async () =>
+      assert.fail(),
+    ),
+    { kind: 'preferences', preferences },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'preferences.read' }, async () => assert.fail()),
+    { kind: 'preferences', preferences },
+  );
   // Requests cross IPC only as the server's own list would validate them.
   assert.equal(validInteractions({ interactions: [{ id: id, title: 'x' }] }), false);
   assert.equal(validInteractions({ interactions: [], bearer: 'x' }), false);

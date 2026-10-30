@@ -1,5 +1,6 @@
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
+  validateDeviceList,
   validateRunResponse,
   validateWorkflowResponse,
   validateWorkflowVersionResponse,
@@ -184,6 +185,25 @@ export async function dispatch(
         response = { kind: 'command', command, runId: null };
         break;
       }
+      case 'data.devices':
+        response = { kind: 'devices', value: await core.devices() };
+        break;
+      case 'device.revoke': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/devices/${request.deviceId}/revoke`,
+          {},
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
+      case 'preferences.read':
+        response = { kind: 'preferences', preferences: core.preferences.value };
+        break;
+      case 'preferences.set':
+        await core.preferences.set(request.preferences);
+        response = { kind: 'preferences', preferences: core.preferences.value };
+        break;
       case 'samples.set':
         response = { kind: 'shell', state: core.setSamples(request.enabled) };
         break;
@@ -205,7 +225,8 @@ export async function dispatch(
       (response.kind === 'server' &&
         !validFoundationResponse(response.operation, response.value)) ||
       (response.kind === 'resource' && !validResource(response.resource, response.value)) ||
-      (response.kind === 'interactions' && !validInteractions(response.value))
+      (response.kind === 'interactions' && !validInteractions(response.value)) ||
+      (response.kind === 'devices' && !validateDeviceList(response.value))
     ) {
       return {
         kind: 'error',

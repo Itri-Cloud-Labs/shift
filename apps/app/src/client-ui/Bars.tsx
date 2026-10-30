@@ -7,6 +7,8 @@ import {
   Maximize,
   Play,
   RefreshCw,
+  Search,
+  Settings,
   Square,
   Upload,
   Wifi,
@@ -31,7 +33,7 @@ export function health(connection: ConnectionView, sync: SyncView): Health {
   return 'syncing';
 }
 
-const healthLabels: Record<Health, string> = {
+export const healthLabels: Record<Health, string> = {
   live: 'Live',
   syncing: 'Syncing…',
   offline: 'Offline',
@@ -45,12 +47,16 @@ export function StatusCluster({
   attention,
   openInbox,
   inboxOpen,
+  openPalette,
+  openSettings,
 }: {
   connection: ConnectionView;
   sync: SyncView;
   attention: number;
   openInbox: () => void;
   inboxOpen: boolean;
+  openPalette: () => void;
+  openSettings: () => void;
 }) {
   const state = health(connection, sync);
   const profile = connection.profiles.find((item) => item.active);
@@ -84,6 +90,24 @@ export function StatusCluster({
       >
         <Bell aria-hidden="true" />
         {attention}
+      </button>
+      <button
+        className="button quiet icon"
+        aria-label="Search and actions"
+        aria-keyshortcuts="Meta+K Control+K"
+        title={`Search and actions (${navigator.userAgent.includes('Mac') ? '⌘K' : 'Ctrl+K'})`}
+        onClick={openPalette}
+      >
+        <Search />
+      </button>
+      <button
+        className="button quiet icon"
+        aria-label="Settings"
+        aria-haspopup="dialog"
+        title="Settings"
+        onClick={openSettings}
+      >
+        <Settings />
       </button>
     </div>
   );
@@ -143,14 +167,18 @@ export function RunStatus({
   live,
   now,
   resolve,
+  confirming,
+  setConfirming,
 }: {
   run: Run;
   live: boolean;
   now: number;
   // Opens the owner's decisions, when the run is stopped for one.
   resolve: (() => void) | null;
+  // Held by the workspace, so ⌘K can ask too.
+  confirming: boolean;
+  setConfirming: (confirming: boolean) => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const tone = runTone(run.state);
   const reason = runReason(run, now);

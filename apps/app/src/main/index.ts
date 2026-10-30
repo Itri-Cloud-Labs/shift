@@ -5,7 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { ClientCore } from '../client-core/runtime.js';
 import { ConnectionRuntime } from '../client-core/connection.js';
 import { ServerHttp } from '../client-core/http.js';
-import { credentialStore, FileProfileStore, FileSyncStore } from './storage.js';
+import { watchAttention } from './notifications.js';
+import {
+  credentialStore,
+  FilePreferenceStore,
+  FileProfileStore,
+  FileSyncStore,
+} from './storage.js';
 import { CHANGE_CHANNEL, IPC_CHANNEL } from '../shared/contracts.js';
 import { dispatch } from './dispatcher.js';
 import { APP_URL, CSP, assetPath, securePreferences } from './security.js';
@@ -51,6 +57,7 @@ function createCore(): ClientCore {
     http,
     !app.isPackaged,
     new FileSyncStore(join(app.getPath('userData'), 'sync')),
+    new FilePreferenceStore(join(app.getPath('userData'), 'preferences.json')),
   );
 }
 
@@ -122,7 +129,12 @@ async function createWindow(): Promise<void> {
       if (!contents.isDestroyed()) contents.send(CHANGE_CHANNEL);
     }, 50);
   };
-  const unsubscribe = [core.connection.subscribe(changed), core.sync.subscribe(changed)];
+  const unsubscribe = [
+    core.connection.subscribe(changed),
+    core.sync.subscribe(changed),
+    core.preferences.subscribe(changed),
+    watchAttention(owned, core),
+  ];
   owned.on('closed', () => unsubscribe.forEach((stop) => stop()));
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   contents.on('will-navigate', (event) => event.preventDefault());
@@ -176,6 +188,11 @@ void app
   .whenReady()
   .then(async () => {
     core = createCore();
+    // The theme applies before the window exists, so it never opens in the wrong one.
+    core.preferences.subscribe(({ theme }) => {
+      nativeTheme.themeSource = theme;
+    });
+    await core.preferences.load();
     // The smoke test starts without any saved connection.
     if (!smoke) {
       core.sync.start();

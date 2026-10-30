@@ -14,6 +14,12 @@ export const querySchema = v.picklist(['info', 'health', 'ready']);
 export type FoundationQuery = v.InferOutput<typeof querySchema>;
 const profileId = v.pipe(v.string(), v.regex(/^[0-9a-f-]{36}$/));
 const serverUrl = v.pipe(v.string(), v.minLength(1), v.maxLength(2048));
+// This computer's own choices: they never reach the server.
+export const preferencesSchema = v.strictObject({
+  theme: v.picklist(['system', 'light', 'dark']),
+  notifications: v.boolean(),
+});
+export type Preferences = v.InferOutput<typeof preferencesSchema>;
 export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('shell.read') }),
   v.strictObject({ kind: v.literal('connection.read') }),
@@ -83,6 +89,10 @@ export const requestSchema = v.variant('kind', [
       v.maxLength(500),
     ),
   }),
+  v.strictObject({ kind: v.literal('data.devices') }),
+  v.strictObject({ kind: v.literal('device.revoke'), deviceId: profileId }),
+  v.strictObject({ kind: v.literal('preferences.read') }),
+  v.strictObject({ kind: v.literal('preferences.set'), preferences: preferencesSchema }),
   v.strictObject({ kind: v.literal('desktop.openDocumentation') }),
 ]);
 export type DesktopRequest = v.InferOutput<typeof requestSchema>;
@@ -256,6 +266,9 @@ export const responseSchema = v.variant('kind', [
     command: commandViewSchema,
     runId: v.nullable(uuid),
   }),
+  // Checked by the generated protocol validator before this crosses IPC.
+  v.strictObject({ kind: v.literal('devices'), value: v.unknown() }),
+  v.strictObject({ kind: v.literal('preferences'), preferences: preferencesSchema }),
   v.strictObject({ kind: v.literal('opened') }),
   // Generated protocol validators validate the value before this crosses IPC.
   v.strictObject({ kind: v.literal('server'), operation: querySchema, value: v.unknown() }),
@@ -280,6 +293,7 @@ export interface DesktopBridge {
     workflow(workflowId: string): Promise<DesktopResponse>;
     version(workflowId: string, versionId: string): Promise<DesktopResponse>;
     run(runId: string): Promise<DesktopResponse>;
+    devices(): Promise<DesktopResponse>;
   };
   run: {
     start(workflowId: string, input: unknown): Promise<DesktopResponse>;
@@ -297,6 +311,13 @@ export interface DesktopBridge {
       revision: number,
       positions: { nodeId: string; x: number; y: number }[],
     ): Promise<DesktopResponse>;
+  };
+  device: {
+    revoke(deviceId: string): Promise<DesktopResponse>;
+  };
+  preferences: {
+    read(): Promise<DesktopResponse>;
+    set(preferences: Preferences): Promise<DesktopResponse>;
   };
   // Calls the listener whenever connection or synchronized state may have changed.
   onChange(listener: () => void): () => void;

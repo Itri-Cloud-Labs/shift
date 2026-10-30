@@ -7,7 +7,9 @@ import {
   type ProfileData,
   type ProfileStore,
 } from '../client-core/credentials.js';
+import type { PreferenceStore } from '../client-core/preferences.js';
 import type { SyncRecord, SyncStore } from '../client-core/projection.js';
+import type { Preferences } from '../shared/contracts.js';
 
 // Electron storage adapters (client specification 4.2). Device tokens are encrypted with
 // safeStorage, which uses the OS keychain, and kept apart from the nonsecret profile file. When
@@ -77,6 +79,24 @@ export class FileProfileStore implements ProfileStore {
     await writeFile(`${this.path}.tmp`, `${JSON.stringify(data)}\n`, { mode: 0o600 });
     await rename(`${this.path}.tmp`, this.path);
     await chmod(this.path, 0o600);
+  }
+}
+
+// This computer's preferences. Whatever is in the file is checked before it is used.
+export class FilePreferenceStore implements PreferenceStore {
+  constructor(private readonly path: string) {}
+
+  async load(): Promise<unknown> {
+    try {
+      return JSON.parse(await readFile(this.path, 'utf8'));
+    } catch {
+      return undefined;
+    }
+  }
+
+  async save(preferences: Preferences): Promise<void> {
+    await writeFile(`${this.path}.tmp`, `${JSON.stringify(preferences)}\n`, { mode: 0o600 });
+    await rename(`${this.path}.tmp`, this.path);
   }
 }
 

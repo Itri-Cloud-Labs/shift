@@ -534,3 +534,16 @@ Status: the second of three parts of prompt 12 (M06); settings and ⌘K remain. 
   - The existing live sync test already covers two devices racing an approval and a lost acknowledgement confirmed by its receipt without a second send.
   - Screenshots against a real server: the approval form, the inbox with a request and a stuck run, a toast for a run started while the app was open, the decision island in both themes for a loop stopped by its limit, and an approval sent from the app that the server accepted ("Approved by this device"). Fixes after inspection: the first snapshot was announced as new, the limited node was marked instead of the node before it, and the run status slid under the status cluster.
   - Electron smoke with the new bridge surface. `pnpm check` passed 188 tests (149 server, 39 app).
+
+## Settings and ⌘K (12c)
+
+Status: the third part of prompt 12 (M06). Session and report views still wait for their server capabilities. Date: 2026-10-30.
+
+- **Changed:** `data.devices`, `device.revoke` and `preferences.*` IPC requests and bridge methods; `client-core/preferences.ts` and `announcements.ts`; `main/notifications.ts`; the settings modal (Connection, Devices, Appearance) and the ⌘K palette with its pure model (`client-ui/commands.ts`); search and settings buttons in the status cluster; capture steps for each.
+- **Verified:**
+  - The empty palette lists attention, then actions, then recent workflows and runs. A query searches everything, ranks label matches first and returns at most 50 results.
+  - OS notification candidates leave out what was already open at the first look, settled requests and items already announced.
+  - Unreadable or invalid preferences fall back to the defaults, and saved ones load again.
+  - Device and preference requests are bounded and name IDs, never paths; without a connection, device requests are `DISCONNECTED`. The smoke test checks the new bridge surface.
+  - Screenshots against a real server: the palette empty and searching, each settings section, the theme switching to light from Settings, and this device revoked from the app, which returned it to pairing.
+- **Not verified:** a notification shown by a real desktop session, which needs a notification service the capture environment lacks. The choice of when to announce is unit tested; the Electron call is not. Changing the address and forgetting the server use existing, tested connection operations, but were not exercised through the new forms.

@@ -24,11 +24,14 @@ import {
 import { AttentionToast, Inbox, Resolve } from './Attention.js';
 import { attentionItems, runControls, type AttentionItem } from './owner.js';
 import { ask, bridge, useLive, type DesktopState } from './bridge.js';
-import { followed, layout, nodeRuns, readDocument, type GraphDocument } from './graph.js';
+import { finished, followed, layout, nodeRuns, readDocument, type GraphDocument } from './graph.js';
 import { LocationIsland } from './Location.js';
 import { NodeCard, type CardNode } from './NodeCard.js';
 import { Inspector, ListView } from './Panels.js';
+import { Palette } from './Palette.js';
+import { paletteEntries, type PaletteAction, type PaletteEntry } from './commands.js';
 import { useRoute } from './route.js';
+import { Settings, type SettingsSection } from './Settings.js';
 
 type NodePosition = { nodeId: string; x: number; y: number };
 
@@ -73,7 +76,8 @@ export function Workspace({ desktop }: { desktop: DesktopState }) {
 }
 
 function Shell({ desktop }: { desktop: DesktopState }) {
-  const { overview, connection, sync, interactions } = desktop;
+  const { overview, connection, sync, interactions, preferences } = desktop;
+  const flow = useReactFlow();
   const [route, navigate] = useRoute();
   const live = sync.status === 'live';
   const projectId =
@@ -130,6 +134,29 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [resolveFor, setResolveFor] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settings, setSettings] = useState<SettingsSection | null>(null);
+  useEffect(() => setCancelling(false), [route.runId]);
+
+  // ⌘K (Ctrl+K elsewhere) from anywhere but Settings, which is a modal of its own; ⌘, opens it.
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey) return;
+      if (event.key === 'k' && settings === null) {
+        event.preventDefault();
+        setInboxOpen(false);
+        setPaletteOpen((open) => !open);
+      } else if (event.key === ',') {
+        event.preventDefault();
+        setPaletteOpen(false);
+        setInboxOpen(false);
+        setSettings((open) => open ?? 'connection');
+      }
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [settings]);
 
   // What needs the owner. A toast announces an item that appears while the app is open, unless
   // its run is already on screen.
@@ -231,6 +258,101 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         ? `v${latestVersion.number} published`
         : 'Not published';
 
+  // Only what applies right now; a disabled action is not offered.
+  const cancellable =
+    runValue !== null && live && !finished(runValue.state) && runValue.state !== 'CANCEL_REQUESTED';
+  const actions: PaletteAction[] = paletteOpen
+    ? [
+        ...(canRun && workflowId
+          ? [
+              {
+                id: 'run',
+                label: 'Start a run',
+                run: () => (trigger?.config['inputSchema'] ? setInputOpen(true) : void start({})),
+              },
+            ]
+          : []),
+        ...(cancellable
+          ? [{ id: 'cancel', label: 'Cancel this run…', run: () => setCancelling(true) }]
+          : []),
+        ...(decidable && runValue
+          ? [
+              {
+                id: 'decide',
+                label: 'Decide how this run continues…',
+                run: () => setResolveFor(runValue.id),
+              },
+            ]
+          : []),
+        ...(inRun
+          ? [
+              {
+                id: 'draft',
+                label: 'Open the draft',
+                run: () => navigate({ runId: null, nodeId: null }),
+              },
+            ]
+          : []),
+        ...(health(connection, sync) === 'offline' && connection.profileId
+          ? [
+              {
+                id: 'reconnect',
+                label: 'Reconnect to the server',
+                run: () => void ask(bridge().connection.connect(connection.profileId!)),
+              },
+            ]
+          : []),
+        { id: 'inbox', label: 'Open the inbox', run: () => setInboxOpen(true) },
+        ...(document
+          ? [
+              {
+                id: 'fit',
+                label: 'Fit the graph',
+                run: () => void flow.fitView({ padding: 0.2, duration: 200 }),
+              },
+              {
+                id: 'list',
+                label: listOpen ? 'Hide the node list' : 'Show the node list',
+                run: () => setListOpen(!listOpen),
+              },
+            ]
+          : []),
+        { id: 'settings', label: 'Open settings', run: () => setSettings('connection') },
+        { id: 'devices', label: 'Manage devices', run: () => setSettings('devices') },
+        ...(['system', 'light', 'dark'] as const)
+          .filter((theme) => theme !== preferences.theme)
+          .map((theme) => ({
+            id: `theme-${theme}`,
+            label: `Use the ${theme === 'system' ? 'system' : theme} theme`,
+            run: () => void ask(bridge().preferences.set({ ...preferences, theme })),
+          })),
+      ]
+    : [];
+  const entries = paletteOpen ? paletteEntries(overview, items, actions, document, Date.now()) : [];
+  const choose = (entry: PaletteEntry) => {
+    setPaletteOpen(false);
+    const { target } = entry;
+    if (target.kind === 'attention') openItem(target.item, target.item.nodeId);
+    else if (target.kind === 'action') target.run();
+    else if (target.kind === 'node') select(target.nodeId);
+    else if (target.kind === 'project')
+      navigate({ projectId: target.projectId, workflowId: null, runId: null, nodeId: null });
+    else if (target.kind === 'workflow')
+      navigate({
+        projectId: target.projectId,
+        workflowId: target.workflowId,
+        runId: null,
+        nodeId: null,
+      });
+    else
+      navigate({
+        ...(target.projectId ? { projectId: target.projectId } : {}),
+        ...(target.workflowId ? { workflowId: target.workflowId } : {}),
+        runId: target.runId,
+        nodeId: null,
+      });
+  };
+
   const hint = !overview.projects.length ? (
     <Hint title="Add a project to start">
       Projects are repositories on the server. Add one there with{' '}
@@ -288,6 +410,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
             live={live}
             now={now}
             resolve={decidable ? () => setResolveFor(runValue.id) : null}
+            confirming={cancelling}
+            setConfirming={setCancelling}
           />
         )}
       </div>
@@ -297,6 +421,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         attention={items.length}
         inboxOpen={inboxOpen}
         openInbox={() => setInboxOpen(!inboxOpen)}
+        openPalette={() => setPaletteOpen(true)}
+        openSettings={() => setSettings('connection')}
       />
       <ConnectionBanner connection={connection} sync={sync} />
       {document && listOpen && (
@@ -350,6 +476,19 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           start={(input) => void start(input)}
           close={() => setInputOpen(false)}
         />
+      )}
+      {settings && (
+        <Settings
+          connection={connection}
+          sync={sync}
+          preferences={preferences}
+          section={settings}
+          setSection={setSettings}
+          close={() => setSettings(null)}
+        />
+      )}
+      {paletteOpen && (
+        <Palette entries={entries} choose={choose} close={() => setPaletteOpen(false)} />
       )}
       {notice && <Notice notice={notice} dismiss={() => setNotice(null)} />}
       {workflowId && (
