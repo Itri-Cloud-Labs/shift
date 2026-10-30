@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import type { Interaction, Run } from '../src/protocol/generated/types.js';
 import type { Overview, Preferences } from '../src/shared/contracts.js';
-import { announcements } from '../src/client-core/announcements.js';
+import { announcements, announcer } from '../src/client-core/announcements.js';
 import { MemoryPreferenceStore, PreferenceRuntime } from '../src/client-core/preferences.js';
 import { readDocument } from '../src/client-ui/graph.js';
 import { paletteEntries, paletteView } from '../src/client-ui/commands.js';
@@ -435,4 +435,19 @@ test('preference saves run one at a time, and the last choice is what stays', as
   ]);
   assert.equal(overlapped, false);
   assert.deepEqual(saved, { theme: 'system', notifications: true });
+});
+
+test('switching servers starts a new first look, whatever order the projection changes in', () => {
+  const request = (n: number) =>
+    ({ id: ids(n), state: 'PENDING', title: `Request ${n}` }) as Interaction;
+  const announce = announcer();
+  const at = (...interactions: Interaction[]) => ({ interactions, runs: [] });
+  assert.deepEqual(announce('a', at(request(1))), []);
+  assert.deepEqual(announce('a', at(request(1), request(2))), [{ id: ids(2), body: 'Request 2' }]);
+  // The new profile's cache arrives with what was already open there.
+  assert.deepEqual(announce('b', at(request(3))), []);
+  assert.deepEqual(announce('b', at(request(3), request(4))), [{ id: ids(4), body: 'Request 4' }]);
+  // Forgotten and paired again.
+  assert.deepEqual(announce(null, null), []);
+  assert.deepEqual(announce('b', at(request(3))), []);
 });

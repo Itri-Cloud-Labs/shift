@@ -27,3 +27,21 @@ export function announcements(
     fresh: known ? open.filter((item) => !known.has(item.id)) : [],
   };
 }
+
+// Follows one profile's projection at a time. Another server's first look is a first look too:
+// what is open there is not new.
+export function announcer() {
+  let known: Set<string> | null = null;
+  let owner: string | null = null;
+  return (
+    profileId: string | null,
+    projection: { interactions: Interaction[]; runs: { id: string; state: string }[] } | null,
+  ): Announcement[] => {
+    if (!projection || profileId !== owner) known = null;
+    owner = profileId;
+    if (!projection) return [];
+    const result = announcements(known, projection.interactions, projection.runs);
+    known = result.known;
+    return result.fresh;
+  };
+}
