@@ -17,6 +17,7 @@ import {
   securePreferences,
 } from '../src/main/security.js';
 import { dispatch } from '../src/main/dispatcher.js';
+import { validInteractions } from '../src/shared/interactions.js';
 import { ClientCore } from '../src/client-core/runtime.js';
 import { ConnectionRuntime } from '../src/client-core/connection.js';
 import { MemoryCredentialStore, MemoryProfileStore } from '../src/client-core/credentials.js';
@@ -206,6 +207,56 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     ),
     { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
   );
+  // Answers and run controls name a request or run and carry form data, never a path.
+  const respond = (extra: Record<string, unknown>) => ({
+    kind: 'interaction.respond',
+    interactionId: id,
+    revision: 2,
+    response: {},
+    ...extra,
+  });
+  assert.ok(
+    parseRequest(respond({ decision: 'approved', response: { comment: 'x'.repeat(30_000) } })),
+  );
+  const control = (value: unknown) => ({ kind: 'run.control', runId: id, control: value });
+  for (const value of [
+    { kind: 'retry' },
+    { kind: 'fail', reason: 'Checked by hand' },
+    { kind: 'complete', data: { summary: 'done' } },
+    { kind: 'extend', executions: 10 },
+    { kind: 'extend', activeMs: 1_800_000 },
+  ])
+    assert.ok(parseRequest(control(value)), JSON.stringify(value));
+  for (const value of [
+    respond({ interactionId: `${id}/../../admin` }),
+    respond({ revision: -1 }),
+    respond({ response: 'approved' }),
+    respond({ decision: '' }),
+    respond({ path: '/api/v0/admin/shutdown' }),
+    respond({ response: { comment: 'x'.repeat(70_000) } }),
+    control({ kind: 'resume' }),
+    control({ kind: 'retry', commandId: 'mine' }),
+    control({ kind: 'fail', reason: '' }),
+    control({ kind: 'extend', executions: 0 }),
+    control({ kind: 'extend', activeMs: 10 }),
+    { kind: 'data.interactions', all: true },
+  ])
+    assert.equal(parseRequest(value), undefined, JSON.stringify(value));
+  assert.deepEqual(
+    await dispatch(client, trusted, control({ kind: 'retry' }), async () => assert.fail()),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, respond({ decision: 'approved' }), async () => assert.fail()),
+    { kind: 'error', code: 'DISCONNECTED', message: 'Connect to a server before querying it.' },
+  );
+  assert.deepEqual(
+    await dispatch(client, trusted, { kind: 'data.interactions' }, async () => assert.fail()),
+    { kind: 'interactions', value: { interactions: [] } },
+  );
+  // Requests cross IPC only as the server's own list would validate them.
+  assert.equal(validInteractions({ interactions: [{ id: id, title: 'x' }] }), false);
+  assert.equal(validInteractions({ interactions: [], bearer: 'x' }), false);
   assert.deepEqual(
     await dispatch(client, trusted, { kind: 'data.overview' }, async () => assert.fail()),
     { kind: 'overview', overview: { projects: [], workflows: [], runs: [], attention: 0 } },

@@ -164,6 +164,71 @@ try {
     ...admin,
   ]);
   const run = await cli(['run', 'start', '--workflow', workflow.id, ...admin]);
+  // A loop that reaches its node's execution limit, so the run stops for the owner's decision.
+  const loopFile = join(temporaryRoot, 'loop.json');
+  await writeFile(
+    loopFile,
+    JSON.stringify({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'poll_status',
+          type: 'transform',
+          config: { data: { checked: true } },
+          limits: { maxExecutionsPerRun: 3 },
+        },
+        {
+          id: 'still_pending',
+          type: 'condition',
+          config: { when: { op: 'eq', left: { value: 1 }, right: { value: 1 } } },
+        },
+        { id: 'done', type: 'end' },
+      ],
+      connections: [
+        {
+          id: 'l1',
+          fromNodeId: 'start',
+          fromPort: 'success',
+          toNodeId: 'poll_status',
+          toPort: 'input',
+        },
+        {
+          id: 'l2',
+          fromNodeId: 'poll_status',
+          fromPort: 'success',
+          toNodeId: 'still_pending',
+          toPort: 'input',
+        },
+        {
+          id: 'l3',
+          fromNodeId: 'still_pending',
+          fromPort: 'true',
+          toNodeId: 'poll_status',
+          toPort: 'input',
+        },
+        {
+          id: 'l4',
+          fromNodeId: 'still_pending',
+          fromPort: 'false',
+          toNodeId: 'done',
+          toPort: 'input',
+        },
+      ],
+    }),
+  );
+  const loop = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Wait for deploy',
+    '--file',
+    loopFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', loop.id, ...admin]);
+  const stuck = await cli(['run', 'start', '--workflow', loop.id, ...admin]);
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   const base = `#/p/${project.id}/w/${workflow.id}`;
@@ -200,6 +265,32 @@ try {
     { name: '13-draft-moved', drag: { node: 'summarize', by: [0, -160] }, wait: 1500 },
     { name: '14-draft-reloaded', hash: `${base}/r/${run.id}`, wait: 800 },
     { name: '15-draft-after-reload', hash: base, wait: 1500 },
+    // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
+    { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
+    { name: '17-inbox', script: "document.querySelector('.attention-count').click()", wait: 800 },
+    // tools/capture.mjs starts another run once 17 is captured; its request arrives as a toast.
+    {
+      name: '18-toast',
+      script: "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))",
+      hash: base,
+      wait: 7000,
+    },
+    {
+      name: '19-decide',
+      hash: `#/p/${project.id}/w/${loop.id}/r/${stuck.id}`,
+      script:
+        "setTimeout(() => [...document.querySelectorAll('.run-status button')].find((b) => b.textContent.includes('Decide')).click(), 1200)",
+      wait: 2200,
+    },
+    { name: '20-decide-light', theme: 'light', wait: 800 },
+    {
+      name: '21-approved',
+      theme: 'dark',
+      hash: `${base}/r/${run.id}/n/review`,
+      script:
+        "setTimeout(() => [...document.querySelectorAll('.request-actions button')].find((b) => b.textContent === 'Approve').click(), 1200)",
+      wait: 3500,
+    },
   ];
 
   // Launch the built app in capture mode, staged like the smoke test.
@@ -225,7 +316,15 @@ try {
     env,
     packaged: false,
   }));
-  const app = spawn(executable, args, { env, stdio: ['ignore', 'inherit', 'inherit'] });
+  const app = spawn(executable, args, { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  let started = false;
+  app.stdout.on('data', (chunk) => {
+    process.stdout.write(chunk);
+    if (!started && String(chunk).includes('SHIFT_CAPTURE 17-inbox')) {
+      started = true;
+      void cli(['run', 'start', '--workflow', workflow.id, ...admin]);
+    }
+  });
   const timer = setTimeout(() => app.kill('SIGKILL'), 120_000);
   const code = await new Promise((done) => app.on('close', done));
   clearTimeout(timer);

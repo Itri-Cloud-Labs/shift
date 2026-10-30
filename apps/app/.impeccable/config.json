@@ -1,0 +1,15 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": ["src/client-ui/styles.css"],
+        "createdAt": "2026-10-30T12:35:26.351Z",
+        "reason": "Agent triage: .pairing uses the same 24px dot field as the workflow canvas (React Flow Background gap 24, --canvas-dot), so it is a real canvas surface, not decoration"
+      }
+    ]
+  }
+}

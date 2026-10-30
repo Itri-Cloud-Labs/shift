@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Interaction } from '../protocol/generated/types.js';
 import {
   parseResponse,
   type ConnectionView,
@@ -56,17 +57,30 @@ export interface DesktopState {
   connection: ConnectionView;
   sync: SyncView;
   overview: Overview;
+  // Pending human requests and settled ones seen since the snapshot; checked by preload.
+  interactions: Interaction[];
 }
 
 export function useDesktop(): DesktopState | undefined {
   return useLive(async () => {
-    const [connection, sync, overview] = await Promise.all([
+    const [connection, sync, overview, interactions] = await Promise.all([
       ask(bridge().connection.read()),
       ask(bridge().sync.read()),
       ask(bridge().data.overview()),
+      ask(bridge().interaction.list()),
     ]);
-    if (connection.kind !== 'connection' || sync.kind !== 'sync' || overview.kind !== 'overview')
+    if (
+      connection.kind !== 'connection' ||
+      sync.kind !== 'sync' ||
+      overview.kind !== 'overview' ||
+      interactions.kind !== 'interactions'
+    )
       return undefined;
-    return { connection: connection.connection, sync: sync.sync, overview: overview.overview };
+    return {
+      connection: connection.connection,
+      sync: sync.sync,
+      overview: overview.overview,
+      interactions: (interactions.value as { interactions: Interaction[] }).interactions,
+    };
   }, []);
 }

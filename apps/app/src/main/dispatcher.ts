@@ -11,6 +11,7 @@ import {
   type DesktopResponse,
   type SyncView,
 } from '../shared/contracts.js';
+import { validInteractions } from '../shared/interactions.js';
 import {
   DOCUMENTATION_URL,
   validExternalLink,
@@ -148,6 +149,32 @@ export async function dispatch(
         };
         break;
       }
+      case 'run.control': {
+        const { kind, ...body } = request.control;
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/runs/${request.runId}/${kind}`,
+          body,
+        );
+        response = { kind: 'command', command, runId: request.runId };
+        break;
+      }
+      case 'data.interactions':
+        response = { kind: 'interactions', value: { interactions: core.interactions() } };
+        break;
+      case 'interaction.respond': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/interactions/${request.interactionId}/respond`,
+          {
+            revision: request.revision,
+            ...(request.decision === undefined ? {} : { decision: request.decision }),
+            response: request.response,
+          },
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
       case 'workflow.move': {
         const { command } = await core.moveNodes(
           request.workflowId,
@@ -177,7 +204,8 @@ export async function dispatch(
       !parseResponse(response) ||
       (response.kind === 'server' &&
         !validFoundationResponse(response.operation, response.value)) ||
-      (response.kind === 'resource' && !validResource(response.resource, response.value))
+      (response.kind === 'resource' && !validResource(response.resource, response.value)) ||
+      (response.kind === 'interactions' && !validInteractions(response.value))
     ) {
       return {
         kind: 'error',

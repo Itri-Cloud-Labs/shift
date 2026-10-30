@@ -43,10 +43,14 @@ export function StatusCluster({
   connection,
   sync,
   attention,
+  openInbox,
+  inboxOpen,
 }: {
   connection: ConnectionView;
   sync: SyncView;
   attention: number;
+  openInbox: () => void;
+  inboxOpen: boolean;
 }) {
   const state = health(connection, sync);
   const profile = connection.profiles.find((item) => item.active);
@@ -67,17 +71,20 @@ export function StatusCluster({
         )}
         {healthLabels[state]}
       </span>
-      <span
+      <button
         className={`chip attention-count${attention ? ' has' : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={inboxOpen}
         aria-label={
           attention === 0
-            ? 'Nothing needs you'
-            : `${attention} ${attention === 1 ? 'thing needs' : 'things need'} you`
+            ? 'Nothing needs you. Open the inbox'
+            : `${attention} ${attention === 1 ? 'thing needs' : 'things need'} you. Open the inbox`
         }
+        onClick={openInbox}
       >
         <Bell aria-hidden="true" />
         {attention}
-      </span>
+      </button>
     </div>
   );
 }
@@ -131,7 +138,18 @@ export function ConnectionBanner({
 }
 
 // Top center in run mode: what the run is doing, and only the controls that apply now.
-export function RunStatus({ run, live, now }: { run: Run; live: boolean; now: number }) {
+export function RunStatus({
+  run,
+  live,
+  now,
+  resolve,
+}: {
+  run: Run;
+  live: boolean;
+  now: number;
+  // Opens the owner's decisions, when the run is stopped for one.
+  resolve: (() => void) | null;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const tone = runTone(run.state);
@@ -158,6 +176,11 @@ export function RunStatus({ run, live, now }: { run: Run; live: boolean; now: nu
         {clock(run.activeTime.usedMs)} / {clock(run.activeTime.limitMs)}
       </span>
       {run.versionNumber !== null && <span className="badge">v{run.versionNumber}</span>}
+      {resolve && !confirming && (
+        <button className="button primary" onClick={resolve}>
+          Decide…
+        </button>
+      )}
       {cancellable &&
         (confirming ? (
           <>

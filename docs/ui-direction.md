@@ -60,7 +60,10 @@ Nodes are added from the toolbar's "+" or by dragging out of a port onto empty c
 - Dark and light themes follow the OS, with an override in Settings.
 - Density sits between compact and roomy: as airy as possible without dropping features.
 
+## ⌘K palette
+
+Agreed with the owner on 2026-10-29: actions first. With an empty query it lists open attention items, then the actions that apply to what is on screen (Run, Cancel, Publish, Settings, Inbox, theme), then recent workflows and runs. Typing searches workflows, runs, nodes in the open graph, projects and actions together.
+
 ## Still open
 
-- The contents and ranking of the ⌘K palette.
 - Exact colours, type sizes and spacing. These are settled while building prompt 12.

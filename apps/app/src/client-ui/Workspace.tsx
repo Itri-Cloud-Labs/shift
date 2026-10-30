@@ -21,6 +21,8 @@ import {
   Toolbar,
   health,
 } from './Bars.js';
+import { AttentionToast, Inbox, Resolve } from './Attention.js';
+import { attentionItems, runControls, type AttentionItem } from './owner.js';
 import { ask, bridge, useLive, type DesktopState } from './bridge.js';
 import { followed, layout, nodeRuns, readDocument, type GraphDocument } from './graph.js';
 import { LocationIsland } from './Location.js';
@@ -71,7 +73,7 @@ export function Workspace({ desktop }: { desktop: DesktopState }) {
 }
 
 function Shell({ desktop }: { desktop: DesktopState }) {
-  const { overview, connection, sync } = desktop;
+  const { overview, connection, sync, interactions } = desktop;
   const [route, navigate] = useRoute();
   const live = sync.status === 'live';
   const projectId =
@@ -110,12 +112,55 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     [source],
   );
   const runs = useMemo(() => (runValue ? nodeRuns(runValue) : null), [runValue]);
+  const controls = runValue ? runControls(runValue) : null;
+  const decidable =
+    controls !== null &&
+    (controls.retry || controls.fail || controls.complete || controls.extend !== null);
+  const resultSchema =
+    controls?.complete && controls.nodeId && version?.value
+      ? readDocument(version.value).nodes.find((node) => node.id === controls.nodeId)?.config[
+          'resultSchema'
+        ]
+      : undefined;
   const now = useNow(inRun && runValue !== null);
 
   const [listOpen, setListOpen] = useState(false);
   const [inputOpen, setInputOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState<NoticeState | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [resolveFor, setResolveFor] = useState<string | null>(null);
+
+  // What needs the owner. A toast announces an item that appears while the app is open, unless
+  // its run is already on screen.
+  const items = useMemo(() => attentionItems(overview, interactions), [overview, interactions]);
+  const seen = useRef<Set<string> | null>(null);
+  const [toast, setToast] = useState<AttentionItem | null>(null);
+  // Counting starts with the first synchronized or cached state, so what was already open then
+  // is not announced.
+  const synchronized = sync.cached !== null;
+  useEffect(() => {
+    if (!synchronized) return;
+    const known = seen.current;
+    seen.current = new Set([...(known ?? []), ...items.map((item) => item.id)]);
+    if (!known) return;
+    const fresh = items.filter((item) => !known.has(item.id) && item.runId !== route.runId);
+    if (fresh.length) setToast(fresh[fresh.length - 1]!);
+  }, [items, synchronized]);
+  useEffect(() => {
+    if (toast && !items.some((item) => item.id === toast.id)) setToast(null);
+  }, [items, toast]);
+  const openItem = (item: AttentionItem, nodeId: string | null) => {
+    setInboxOpen(false);
+    setToast(null);
+    navigate({
+      ...(item.projectId ? { projectId: item.projectId } : {}),
+      ...(item.workflowId ? { workflowId: item.workflowId } : {}),
+      runId: item.runId,
+      nodeId,
+    });
+    setResolveFor(item.kind === 'stuck' ? item.runId : null);
+  };
 
   const select = (nodeId: string | null) => navigate({ nodeId });
   const selected = document?.nodes.some((node) => node.id === route.nodeId) ? route.nodeId : null;
@@ -215,7 +260,9 @@ function Shell({ desktop }: { desktop: DesktopState }) {
             runValue?.wait?.['kind'] === 'human'
               ? (runValue.executions.find((item) => item.id === runValue.wait?.['executionId'])
                   ?.node ?? null)
-              : null
+              : decidable
+                ? controls.nodeId
+                : null
           }
           selected={selected}
           select={select}
@@ -235,9 +282,22 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           workflowId={workflowId}
           navigate={navigate}
         />
-        {inRun && runValue && <RunStatus run={runValue} live={live} now={now} />}
+        {inRun && runValue && (
+          <RunStatus
+            run={runValue}
+            live={live}
+            now={now}
+            resolve={decidable ? () => setResolveFor(runValue.id) : null}
+          />
+        )}
       </div>
-      <StatusCluster connection={connection} sync={sync} attention={overview.attention} />
+      <StatusCluster
+        connection={connection}
+        sync={sync}
+        attention={items.length}
+        inboxOpen={inboxOpen}
+        openInbox={() => setInboxOpen(!inboxOpen)}
+      />
       <ConnectionBanner connection={connection} sync={sync} />
       {document && listOpen && (
         <ListView
@@ -255,6 +315,33 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           run={inRun ? (runs?.get(selected) ?? null) : undefined}
           close={() => select(null)}
           select={select}
+          requests={
+            inRun
+              ? interactions.filter((item) => item.runId === route.runId && item.node === selected)
+              : []
+          }
+          live={live}
+          deviceId={connection.profiles.find((item) => item.active)?.deviceId ?? null}
+          commands={sync.commands}
+        />
+      )}
+      {decidable && runValue && resolveFor === runValue.id && (
+        <Resolve
+          key={runValue.id}
+          run={runValue}
+          controls={controls}
+          resultSchema={resultSchema}
+          live={live}
+          commands={sync.commands}
+          close={() => setResolveFor(null)}
+        />
+      )}
+      {inboxOpen && <Inbox items={items} open={openItem} close={() => setInboxOpen(false)} />}
+      {toast && !inboxOpen && (
+        <AttentionToast
+          item={toast}
+          open={() => openItem(toast, toast.nodeId)}
+          dismiss={() => setToast(null)}
         />
       )}
       {inputOpen && (
