@@ -389,6 +389,12 @@ test('only attention items that appear after the first look are announced', () =
   const second = announcements(first.known, [request], [stuck, { id: ids(3), state: 'RUNNING' }]);
   assert.deepEqual(second.fresh, [{ id: ids(2), body: 'A run needs your decision' }]);
   assert.deepEqual(announcements(second.known, [], [stuck]).fresh, []);
+  // A run that resumes and stops again is announced again.
+  const resumed = announcements(second.known, [request], [{ ...stuck, state: 'RUNNING' }]);
+  assert.deepEqual(resumed.fresh, []);
+  assert.deepEqual(announcements(resumed.known, [request], [stuck]).fresh, [
+    { id: ids(2), body: 'A run needs your decision' },
+  ]);
   const settled = { id: ids(4), state: 'RESPONDED', title: 'Done' } as unknown as Interaction;
   assert.deepEqual(announcements(second.known, [settled], []).fresh, []);
 });

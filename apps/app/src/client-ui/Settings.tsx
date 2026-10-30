@@ -288,7 +288,14 @@ function DevicesSection({ sync }: { sync: SyncView }) {
   useEffect(() => {
     if (command?.state === 'accepted') setRevoking(null);
   }, [command?.state]);
-  const checking = sending || command?.state === 'sending' || command?.state === 'unknown';
+  // Read from the commands main keeps, so it survives leaving this section or closing Settings.
+  const checking =
+    sending ||
+    sync.commands.some(
+      (item) =>
+        /^\/api\/v0\/devices\/[^/]+\/revoke$/.test(item.path) &&
+        (item.state === 'sending' || item.state === 'unknown'),
+    );
 
   const revoke = async (deviceId: string) => {
     setFailed(false);

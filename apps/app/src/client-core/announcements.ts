@@ -22,7 +22,8 @@ export function announcements(
       .map((run) => ({ id: run.id, body: 'A run needs your decision' })),
   ];
   return {
-    known: new Set([...(known ?? []), ...open.map((item) => item.id)]),
+    // Only what is open now: a run that resumes and stops again needs the owner again.
+    known: new Set(open.map((item) => item.id)),
     fresh: known ? open.filter((item) => !known.has(item.id)) : [],
   };
 }

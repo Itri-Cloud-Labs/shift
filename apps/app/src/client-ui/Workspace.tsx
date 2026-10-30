@@ -169,7 +169,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   useEffect(() => {
     if (!synchronized) return;
     const known = seen.current;
-    seen.current = new Set([...(known ?? []), ...items.map((item) => item.id)]);
+    // Only what is open now: a run that resumes and stops again needs the owner again.
+    seen.current = new Set(items.map((item) => item.id));
     if (!known) return;
     const fresh = items.filter((item) => !known.has(item.id) && item.runId !== route.runId);
     if (fresh.length) setToast(fresh[fresh.length - 1]!);
