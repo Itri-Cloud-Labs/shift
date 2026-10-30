@@ -2,7 +2,6 @@ import { CircleAlert, LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { DeviceList, ServerInfo } from '../protocol/generated/types.js';
 import type { ConnectionView, Preferences, SyncView } from '../shared/contracts.js';
-import { useEscape } from './Attention.js';
 import { health, healthLabels } from './Bars.js';
 import { ask, bridge, useLive } from './bridge.js';
 import { problems } from './Pairing.js';
@@ -41,7 +40,16 @@ export function Settings({
   setSection: (section: SettingsSection) => void;
   close: () => void;
 }) {
-  useEscape(close);
+  // Caught first, so an island open beneath the modal stays open.
+  useEffect(() => {
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      close();
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  });
   const dialog = useRef<HTMLElement>(null);
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
@@ -55,7 +63,7 @@ export function Settings({
       ...dialog.current.querySelectorAll<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), a[href]',
       ),
-    ];
+    ].filter((element) => element.tabIndex >= 0);
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
     if (event.shiftKey && document.activeElement === first) {
@@ -271,6 +279,7 @@ function DevicesSection({ sync }: { sync: SyncView }) {
   const [sent, setSent] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [sending, setSending] = useState(false);
   const command = sync.commands.find((item) => item.commandId === sent);
   const list = useLive<DeviceList | null>(async () => {
     const answer = await ask(bridge().data.devices());
@@ -279,11 +288,13 @@ function DevicesSection({ sync }: { sync: SyncView }) {
   useEffect(() => {
     if (command?.state === 'accepted') setRevoking(null);
   }, [command?.state]);
-  const checking = command?.state === 'sending' || command?.state === 'unknown';
+  const checking = sending || command?.state === 'sending' || command?.state === 'unknown';
 
   const revoke = async (deviceId: string) => {
     setFailed(false);
+    setSending(true);
     const answer = await ask(bridge().device.revoke(deviceId));
+    setSending(false);
     if (answer.kind === 'command') setSent(answer.command.commandId);
     else setFailed(true);
   };
