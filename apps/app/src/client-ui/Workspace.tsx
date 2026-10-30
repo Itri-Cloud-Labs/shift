@@ -400,8 +400,14 @@ function Shell({ desktop }: { desktop: DesktopState }) {
 
   const commandById = (id: string | null | undefined) =>
     id ? sync.commands.find((item) => item.commandId === id) : undefined;
+  // Held from the moment a save starts until its outcome is known, so one revision is sent once.
+  const saveLock = useRef(false);
+  useEffect(() => {
+    if (!pendingSave) saveLock.current = false;
+  }, [pendingSave]);
   const save = async () => {
-    if (!workflowId || !local || !present) return;
+    if (!workflowId || !local || !present || saveLock.current) return;
+    saveLock.current = true;
     const sent = present;
     const revision = local.revision;
     setPendingSave({ workflowId, commandId: null, revision, sent });
@@ -541,8 +547,13 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   // Runs after what is pending has become an edit and rendered.
   const requestSave = () => {
     flushMove.current?.();
-    setTimeout(() => void saveRef.current(), 0);
+    const requested = workflowId;
+    setTimeout(() => {
+      if (shownWorkflow.current === requested) void saveRef.current();
+    }, 0);
   };
+  const shownWorkflow = useRef(workflowId);
+  shownWorkflow.current = workflowId;
   const saveRef = useRef(save);
   saveRef.current = save;
   useEffect(() => {
@@ -997,7 +1008,8 @@ function Canvas({
   }, [laid, moved]);
   // A newer document carries the saved positions; local ones are no longer needed.
   useEffect(() => {
-    if (!dragging.current) setMoved({});
+    // A move waiting to commit keeps its coordinates through another edit.
+    if (!dragging.current && !pendingMove.current) setMoved({});
   }, [document]);
   // A move still waiting goes to the draft it was made on: this canvas belongs to one workflow.
   const pendingMove = useRef<(() => void) | null>(null);
