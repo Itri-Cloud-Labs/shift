@@ -407,3 +407,26 @@ test('preferences fall back to the defaults, and a bad file never applies', asyn
   assert.deepEqual(again.value, { theme: 'dark', notifications: true });
   assert.deepEqual(applied, ['system', 'dark']);
 });
+
+test('preference saves run one at a time, and the last choice is what stays', async () => {
+  let saving = 0;
+  let overlapped = false;
+  let saved: Preferences | undefined;
+  const runtime = new PreferenceRuntime({
+    load: async () => undefined,
+    save: async (preferences) => {
+      overlapped ||= saving > 0;
+      saving++;
+      await new Promise((resolve) => setTimeout(resolve, preferences.theme === 'dark' ? 20 : 1));
+      saved = preferences;
+      saving--;
+    },
+  });
+  await Promise.all([
+    runtime.set({ theme: 'dark', notifications: false }),
+    runtime.set({ theme: 'light', notifications: false }),
+    runtime.set({ theme: 'system', notifications: true }),
+  ]);
+  assert.equal(overlapped, false);
+  assert.deepEqual(saved, { theme: 'system', notifications: true });
+});

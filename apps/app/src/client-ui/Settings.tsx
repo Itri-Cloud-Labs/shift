@@ -344,7 +344,8 @@ function DevicesSection({ sync }: { sync: SyncView }) {
                     disabled={sync.status !== 'live'}
                     onClick={() => {
                       setRevoking(device.id);
-                      setSent(null);
+                      // A revocation still being confirmed stays tracked, and blocks another.
+                      if (!checking) setSent(null);
                       setFailed(false);
                     }}
                   >

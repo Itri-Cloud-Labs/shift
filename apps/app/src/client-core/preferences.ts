@@ -23,6 +23,7 @@ export class MemoryPreferenceStore implements PreferenceStore {
 
 export class PreferenceRuntime {
   #value = defaultPreferences;
+  #saving: Promise<void> = Promise.resolve();
   readonly #listeners = new Set<(preferences: Preferences) => void>();
   constructor(private readonly store: PreferenceStore) {}
 
@@ -36,11 +37,13 @@ export class PreferenceRuntime {
     this.#notify();
   }
 
-  // Applies at once; a failed save only means the choice lasts until the app quits.
+  // Applies at once; a failed save only means the choice lasts until the app quits. Saves run
+  // one at a time, so the last choice is the one left on disk.
   async set(next: Preferences): Promise<void> {
     this.#value = next;
     this.#notify();
-    await this.store.save(next).catch(() => undefined);
+    this.#saving = this.#saving.then(() => this.store.save(next)).catch(() => undefined);
+    await this.#saving;
   }
 
   subscribe(listener: (preferences: Preferences) => void): () => void {
