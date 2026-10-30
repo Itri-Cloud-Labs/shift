@@ -22,11 +22,15 @@ export function Palette({
     list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }, [index, results]);
 
-  // Focus goes back where it was, unless what was chosen took it elsewhere.
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    return () => before?.focus();
-  }, []);
+  // Read during the first render, before the input takes focus. Focus goes back there, unless
+  // what was chosen took it elsewhere.
+  const [before] = useState(() => document.activeElement as HTMLElement | null);
+  useEffect(
+    () => () => {
+      if (document.activeElement === document.body || !document.activeElement) before?.focus();
+    },
+    [],
+  );
 
   const key = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
