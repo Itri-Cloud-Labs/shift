@@ -264,7 +264,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     runValue !== null && live && !finished(runValue.state) && runValue.state !== 'CANCEL_REQUESTED';
   const actions: PaletteAction[] = paletteOpen
     ? [
-        ...(canRun && workflowId
+        ...(canRun && !starting && workflowId
           ? [
               {
                 id: 'run',
