@@ -144,6 +144,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   // Local edits, per workflow, so switching away keeps them. They stay apart from the server's
   // revisions until the owner saves.
   const [locals, setLocals] = useState<Record<string, LocalDraft>>({});
+  // Text typed into a field and not committed yet counts as a local edit.
+  const [typing, setTyping] = useState(false);
   const [pendingSave, setPendingSave] = useState<{
     workflowId: string;
     commandId: string | null;
@@ -162,7 +164,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const serverDraft = workflow?.value.draft as Draft | undefined;
   const serverRevision = workflow?.value.draftRevision;
   useEffect(() => {
-    if (!workflowId || !serverDraft || serverRevision === undefined || pendingSave) return;
+    if (!workflowId || !serverDraft || serverRevision === undefined || pendingSave || typing)
+      return;
     setLocals((all) => {
       const current = all[workflowId];
       const next = current
@@ -170,7 +173,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         : startLocal(serverRevision, serverDraft);
       return next === current ? all : { ...all, [workflowId]: next };
     });
-  }, [workflowId, serverDraft, serverRevision, pendingSave]);
+  }, [workflowId, serverDraft, serverRevision, pendingSave, typing]);
   const dirty = local ? isDirty(local) : false;
   const present = local?.history.present;
 
@@ -476,7 +479,18 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   // Editing shortcuts. In a field the keys belong to the field.
   const shortcuts = useRef<(event: KeyboardEvent) => void>(() => undefined);
   shortcuts.current = (event) => {
-    if (!editable) return;
+    // A dialog owns the keyboard; nothing behind it changes.
+    if (
+      !editable ||
+      settings !== null ||
+      paletteOpen ||
+      inboxOpen ||
+      picker !== null ||
+      inputOpen ||
+      resolveFor !== null ||
+      local?.theirs
+    )
+      return;
     const target = event.target as HTMLElement | null;
     const typing =
       target instanceof HTMLInputElement ||
@@ -798,6 +812,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                   },
                   set: (key, value) => edit((draft) => setConfig(draft, selected, key, value)),
                   connectPort: (port, target) => connectPort(selected, port, target),
+                  typing: setTyping,
                   duplicate: () => duplicate(selected),
                   remove: () => removeNode(selected),
                 }}

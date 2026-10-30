@@ -1,5 +1,5 @@
 import { CircleAlert, Copy, GitCompareArrows, Trash2, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useEscape } from './Attention.js';
 import { addableTypes, type DraftProblem } from './draft.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
@@ -165,6 +165,9 @@ export function ConflictIsland({
   );
 }
 
+// Tells the workspace a field holds text that is not committed yet, so a server revision waits.
+const Typing = createContext<(typing: boolean) => void>(() => undefined);
+
 // A text field that commits when it loses focus or on Enter, so one edit is one undo step. An
 // undo elsewhere replaces what it shows.
 function TextField({
@@ -192,6 +195,11 @@ function TextField({
 }) {
   const [text, setText] = useState(value);
   useEffect(() => setText(value), [value]);
+  const typing = useContext(Typing);
+  useEffect(() => {
+    typing(text !== value);
+    return () => typing(false);
+  }, [text, value]);
   const props = {
     id,
     value: text,
@@ -371,6 +379,7 @@ export interface NodeEditing {
   rename: (next: string) => string | null;
   set: (key: string, value: unknown) => void;
   connectPort: (port: string, target: string | null) => void;
+  typing: (typing: boolean) => void;
   duplicate: () => void;
   remove: () => void;
 }
@@ -397,16 +406,18 @@ export function NodeEditor({
   const own = problems.filter((item) => item.nodeId === node.id);
   return (
     <div className="node-editor">
-      <TextField
-        id={`${node.id}-id`}
-        label="Name"
-        value={node.id}
-        autoFocus={focus}
-        problem={renameProblem}
-        note="Other nodes refer to it by this name."
-        commit={(value) => setRenameProblem(editing.rename(value) ?? undefined)}
-      />
-      <ConfigFields node={node} problems={own} set={editing.set} />
+      <Typing.Provider value={editing.typing}>
+        <TextField
+          id={`${node.id}-id`}
+          label="Name"
+          value={node.id}
+          autoFocus={focus}
+          problem={renameProblem}
+          note="Other nodes refer to it by this name."
+          commit={(value) => setRenameProblem(editing.rename(value) ?? undefined)}
+        />
+        <ConfigFields node={node} problems={own} set={editing.set} />
+      </Typing.Provider>
       {ports.length > 0 && (
         <fieldset className="field-group">
           <legend>Goes to</legend>
