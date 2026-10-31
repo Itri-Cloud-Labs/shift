@@ -999,6 +999,9 @@ function Canvas({
   const laid = useMemo(() => layout(document), [document]);
   // Positions moved on screen and not yet in the document the server returned.
   const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
+  // React Flow hides a node it receives without its size until it has measured it again, and these
+  // node objects are rebuilt on every drag tick, so the sizes it reports have to go back to it.
+  const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
   const dragging = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const positions = useMemo(() => {
@@ -1037,9 +1040,16 @@ function Canvas({
     timer.current = setTimeout(() => pendingMove.current?.(), 300);
   };
   const onNodesChange = (changes: NodeChange<CardNode>[]) => {
-    if (!editing) return;
     for (const change of changes) {
-      if (change.type !== 'position' || !change.position) continue;
+      if (change.type === 'dimensions' && change.dimensions) {
+        const { id, dimensions } = change;
+        setMeasured((current) =>
+          current[id]?.width === dimensions.width && current[id]?.height === dimensions.height
+            ? current
+            : { ...current, [id]: dimensions },
+        );
+      }
+      if (!editing || change.type !== 'position' || !change.position) continue;
       const { id, position } = change;
       setMoved((current) => ({ ...current, [id]: position }));
       // Any movement postpones a pending save until the node is still again.
@@ -1054,6 +1064,7 @@ function Canvas({
         id: node.id,
         type: 'card',
         position: positions.get(node.id) ?? { x: 0, y: 0 },
+        ...(measured[node.id] ? { measured: measured[node.id] } : {}),
         selected: node.id === selected,
         data: {
           node,
@@ -1063,7 +1074,7 @@ function Canvas({
           problems: problems[node.id] ?? 0,
         },
       })),
-    [document, positions, runs, inRun, needsYou, selected, editing !== null, problems],
+    [document, positions, measured, runs, inRun, needsYou, selected, editing !== null, problems],
   );
   const edges = useMemo<Edge[]>(
     () =>

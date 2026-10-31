@@ -1,5 +1,5 @@
-import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
+import { memo, useEffect } from 'react';
 import {
   outputPorts,
   hasInput,
@@ -27,9 +27,13 @@ export type CardNode = Node<CardData, 'card'>;
 
 // An n8n-style node card: type icon, name, one line of configuration and its named ports. In a
 // run it also shows its state in words and, after a loop, how many times it ran.
-export const NodeCard = memo(function NodeCard({ data }: NodeProps<CardNode>) {
+export const NodeCard = memo(function NodeCard({ id, data }: NodeProps<CardNode>) {
   const { node, run } = data;
   const ports = outputPorts(node);
+  // Handles are only measured when told: connections need the new ones found.
+  const updateInternals = useUpdateNodeInternals();
+  const portNames = ports.join('|');
+  useEffect(() => updateInternals(id), [id, portNames, updateInternals]);
   const latest = run?.executions.at(-1);
   const status = data.needsYou ? 'attention' : (run?.status ?? null);
   const inRun = run !== undefined;
