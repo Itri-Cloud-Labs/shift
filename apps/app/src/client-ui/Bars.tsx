@@ -2,14 +2,19 @@ import { useReactFlow } from '@xyflow/react';
 import {
   Bell,
   CircleAlert,
+  CircleCheck,
   ListTree,
   LoaderCircle,
   Maximize,
   Play,
+  Plus,
+  Redo2,
   RefreshCw,
+  Save,
   Search,
   Settings,
   Square,
+  Undo2,
   Upload,
   Wifi,
   WifiOff,
@@ -229,6 +234,20 @@ export function RunStatus({
   );
 }
 
+export interface ToolbarEditor {
+  add: () => void;
+  undo: (() => void) | null;
+  redo: (() => void) | null;
+  dirty: boolean;
+  busy: boolean;
+  live: boolean;
+  save: () => void;
+  publish: () => void;
+  problems: number;
+  problemsOpen: boolean;
+  toggleProblems: () => void;
+}
+
 // Bottom center: view controls, and the workflow's actions.
 export function Toolbar({
   listOpen,
@@ -238,6 +257,7 @@ export function Toolbar({
   starting,
   run,
   publishLabel,
+  editor,
 }: {
   listOpen: boolean;
   toggleList: () => void;
@@ -246,6 +266,8 @@ export function Toolbar({
   starting: boolean;
   run: () => void;
   publishLabel: string | null;
+  // Present on a draft.
+  editor: ToolbarEditor | null;
 }) {
   const flow = useReactFlow();
   return (
@@ -276,6 +298,86 @@ export function Toolbar({
         <ListTree />
       </button>
       <span className="toolbar-separator" />
+      {editor && (
+        <>
+          <button
+            className="button quiet icon"
+            aria-label="Add a node"
+            title="Add a node"
+            aria-haspopup="dialog"
+            onClick={editor.add}
+          >
+            <Plus />
+          </button>
+          <button
+            className="button quiet icon"
+            aria-label="Undo"
+            title="Undo"
+            disabled={!editor.undo}
+            onClick={() => editor.undo?.()}
+          >
+            <Undo2 />
+          </button>
+          <button
+            className="button quiet icon"
+            aria-label="Redo"
+            title="Redo"
+            disabled={!editor.redo}
+            onClick={() => editor.redo?.()}
+          >
+            <Redo2 />
+          </button>
+          <span className="toolbar-separator" />
+          <button
+            className={`button quiet${editor.problems ? ' has-problems' : ''}`}
+            aria-pressed={editor.problemsOpen}
+            onClick={editor.toggleProblems}
+          >
+            {editor.problems ? (
+              <CircleAlert aria-hidden="true" />
+            ) : (
+              <CircleCheck aria-hidden="true" />
+            )}
+            {editor.problems === 0
+              ? 'No problems'
+              : editor.problems === 1
+                ? '1 problem'
+                : `${editor.problems} problems`}
+          </button>
+          <button
+            className="button"
+            disabled={!editor.dirty || editor.busy || !editor.live}
+            title={
+              !editor.live
+                ? 'Saving needs a connection. Your edits stay here.'
+                : editor.dirty
+                  ? 'Save the draft on the server'
+                  : 'Nothing to save'
+            }
+            onClick={editor.save}
+          >
+            {editor.busy ? (
+              <LoaderCircle className="spin" aria-hidden="true" />
+            ) : (
+              <Save aria-hidden="true" />
+            )}
+            Save
+          </button>
+          <button
+            className="button"
+            disabled={editor.dirty || editor.busy || !editor.live}
+            title={
+              editor.dirty
+                ? 'Save your edits first; publishing uses the saved draft.'
+                : 'Validate the saved draft and make it the version new runs use'
+            }
+            onClick={editor.publish}
+          >
+            <Upload aria-hidden="true" />
+            Publish
+          </button>
+        </>
+      )}
       {publishLabel && (
         <span className="badge toolbar-badge">
           <Upload aria-hidden="true" />

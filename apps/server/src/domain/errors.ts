@@ -5,6 +5,8 @@ export class ShiftError extends Error {
     readonly status = 500,
     readonly retryable = false,
     readonly fields: readonly string[] = [],
+    // What is wrong with a field, when it says more than the code does.
+    readonly fieldMessages: Readonly<Record<string, string>> = {},
   ) {
     super(message);
     this.name = 'ShiftError';

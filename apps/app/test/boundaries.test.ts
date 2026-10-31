@@ -166,28 +166,39 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     },
   );
   assert.equal(parseRequest({ kind: 'sync.read', profileId: '../x' }), undefined);
-  // Moving nodes sends positions only, bounded in count, size and range.
-  const move = (positions: unknown[], revision: unknown = 3) => ({
-    kind: 'workflow.move',
+  // Saving sends a whole draft, bounded in size and depth; publishing names a revision.
+  const save = (draft: unknown, revision: unknown = 3) => ({
+    kind: 'workflow.save',
     workflowId: '00000000-0000-4000-8000-000000000001',
     revision,
-    positions,
+    draft,
   });
-  const many = Array.from({ length: 500 }, (_, index) => ({
-    nodeId: `node_${index}`,
-    x: index,
-    y: -index,
+  const nodes = Array.from({ length: 500 }, (_, index) => ({
+    id: `node_${index}`,
+    type: 'agent',
+    config: { goal: 'x'.repeat(200) },
+    position: { x: index, y: -index },
   }));
-  assert.ok(parseRequest(move(many)));
+  assert.ok(parseRequest(save({ nodes, connections: [] })));
+  const nested = (depth: number): unknown => (depth === 0 ? 1 : { next: nested(depth - 1) });
+  assert.ok(parseRequest(save({ data: nested(32) })));
   for (const value of [
-    move([]),
-    move([...many, { nodeId: 'one_more', x: 0, y: 0 }]),
-    move([{ nodeId: 'a', x: 1e7, y: 0 }]),
-    move([{ nodeId: 'a', x: 0, y: 0, draft: {} }]),
-    move([{ nodeId: 'a', x: 0, y: 0 }], -1),
-    move([{ nodeId: 'a', x: 0, y: 0 }], 1.5),
+    save({ data: 'x'.repeat(1024 * 1024 + 2048) }),
+    save({ data: nested(60) }),
+    save('not a document'),
+    save({ nodes }, -1),
+    save({ nodes }, 1.5),
+    { ...save({ nodes: [] }), path: '/api/v0/admin' },
+    { kind: 'workflow.publish', workflowId: '00000000-0000-4000-8000-000000000001' },
+    { kind: 'workflow.publish', workflowId: '../x', revision: 1 },
+    {
+      kind: 'workflow.move',
+      workflowId: '00000000-0000-4000-8000-000000000001',
+      revision: 1,
+      positions: [],
+    },
   ])
-    assert.equal(parseRequest(value), undefined);
+    assert.equal(parseRequest(value), undefined, JSON.stringify(value).slice(0, 80));
   // Resource reads take identifiers only, never paths; they need a live connection.
   const id = '00000000-0000-4000-8000-000000000001';
   for (const value of [

@@ -44,7 +44,7 @@ TCP is plain HTTP. On loopback that is fine. A device token sent over plain HTTP
   }
   ```
 
-  `code` is stable and meant for programs. `message` is for people and never contains raw exception text, credentials or provider responses. `diagnostics` lists the JSON pointers of rejected fields, at most 32. The [error codes](#error-codes) section lists every code.
+  `code` is stable and meant for programs. `message` is for people and never contains raw exception text, credentials or provider responses. `diagnostics` lists the JSON pointers of rejected fields, at most 32. `INVALID_WORKFLOW` says what is wrong with each one in its `message`. The [error codes](#error-codes) section lists every code.
 
 ### Command IDs
 

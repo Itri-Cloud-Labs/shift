@@ -67,6 +67,8 @@ export interface CommandView {
   resendable: boolean;
   // The server's explanation of a rejection; kept in memory only.
   message: string | null;
+  // The rejected fields; kept in memory only.
+  diagnostics: { field: string; message: string }[];
 }
 
 export interface CommandRequest {
@@ -124,6 +126,7 @@ interface Command extends SavedCommand {
   body: Record<string, unknown> | null;
   response: unknown;
   message: string | null;
+  diagnostics: { field: string; message: string }[];
 }
 
 interface Fetched {
@@ -421,7 +424,7 @@ export class SyncRuntime {
     this.#commands = new Map(
       (record?.commands ?? []).map((command) => [
         command.commandId,
-        { ...command, live: null, body: null, response: null, message: null },
+        { ...command, live: null, body: null, response: null, message: null, diagnostics: [] },
       ]),
     );
     this.#set({ updatedAt: this.#projection?.updatedAt ?? null });
@@ -831,6 +834,7 @@ export class SyncRuntime {
       body: structuredClone(request.body),
       response: null,
       message: null,
+      diagnostics: [],
     };
     this.#commands.set(command.commandId, command);
     for (const old of [...this.#commands.values()].slice(0, -maxCommands))
@@ -851,6 +855,7 @@ export class SyncRuntime {
     command.live = 'sending';
     command.state = 'unknown';
     command.message = null;
+    command.diagnostics = [];
     this.#notify();
     return this.#deliver(target, command);
   }
@@ -886,6 +891,7 @@ export class SyncRuntime {
         command.live === null &&
         (command.state === 'unknown' || command.state === 'not_applied'),
       message: command.message,
+      diagnostics: command.diagnostics,
     };
   }
 
@@ -915,6 +921,10 @@ export class SyncRuntime {
       command.state = 'rejected';
       command.code = exchange.body.code;
       command.message = exchange.body.message.slice(0, 2000);
+      command.diagnostics = exchange.body.diagnostics.map(({ field, message }) => ({
+        field: field.slice(0, 500),
+        message: message.slice(0, 500),
+      }));
     } else {
       command.state = 'unknown';
     }

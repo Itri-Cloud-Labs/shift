@@ -91,11 +91,10 @@ const bridge: DesktopBridge = {
       } as DesktopRequest),
   }),
   workflow: Object.freeze({
-    move: (
-      workflowId: string,
-      revision: number,
-      positions: { nodeId: string; x: number; y: number }[],
-    ) => invoke({ kind: 'workflow.move', workflowId, revision, positions }),
+    save: (workflowId: string, revision: number, draft: Record<string, unknown>) =>
+      invoke({ kind: 'workflow.save', workflowId, revision, draft }),
+    publish: (workflowId: string, revision: number) =>
+      invoke({ kind: 'workflow.publish', workflowId, revision }),
   }),
   device: Object.freeze({
     revoke: (deviceId: string) => invoke({ kind: 'device.revoke', deviceId }),

@@ -4,8 +4,8 @@ export const IPC_CHANNEL = 'shift:desktop:v1';
 // Main tells the renderer that connection or synchronized state changed; it carries no data.
 export const CHANGE_CHANNEL = 'shift:desktop:v1:changed';
 export const REQUEST_LIMIT = 8 * 1024;
-// Moving nodes sends every node's position at once; answers and verified results carry form data.
-export const MOVE_LIMIT = 64 * 1024;
+// Saving sends the whole draft, which the server limits to 1 MiB.
+export const SAVE_LIMIT = 1024 * 1024 + 1024;
 export const ANSWER_LIMIT = 64 * 1024;
 export const RESPONSE_LIMIT = 256 * 1024;
 // Workflow documents and runs with their executions can be larger than other answers.
@@ -73,21 +73,17 @@ export const requestSchema = v.variant('kind', [
     decision: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
     response: v.record(v.string(), v.unknown()),
   }),
+  // The server validates the draft's shape; a draft may be invalid until it is published.
   v.strictObject({
-    kind: v.literal('workflow.move'),
+    kind: v.literal('workflow.save'),
     workflowId: profileId,
     revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
-    positions: v.pipe(
-      v.array(
-        v.strictObject({
-          nodeId: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
-          x: v.pipe(v.number(), v.minValue(-1e6), v.maxValue(1e6)),
-          y: v.pipe(v.number(), v.minValue(-1e6), v.maxValue(1e6)),
-        }),
-      ),
-      v.minLength(1),
-      v.maxLength(500),
-    ),
+    draft: v.record(v.string(), v.unknown()),
+  }),
+  v.strictObject({
+    kind: v.literal('workflow.publish'),
+    workflowId: profileId,
+    revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
   }),
   v.strictObject({ kind: v.literal('data.devices') }),
   v.strictObject({ kind: v.literal('device.revoke'), deviceId: profileId }),
@@ -205,6 +201,16 @@ export const commandViewSchema = v.strictObject({
   resendable: v.boolean(),
   // The server's explanation of a rejected command, while this session still holds it.
   message: v.nullable(v.pipe(v.string(), v.maxLength(2000))),
+  // The rejected fields, as JSON pointers with what is wrong. In memory only, like `message`.
+  diagnostics: v.pipe(
+    v.array(
+      v.strictObject({
+        field: v.pipe(v.string(), v.maxLength(500)),
+        message: v.pipe(v.string(), v.maxLength(500)),
+      }),
+    ),
+    v.maxLength(32),
+  ),
 });
 export const syncViewSchema = v.strictObject({
   status: v.picklist(['stopped', 'syncing', 'live', 'reconnecting']),
@@ -305,12 +311,14 @@ export interface DesktopBridge {
     respond(interactionId: string, answer: Answer): Promise<DesktopResponse>;
   };
   workflow: {
-    // Saves node positions on the draft at `revision`; refused if the draft moved on.
-    move(
+    // Replaces the draft at `revision`; refused if the draft moved on.
+    save(
       workflowId: string,
       revision: number,
-      positions: { nodeId: string; x: number; y: number }[],
+      draft: Record<string, unknown>,
     ): Promise<DesktopResponse>;
+    // Publishes exactly the draft at `revision`.
+    publish(workflowId: string, revision: number): Promise<DesktopResponse>;
   };
   device: {
     revoke(deviceId: string): Promise<DesktopResponse>;
@@ -357,12 +365,13 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
   const kind =
     typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
   const limit =
-    kind === 'workflow.move'
-      ? MOVE_LIMIT
+    kind === 'workflow.save'
+      ? SAVE_LIMIT
       : kind === 'interaction.respond' || kind === 'run.control'
         ? ANSWER_LIMIT
         : REQUEST_LIMIT;
-  if (!withinLimit(value, limit)) return undefined;
+  // A draft may nest 32 levels below its envelope.
+  if (!withinLimit(value, limit, kind === 'workflow.save' ? 48 : 16)) return undefined;
   const result = v.safeParse(requestSchema, value);
   return result.success ? result.output : undefined;
 }
