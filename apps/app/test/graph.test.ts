@@ -88,7 +88,7 @@ test('ports follow each node type, including switch cases and approval outcomes'
     review: ['yes', 'no', 'timeout', 'error'],
     end: [],
   });
-  assert.deepEqual(outputPorts({ id: 'a', type: 'approval', config: {} }), [
+  assert.deepEqual(outputPorts({ id: 'a', type: 'approval', config: {}, bindings: {} }), [
     'approved',
     'rejected',
     'timeout',
@@ -98,7 +98,7 @@ test('ports follow each node type, including switch cases and approval outcomes'
   assert(nodeHeight(read.nodes[2]!) > nodeHeight(read.nodes[0]!));
   assert.equal(summary(read.nodes[3]!), 'Ship it?');
   assert.equal(
-    summary({ id: 'w', type: 'wait', config: { durationMs: 90 * 60_000 } }),
+    summary({ id: 'w', type: 'wait', config: { durationMs: 90 * 60_000 }, bindings: {} }),
     'Wait 1 h 30 min',
   );
 });
@@ -172,6 +172,7 @@ test('routes round-trip and ignore anything that is not an identifier', () => {
     projectId: '00000000-0000-4000-8000-000000000001',
     workflowId: '00000000-0000-4000-8000-000000000002',
     runId: null,
+    versionId: 'version_1',
     nodeId: 'review_2',
   };
   assert.deepEqual(parseRoute(formatRoute(route)), route);
@@ -179,12 +180,14 @@ test('routes round-trip and ignore anything that is not an identifier', () => {
     projectId: null,
     workflowId: null,
     runId: null,
+    versionId: null,
     nodeId: 'ok',
   });
   assert.deepEqual(parseRoute(''), {
     projectId: null,
     workflowId: null,
     runId: null,
+    versionId: null,
     nodeId: null,
   });
 });

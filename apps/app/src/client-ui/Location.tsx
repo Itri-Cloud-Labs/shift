@@ -1,4 +1,13 @@
-import { ChevronDown, ChevronRight, Folder, PenLine, Search, Workflow } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  History,
+  PenLine,
+  Plus,
+  Search,
+  Workflow,
+} from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { Overview } from '../shared/contracts.js';
 import { runStateLabels } from './graph.js';
@@ -39,7 +48,15 @@ export function LocationIsland({
   workflowId,
   navigate,
   badge,
+  versions,
+  version,
+  create,
 }: {
+  // Published versions of this workflow, oldest first, and the one on screen.
+  versions: { id: string; number: number; createdAt: number }[];
+  version: { id: string; number: number } | null;
+  // Absent while the server is out of reach.
+  create: { project: () => void; workflow: (projectId: string) => void } | null;
   // What sets the draft apart from what is published, when anything does.
   badge: string | null;
   overview: Overview;
@@ -54,6 +71,7 @@ export function LocationIsland({
   useDismiss(open !== null, () => setOpen(null), island, popover);
   const project = overview.projects.find((item) => item.id === projectId);
   const workflow = overview.workflows.find((item) => item.id === workflowId);
+  const activeVersionId = workflow?.activeVersionId ?? null;
   const runs = overview.runs
     .filter((run) => run.workflowId === workflowId)
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -103,10 +121,18 @@ export function LocationIsland({
                 <span className="status" data-status={runTone(run.state)}>
                   <StatusIcon status={runTone(run.state)} />
                 </span>
+              ) : version ? (
+                <History aria-hidden="true" />
               ) : (
                 <PenLine aria-hidden="true" />
               )}
-              <span>{run ? `Run · ${relativeTime(run.createdAt)}` : 'Draft'}</span>
+              <span>
+                {run
+                  ? `Run · ${relativeTime(run.createdAt)}`
+                  : version
+                    ? `Version ${version.number}`
+                    : 'Draft'}
+              </span>
               <ChevronDown aria-hidden="true" />
             </button>
           </>
@@ -119,8 +145,20 @@ export function LocationIsland({
           projectId={projectId}
           workflowId={workflowId}
           popover={popover}
+          create={
+            create && {
+              project: () => {
+                setOpen(null);
+                create.project();
+              },
+              workflow: (id) => {
+                setOpen(null);
+                create.workflow(id);
+              },
+            }
+          }
           choose={(next) => {
-            navigate({ ...next, runId: null, nodeId: null });
+            navigate({ ...next, runId: null, versionId: null, nodeId: null });
             if (next.workflowId) setOpen(null);
           }}
         />
@@ -136,9 +174,9 @@ export function LocationIsland({
           <button
             className="option"
             role="option"
-            aria-selected={!route.runId}
+            aria-selected={!route.runId && !version}
             onClick={() => {
-              navigate({ runId: null, nodeId: null });
+              navigate({ runId: null, versionId: null, nodeId: null });
               setOpen(null);
             }}
           >
@@ -146,6 +184,26 @@ export function LocationIsland({
             <span className="name">Draft</span>
             <span className="detail">Editable</span>
           </button>
+          <div className="column-label">Published versions</div>
+          {versions.length === 0 && <p className="option-empty">Nothing published yet.</p>}
+          {[...versions].reverse().map((item) => (
+            <button
+              key={item.id}
+              className="option"
+              role="option"
+              aria-selected={!route.runId && item.id === version?.id}
+              onClick={() => {
+                navigate({ runId: null, versionId: item.id, nodeId: null });
+                setOpen(null);
+              }}
+            >
+              <History aria-hidden="true" />
+              <span className="name">Version {item.number}</span>
+              <span className="detail">
+                {item.id === activeVersionId ? 'Active' : relativeTime(item.createdAt)}
+              </span>
+            </button>
+          ))}
           <div className="column-label">Runs</div>
           {runs.length === 0 && <p className="option-empty">No runs of this workflow yet.</p>}
           {runs.map((item) => (
@@ -155,7 +213,7 @@ export function LocationIsland({
               role="option"
               aria-selected={item.id === route.runId}
               onClick={() => {
-                navigate({ runId: item.id, nodeId: null });
+                navigate({ runId: item.id, versionId: null, nodeId: null });
                 setOpen(null);
               }}
             >
@@ -178,8 +236,10 @@ function Switcher({
   projectId,
   workflowId,
   popover,
+  create,
   choose,
 }: {
+  create: { project: () => void; workflow: (projectId: string) => void } | null;
   overview: Overview;
   projectId: string | null;
   workflowId: string | null;
@@ -254,6 +314,12 @@ function Switcher({
               {project.id === projectId && <span className="detail">Current</span>}
             </button>
           ))}
+          {create && (
+            <button className="option switcher-create" onClick={create.project}>
+              <Plus aria-hidden="true" />
+              <span className="name">Add a project</span>
+            </button>
+          )}
         </div>
         <div className="switcher-column" role="listbox" aria-label="Workflows">
           <div className="column-label">Workflows</div>
@@ -278,6 +344,15 @@ function Switcher({
               </span>
             </button>
           ))}
+          {create && shownProject && (
+            <button
+              className="option switcher-create"
+              onClick={() => create.workflow(shownProject.id)}
+            >
+              <Plus aria-hidden="true" />
+              <span className="name">New workflow</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

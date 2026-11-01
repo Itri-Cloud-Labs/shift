@@ -560,4 +560,25 @@ Status: the first of two parts of prompt 13 (M07). Rule, binding and schema buil
   - Save requests are bounded in size and depth.
   - Screenshots against a real server: dragging and saving, adding a node with its problems, undo, publishing as v2, and a conflict with a save from the CLI, resolved by taking theirs. Fixes after inspection: the problems panel covered the inspector.
   - Electron smoke with the new bridge surface.
-- **Not verified:** dragging between ports and reconnecting with real mouse input, and the keyboard route end to end. The model behind them is unit tested. Unsaved edits are lost if the app quits.
+- **Not verified:** dragging between ports and reconnecting with real mouse input, and the keyboard route end to end. The model behind them is unit tested. Unsaved edits are lost if the app quits. All three are covered in 13b.
+
+## Draft editor builders (13b)
+
+Status: finishes prompt 13 (M07). Richer forms and draft recovery are prompt 14. Date: 2026-11-01.
+
+- **Changed:** `client-ui/config.ts`, pure logic for rules, values, Transform data and form schemas; `client-ui/Builders.tsx`, the widgets for a node's values, rules, Switch cases, Transform data and schemas; forms for Manual trigger, Transform, Condition and Switch, and result and form fields for Agent, Human input and Approval; `client-ui/Create.tsx` and `project.create` and `workflow.create` on the bridge, so projects and workflows are created in the app; read-only published versions in the location menu, with `v` in the route; run input as widgets when the trigger's schema is flat; closing with unsaved edits asks first; new nodes land where they cover no other; adding a node no longer moves the view, and fitting no longer zooms a small graph past 1.1. `tools/budgets.mjs` is new, and capture steps can drag between elements, press keys and assert.
+- **Kept, not editable here:** rules with nested groups, nested schema and Transform fields, non-object schemas, optional bindings with a fallback, and execution selectors other than the latest stay exactly as they came, and the form says so. Prompt 14 builds those widgets.
+- **Verified:**
+  - `tools/capture.mjs` against a real server, each step asserting its result: a refused project path, adding a project, creating a workflow, building a Condition with a typed test, connecting ports, reconnecting an edge and dropping a connection on empty canvas with real mouse drags, connecting a port and adding and deleting a node with real key presses, saving, publishing, starting a run from a form, taking the true branch with `end_2` not reached, browsing version 1 read-only, a close held by unsaved edits, and Keep mine on a live conflict followed by a save over theirs.
+  - Unit tests for rules, values, schemas, binding and case renames, literals that are not renamed, and placement.
+- **Budgets:** chosen after a first measurement, so they record what is acceptable rather than a prior target. Measured with `tools/budgets.mjs` under xvfb with software rendering and no GPU, so frame times are pessimistic. Graphs are chains laid out in rows; 50 and 200 nodes are representative and 500 is the server's limit.
+
+  | Nodes | Open (budget) | Drag frame p95 (budget) | Edit shows (budget) |
+  | ----- | ------------- | ----------------------- | ------------------- |
+  | 50    | 5 ms (500 ms) | 50 ms (50 ms)           | 182 ms (300 ms)     |
+  | 200   | 867 ms (1 s)  | 117 ms (150 ms)         | 247 ms (300 ms)     |
+  | 500   | 1.9 s (2.5 s) | 417 ms (500 ms)         | 501 ms (600 ms)     |
+
+  The 50-node open is low because that workflow was already open when the step began. Measuring found opening took 59 s at 500 nodes, because every card asked to be re-measured on mount; fixed. Unchanged nodes and edges now keep their objects during a drag. A drag at 500 nodes is still only a few frames a second here.
+
+- **Not verified:** the native quit dialog itself (capture answers it, so only the hold is proven), and frame times on a real GPU.

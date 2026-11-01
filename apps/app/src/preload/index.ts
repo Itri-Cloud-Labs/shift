@@ -95,6 +95,11 @@ const bridge: DesktopBridge = {
       invoke({ kind: 'workflow.save', workflowId, revision, draft }),
     publish: (workflowId: string, revision: number) =>
       invoke({ kind: 'workflow.publish', workflowId, revision }),
+    create: (projectId: string, name: string) =>
+      invoke({ kind: 'workflow.create', projectId, name }),
+  }),
+  project: Object.freeze({
+    create: (path: string) => invoke({ kind: 'project.create', path }),
   }),
   device: Object.freeze({
     revoke: (deviceId: string) => invoke({ kind: 'device.revoke', deviceId }),

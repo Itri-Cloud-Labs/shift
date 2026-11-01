@@ -2159,3 +2159,57 @@ textarea {
   padding: 0;
   list-style: none;
 }
+
+/* The builders in the node form. */
+.builder-row {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.builder-row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.builder-row-head .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.builder-row-head > .button {
+  margin-top: 26px;
+}
+
+.builder-pair {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: var(--space-2);
+}
+
+.run-input-fields {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.create-dialog {
+  top: 20vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-modal);
+  width: min(460px, calc(100vw - 32px));
+  padding: var(--space-4);
+  box-shadow: var(--shadow-modal);
+  animation: island-in var(--duration) var(--ease-out);
+}
+
+.create-dialog h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.switcher-create {
+  width: 100%;
+}

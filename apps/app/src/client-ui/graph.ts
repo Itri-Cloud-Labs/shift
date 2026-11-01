@@ -9,6 +9,7 @@ export interface DocumentNode {
   id: string;
   type: string;
   config: Record<string, unknown>;
+  bindings: Record<string, unknown>;
   position?: { x: number; y: number };
 }
 
@@ -46,6 +47,7 @@ export function readDocument(value: unknown): GraphDocument {
       id: node['id'],
       type: node['type'],
       config: record(node['config']),
+      bindings: record(node['bindings']),
       ...(typeof position['x'] === 'number' && typeof position['y'] === 'number'
         ? { position: { x: position['x'], y: position['y'] } }
         : {}),

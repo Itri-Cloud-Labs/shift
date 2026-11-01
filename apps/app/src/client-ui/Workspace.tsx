@@ -43,10 +43,13 @@ import {
   reconnect,
   receive,
   redo,
+  renameBinding,
+  renameCase,
   renameNode,
   sameDraft,
   saved,
   serverProblems,
+  setBinding,
   setConfig,
   startLocal,
   takeTheirs,
@@ -59,6 +62,7 @@ import {
   type LocalDraft,
   type NodePosition,
 } from './draft.js';
+import { CreateDialog, type Creating } from './Create.js';
 import { ConflictIsland, NodeEditor, NodePicker, ProblemsPanel } from './Editor.js';
 import { Palette } from './Palette.js';
 import { paletteEntries, type PaletteAction, type PaletteEntry } from './commands.js';
@@ -66,6 +70,8 @@ import { useRoute } from './route.js';
 import { Settings, type SettingsSection } from './Settings.js';
 
 const nodeTypes = { card: NodeCard };
+// A small graph is not blown up to fill the window.
+export const fitOptions = { padding: 0.15, maxZoom: 1.1 };
 
 interface Loaded<T> {
   value: T;
@@ -140,6 +146,15 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   );
 
   const inRun = route.runId !== null;
+  // A published version, read-only; a version of another workflow is not one to show.
+  const shownVersion = inRun
+    ? null
+    : (workflow?.value.versions.find((item) => item.id === route.versionId) ?? null);
+  const viewed = useResource<unknown>(
+    workflowId && shownVersion ? () => bridge().data.version(workflowId, shownVersion.id) : null,
+    (value) => (value as { version: { document: unknown } }).version.document,
+    `version:${shownVersion?.id}`,
+  );
 
   // Local edits, per workflow, so switching away keeps them. They stay apart from the server's
   // revisions until the owner saves.
@@ -187,7 +202,11 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const dirty = local ? isDirty(local) : false;
   const present = local?.history.present;
 
-  const source = inRun ? version?.value : (present ?? workflow?.value.draft);
+  const source = inRun
+    ? version?.value
+    : shownVersion
+      ? viewed?.value
+      : (present ?? workflow?.value.draft);
   const document = useMemo<GraphDocument | null>(
     () => (source === undefined ? null : readDocument(source)),
     [source],
@@ -214,6 +233,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const [cancelling, setCancelling] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settings, setSettings] = useState<SettingsSection | null>(null);
+  const [creating, setCreating] = useState<Creating | null>(null);
+  const createProject = () => setCreating({ kind: 'project' });
   useEffect(() => setCancelling(false), [route.runId]);
 
   // ⌘K (Ctrl+K elsewhere) from anywhere but Settings, which is a modal of its own; ⌘, opens it.
@@ -309,7 +330,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
 
   // ---------- Editing ----------
 
-  const editable = !inRun && workflowId !== null && present !== undefined;
+  const editable = !inRun && !shownVersion && workflowId !== null && present !== undefined;
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [picker, setPicker] = useState<{
     position: { x: number; y: number };
@@ -321,8 +342,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const [pendingPublish, setPendingPublish] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const problems = useMemo(
-    () => (present && !inRun ? [...diagnose(present), ...publishProblems] : []),
-    [present, inRun, publishProblems],
+    () => (present && editable ? [...diagnose(present), ...publishProblems] : []),
+    [present, editable, publishProblems],
   );
   const problemCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -504,6 +525,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       picker !== null ||
       inputOpen ||
       resolveFor !== null ||
+      creating !== null ||
       local?.theirs
     )
       return;
@@ -544,6 +566,17 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       }
     }
   };
+  // Edits this computer has not saved are lost with the window, so closing asks first (main shows
+  // the question). Any workflow's edits count, not just the one on screen.
+  const unsaved =
+    typing || moving || pendingSave !== null || Object.values(locals).some((item) => isDirty(item));
+  useEffect(() => {
+    if (!unsaved) return;
+    const hold = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', hold);
+    return () => window.removeEventListener('beforeunload', hold);
+  }, [unsaved]);
+
   // Runs after what is pending has become an edit and rendered.
   const requestSave = () => {
     flushMove.current?.();
@@ -565,7 +598,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     setSelectedEdge(null);
     setPicker(null);
     setPublishProblems([]);
-  }, [workflowId, inRun]);
+  }, [workflowId, inRun, shownVersion?.id]);
 
   const latestVersion = workflow?.value.versions.at(-1);
   const publishLabel = inRun
@@ -602,12 +635,22 @@ function Shell({ desktop }: { desktop: DesktopState }) {
               },
             ]
           : []),
-        ...(inRun
+        ...(inRun || shownVersion
           ? [
               {
                 id: 'draft',
                 label: 'Open the draft',
-                run: () => navigate({ runId: null, nodeId: null }),
+                run: () => navigate({ runId: null, versionId: null, nodeId: null }),
+              },
+            ]
+          : []),
+        ...(live ? [{ id: 'new-project', label: 'Add a project', run: createProject }] : []),
+        ...(live && projectId
+          ? [
+              {
+                id: 'new-workflow',
+                label: 'New workflow',
+                run: () => setCreating({ kind: 'workflow', projectId }),
               },
             ]
           : []),
@@ -639,7 +682,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
               {
                 id: 'fit',
                 label: 'Fit the graph',
-                run: () => void flow.fitView({ padding: 0.2, duration: 200 }),
+                run: () => void flow.fitView(fitOptions),
               },
               {
                 id: 'list',
@@ -667,12 +710,19 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     else if (target.kind === 'action') target.run();
     else if (target.kind === 'node') select(target.nodeId);
     else if (target.kind === 'project')
-      navigate({ projectId: target.projectId, workflowId: null, runId: null, nodeId: null });
+      navigate({
+        projectId: target.projectId,
+        workflowId: null,
+        runId: null,
+        versionId: null,
+        nodeId: null,
+      });
     else if (target.kind === 'workflow')
       navigate({
         projectId: target.projectId,
         workflowId: target.workflowId,
         runId: null,
+        versionId: null,
         nodeId: null,
       });
     else
@@ -686,17 +736,25 @@ function Shell({ desktop }: { desktop: DesktopState }) {
 
   const hint = !overview.projects.length ? (
     <Hint title="Add a project to start">
-      Projects are repositories on the server. Add one there with{' '}
-      <code>shift project add &lt;path&gt;</code>, and it appears here.
+      Projects are repositories on the server.{' '}
+      <button className="button quiet" disabled={!live} onClick={createProject}>
+        Add a project
+      </button>
     </Hint>
   ) : !workflowId ? (
     <Hint title="This project has no workflows">
-      Create one on the server with <code>shift workflow create</code>. It opens here as soon as it
-      exists.
+      A workflow is a graph of steps that runs in this project.{' '}
+      <button
+        className="button quiet"
+        disabled={!live || !projectId}
+        onClick={() => projectId && setCreating({ kind: 'workflow', projectId })}
+      >
+        New workflow
+      </button>
     </Hint>
   ) : document && document.nodes.length === 0 ? (
     <Hint title="This draft is empty">
-      {inRun ? 'It has no nodes.' : 'Add a manual trigger with the + in the toolbar to begin.'}
+      {!editable ? 'It has no nodes.' : 'Add a manual trigger with the + in the toolbar to begin.'}
     </Hint>
   ) : null;
 
@@ -705,7 +763,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       <div className="titlebar" />
       {document ? (
         <Canvas
-          key={`${workflowId}:${inRun}`}
+          key={`${workflowId}:${inRun}:${shownVersion?.id}`}
           document={document}
           runs={runs}
           inRun={inRun}
@@ -766,14 +824,26 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           projectId={projectId}
           workflowId={workflowId}
           navigate={navigate}
+          versions={workflow?.value.versions ?? []}
+          version={shownVersion}
+          create={
+            live
+              ? {
+                  project: createProject,
+                  workflow: (id) => setCreating({ kind: 'workflow', projectId: id }),
+                }
+              : null
+          }
           badge={
-            inRun || !present
-              ? null
-              : dirty
-                ? 'Draft · unsaved changes'
-                : !sameDraft(present, active?.value)
-                  ? 'Draft · unpublished changes'
-                  : null
+            shownVersion
+              ? 'Read only'
+              : inRun || !present
+                ? null
+                : dirty
+                  ? 'Draft · unsaved changes'
+                  : !sameDraft(present, active?.value)
+                    ? 'Draft · unpublished changes'
+                    : null
           }
         />
         {inRun && runValue && (
@@ -840,6 +910,16 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                     return problem;
                   },
                   set: (key, value) => edit((draft) => setConfig(draft, selected, key, value)),
+                  bindings: {
+                    set: (name, source) =>
+                      edit((draft) => setBinding(draft, selected, name, source)),
+                    rename: (from, to) =>
+                      from === to
+                        ? null
+                        : tryEdit((draft) => renameBinding(draft, selected, from, to)),
+                  },
+                  renameCase: (index, next) =>
+                    tryEdit((draft) => renameCase(draft, selected, index, next)),
                   connectPort: (port, target) => connectPort(selected, port, target),
                   typing: setTyping,
                   duplicate: () => duplicate(selected),
@@ -900,6 +980,25 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           schema={trigger?.config['inputSchema']}
           start={(input) => void start(input)}
           close={() => setInputOpen(false)}
+        />
+      )}
+      {creating && (
+        <CreateDialog
+          creating={creating}
+          live={live}
+          close={() => setCreating(null)}
+          created={(id) => {
+            const opened = creating;
+            setCreating(null);
+            navigate({
+              ...(opened.kind === 'project'
+                ? { projectId: id, workflowId: null }
+                : { projectId: opened.projectId, workflowId: id }),
+              runId: null,
+              versionId: null,
+              nodeId: null,
+            });
+          }}
         />
       )}
       {settings && (
@@ -1058,59 +1157,89 @@ function Canvas({
       if (!dragging.current) save();
     }
   };
+  // A node that did not change keeps its object, so a drag redraws the dragged card alone.
+  const built = useRef(new Map<string, CardNode>());
   const nodes = useMemo<CardNode[]>(
     () =>
-      document.nodes.map((node) => ({
-        id: node.id,
-        type: 'card',
-        position: positions.get(node.id) ?? { x: 0, y: 0 },
-        ...(measured[node.id] ? { measured: measured[node.id] } : {}),
-        selected: node.id === selected,
-        data: {
+      document.nodes.map((node) => {
+        const position = positions.get(node.id) ?? { x: 0, y: 0 };
+        const size = measured[node.id];
+        const data = {
           node,
           ...(inRun ? { run: runs?.get(node.id) ?? null } : {}),
           needsYou: node.id === needsYou,
           editable: editing !== null,
           problems: problems[node.id] ?? 0,
-        },
-      })),
+        };
+        const before = built.current.get(node.id);
+        if (
+          before &&
+          before.position === position &&
+          before.measured === size &&
+          before.selected === (node.id === selected) &&
+          before.data.node === data.node &&
+          before.data.run === data.run &&
+          before.data.needsYou === data.needsYou &&
+          before.data.editable === data.editable &&
+          before.data.problems === data.problems
+        )
+          return before;
+        const card: CardNode = {
+          id: node.id,
+          type: 'card',
+          position,
+          ...(size ? { measured: size } : {}),
+          selected: node.id === selected,
+          data,
+        };
+        built.current.set(node.id, card);
+        return card;
+      }),
     [document, positions, measured, runs, inRun, needsYou, selected, editing !== null, problems],
   );
+  const builtEdges = useRef(new Map<string, Edge>());
   const edges = useMemo<Edge[]>(
     () =>
       document.connections.map((connection) => {
         const taken = followedConnections?.has(connection.id) ?? false;
-        return {
+        // A connection going back to an earlier node is drawn differently; it is a loop.
+        const className = [
+          inRun ? (taken ? 'followed' : 'muted') : '',
+          (positions.get(connection.toNodeId)?.x ?? 0) <=
+          (positions.get(connection.fromNodeId)?.x ?? 0)
+            ? 'backward'
+            : '',
+        ].join(' ');
+        const isSelected = editing?.selectedEdge === connection.id;
+        const before = builtEdges.current.get(connection.id);
+        if (
+          before &&
+          before.source === connection.fromNodeId &&
+          before.sourceHandle === connection.fromPort &&
+          before.target === connection.toNodeId &&
+          before.className === className &&
+          before.selected === isSelected &&
+          before.selectable === (editing !== null)
+        )
+          return before;
+        const edge: Edge = {
           id: connection.id,
           source: connection.fromNodeId,
           sourceHandle: connection.fromPort,
           target: connection.toNodeId,
           targetHandle: 'input',
           type: 'default',
-          // A connection going back to an earlier node is drawn differently; it is a loop.
-          className: [
-            inRun ? (taken ? 'followed' : 'muted') : '',
-            (positions.get(connection.toNodeId)?.x ?? 0) <=
-            (positions.get(connection.fromNodeId)?.x ?? 0)
-              ? 'backward'
-              : '',
-          ].join(' '),
+          className,
           focusable: false,
           selectable: editing !== null,
           reconnectable: editing !== null,
-          selected: editing?.selectedEdge === connection.id,
+          selected: isSelected,
         };
+        builtEdges.current.set(connection.id, edge);
+        return edge;
       }),
     [document, followedConnections, inRun, positions, editing !== null, editing?.selectedEdge],
   );
-  // Frame the graph whenever a different one opens.
-  const shape = document.nodes.map((node) => node.id).join('|');
-  useEffect(() => {
-    const frame = requestAnimationFrame(
-      () => void flow.fitView({ padding: 0.15, minZoom: 0.75, maxZoom: 1.1 }),
-    );
-    return () => cancelAnimationFrame(frame);
-  }, [shape, flow]);
   return (
     <div className="canvas">
       <ReactFlow
@@ -1153,7 +1282,7 @@ function Canvas({
         minZoom={0.2}
         maxZoom={1.75}
         fitView
-        fitViewOptions={{ padding: 0.15, minZoom: 0.75, maxZoom: 1.1 }}
+        fitViewOptions={fitOptions}
         proOptions={{ hideAttribution: true }}
         colorMode="system"
         aria-label="Workflow graph"

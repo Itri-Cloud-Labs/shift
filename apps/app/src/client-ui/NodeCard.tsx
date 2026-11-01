@@ -1,5 +1,5 @@
 import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
-import { memo, useEffect } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import {
   outputPorts,
   hasInput,
@@ -33,7 +33,12 @@ export const NodeCard = memo(function NodeCard({ id, data }: NodeProps<CardNode>
   // Handles are only measured when told: connections need the new ones found.
   const updateInternals = useUpdateNodeInternals();
   const portNames = ports.join('|');
-  useEffect(() => updateInternals(id), [id, portNames, updateInternals]);
+  const measuredPorts = useRef(portNames);
+  useEffect(() => {
+    if (measuredPorts.current === portNames) return;
+    measuredPorts.current = portNames;
+    updateInternals(id);
+  }, [id, portNames, updateInternals]);
   const latest = run?.executions.at(-1);
   const status = data.needsYou ? 'attention' : (run?.status ?? null);
   const inRun = run !== undefined;
