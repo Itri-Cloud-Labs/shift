@@ -306,9 +306,13 @@ export function withKind(field: Raw, kind: FieldKind): Raw {
   return { ...shared, type: kind };
 }
 
-// An empty schema is left out, except where the node requires one.
+// A schema with nothing in it is left out, except where the node requires one. Other keywords
+// are constraints the widgets do not show, so they keep it.
 export const emptyToUndefined = (schema: Raw): Raw | undefined =>
-  Object.keys(propertiesOf(schema)).length === 0 ? undefined : schema;
+  Object.keys(propertiesOf(schema)).length === 0 &&
+  Object.keys(schema).every((key) => key === 'type' || key === 'properties')
+    ? undefined
+    : schema;
 
 // A form the run input can render with widgets rather than asking for JSON.
 export function plainForm(schema: unknown): boolean {

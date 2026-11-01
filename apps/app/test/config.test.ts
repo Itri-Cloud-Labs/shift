@@ -115,6 +115,8 @@ test('schema edits keep the keywords they do not touch', () => {
   });
   assert.deepEqual(withKind({ type: 'string' }, 'choice'), { type: 'string', enum: [] });
   assert.equal(emptyToUndefined({ type: 'object', properties: {} }), undefined);
+  const constrained = { type: 'object', properties: {}, minProperties: 1 };
+  assert.equal(emptyToUndefined(constrained), constrained);
   assert.equal(Object.keys(addField(addField(undefined))['properties'] as object).length, 2);
 });
 
