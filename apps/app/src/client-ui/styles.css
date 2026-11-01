@@ -151,7 +151,9 @@ textarea {
 }
 
 .island,
-.island * {
+.island *,
+.popover,
+.popover * {
   app-region: no-drag;
 }
 
@@ -262,7 +264,8 @@ textarea {
   top: 8px;
   left: 8px;
   right: 264px;
-  z-index: var(--z-island);
+  /* Its menus open over the islands below it, such as the node list. */
+  z-index: var(--z-popover);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -294,6 +297,10 @@ textarea {
 
 .top-left > .island {
   position: static;
+  pointer-events: auto;
+}
+
+.top-left > .popover {
   pointer-events: auto;
 }
 

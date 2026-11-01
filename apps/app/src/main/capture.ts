@@ -19,6 +19,8 @@ interface Step {
   drag?: { node: string; by: [number, number] };
   // Drags from one element to another with real mouse input, by CSS selector.
   pull?: { from: string; to: string | [number, number] };
+  // Clicks an element with real mouse input, so what covers it or ignores the pointer counts.
+  click?: string;
   // Real key presses, for what must work without a mouse.
   keys?: string[];
   // Asks the window to close; a guard may hold it open.
@@ -93,6 +95,14 @@ export async function runCapture(window: BrowserWindow, core: ClientCore): Promi
         await delay(30);
       }
       contents.sendInputEvent({ type: 'mouseUp', x: toX, y: toY, button: 'left', clickCount: 1 });
+    }
+    if (step.click) {
+      const [x, y] = (await contents.executeJavaScript(
+        `(() => { const r = document.querySelector(${JSON.stringify(step.click)}).getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; })()`,
+      )) as [number, number];
+      contents.sendInputEvent({ type: 'mouseMove', x, y });
+      contents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+      contents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
     }
     if (step.keys) contents.focus();
     for (const keyCode of step.keys ?? []) {

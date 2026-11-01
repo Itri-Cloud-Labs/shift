@@ -324,6 +324,49 @@ try {
         "[...document.querySelectorAll('.conflict button')].find((b) => b.textContent.startsWith('Discard')).click()",
       wait: 800,
     },
+    // The location menus with a real mouse, with the node list open beneath them.
+    {
+      name: 'm0-list-open',
+      hash: base,
+      wait: 800,
+      expect: 'document.querySelector(\'[aria-label="Close list"]\')',
+    },
+    {
+      name: 'm1-runs-menu',
+      click: '[data-crumb=run]',
+      wait: 400,
+      expect: "document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm2-open-version',
+      click: '.runs-menu .option:nth-of-type(2)',
+      wait: 800,
+      expect: "location.hash.includes('/v/') && !document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm3-runs-menu',
+      click: '[data-crumb=run]',
+      wait: 400,
+      expect: "document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm4-back-to-draft',
+      click: '.runs-menu .option',
+      wait: 800,
+      expect: "!location.hash.includes('/v/') && !document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm5-switcher',
+      click: '.location .crumb',
+      wait: 400,
+      expect: "document.querySelector('.switcher')",
+    },
+    {
+      name: 'm6-switch-workflow',
+      click: '.switcher-column[aria-label=Workflows] .option:not(.active)',
+      wait: 800,
+      expect: "!document.querySelector('.switcher') && !location.hash.includes('${workflow.id}')",
+    },
     // The whole journey through the UI, with no JSON: add a project and a workflow, build a branch,
     // connect it by mouse and by keyboard, publish, run, browse versions. `J` is defined in j00.
     {
