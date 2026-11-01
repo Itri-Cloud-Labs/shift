@@ -190,7 +190,7 @@ test('routes round-trip and ignore anything that is not an identifier', () => {
 });
 
 test('moving nodes rewrites only their positions on the latest draft', async () => {
-  const { withPositions } = await import('../src/client-core/positions.js');
+  const { withPositions } = await import('../src/client-ui/draft.js');
   const draft = {
     formatVersion: 1,
     nodes: [

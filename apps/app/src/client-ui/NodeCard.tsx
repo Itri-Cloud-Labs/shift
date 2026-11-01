@@ -1,5 +1,5 @@
-import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { Handle, Position, useUpdateNodeInternals, type Node, type NodeProps } from '@xyflow/react';
+import { memo, useEffect } from 'react';
 import {
   outputPorts,
   hasInput,
@@ -18,15 +18,22 @@ export type CardData = {
   run?: NodeRun | null;
   // A request in this node is waiting for the owner.
   needsYou?: boolean;
+  // On an editable draft: ports can be dragged, and problems are marked in words.
+  editable?: boolean;
+  problems?: number;
 };
 
 export type CardNode = Node<CardData, 'card'>;
 
 // An n8n-style node card: type icon, name, one line of configuration and its named ports. In a
 // run it also shows its state in words and, after a loop, how many times it ran.
-export const NodeCard = memo(function NodeCard({ data }: NodeProps<CardNode>) {
+export const NodeCard = memo(function NodeCard({ id, data }: NodeProps<CardNode>) {
   const { node, run } = data;
   const ports = outputPorts(node);
+  // Handles are only measured when told: connections need the new ones found.
+  const updateInternals = useUpdateNodeInternals();
+  const portNames = ports.join('|');
+  useEffect(() => updateInternals(id), [id, portNames, updateInternals]);
   const latest = run?.executions.at(-1);
   const status = data.needsYou ? 'attention' : (run?.status ?? null);
   const inRun = run !== undefined;
@@ -43,7 +50,12 @@ export const NodeCard = memo(function NodeCard({ data }: NodeProps<CardNode>) {
       aria-label={`${node.id}, ${typeLabels[node.type] ?? node.type}${status ? `, ${label}` : ''}`}
     >
       {hasInput(node) && (
-        <Handle type="target" position={Position.Left} id="input" isConnectable={false} />
+        <Handle
+          type="target"
+          position={Position.Left}
+          id="input"
+          isConnectable={data.editable === true}
+        />
       )}
       {status && status !== 'not_reached' && (
         <span className="node-state" data-status={status}>
@@ -52,6 +64,12 @@ export const NodeCard = memo(function NodeCard({ data }: NodeProps<CardNode>) {
           {passes > 1 && <span className="node-loop">×{passes}</span>}
         </span>
       )}
+      {data.problems ? (
+        <span className="node-state" data-status="failed">
+          <StatusIcon status="failed" />
+          {data.problems === 1 ? '1 problem' : `${data.problems} problems`}
+        </span>
+      ) : null}
       <div className="node-header">
         <span className="node-icon">
           <TypeIcon type={node.type} />
@@ -79,7 +97,7 @@ export const NodeCard = memo(function NodeCard({ data }: NodeProps<CardNode>) {
           type="source"
           id={port}
           position={Position.Right}
-          isConnectable={false}
+          isConnectable={data.editable === true}
           style={{ top: portOffset(index) }}
         />
       ))}

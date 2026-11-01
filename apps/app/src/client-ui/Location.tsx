@@ -38,7 +38,10 @@ export function LocationIsland({
   projectId,
   workflowId,
   navigate,
+  badge,
 }: {
+  // What sets the draft apart from what is published, when anything does.
+  badge: string | null;
   overview: Overview;
   route: Route;
   projectId: string | null;
@@ -108,6 +111,7 @@ export function LocationIsland({
             </button>
           </>
         )}
+        {badge && <span className="badge location-badge">{badge}</span>}
       </nav>
       {open === 'switcher' && (
         <Switcher

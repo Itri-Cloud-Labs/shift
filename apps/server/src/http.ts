@@ -510,9 +510,10 @@ export function createHttpServer(options: {
       code: safe.code,
       message: safe.message,
       retryable: safe.retryable,
-      diagnostics: safe.fields
-        .slice(0, 32)
-        .map((field) => ({ field: field.slice(0, 256), message: 'Invalid field.' })),
+      diagnostics: safe.fields.slice(0, 32).map((field) => ({
+        field: field.slice(0, 256),
+        message: safe.fieldMessages[field]?.slice(0, 500) ?? 'Invalid field.',
+      })),
     };
     if (!validateProtocolError(payload)) {
       res.status(500).end();

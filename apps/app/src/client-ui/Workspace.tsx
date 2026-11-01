@@ -4,7 +4,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  type Connection,
   type Edge,
+  type FinalConnectionState,
   type NodeChange,
 } from '@xyflow/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -28,12 +30,40 @@ import { finished, followed, layout, nodeRuns, readDocument, type GraphDocument 
 import { LocationIsland } from './Location.js';
 import { NodeCard, type CardNode } from './NodeCard.js';
 import { Inspector, ListView } from './Panels.js';
+import {
+  addNode,
+  commit,
+  connect,
+  deleteConnection,
+  deleteNode,
+  diagnose,
+  duplicateNode,
+  isDirty,
+  keepMine,
+  reconnect,
+  receive,
+  redo,
+  renameNode,
+  sameDraft,
+  saved,
+  serverProblems,
+  setConfig,
+  startLocal,
+  takeTheirs,
+  undo,
+  withLayout,
+  withPositions,
+  type Draft,
+  type DraftProblem,
+  type EditResult,
+  type LocalDraft,
+  type NodePosition,
+} from './draft.js';
+import { ConflictIsland, NodeEditor, NodePicker, ProblemsPanel } from './Editor.js';
 import { Palette } from './Palette.js';
 import { paletteEntries, type PaletteAction, type PaletteEntry } from './commands.js';
 import { useRoute } from './route.js';
 import { Settings, type SettingsSection } from './Settings.js';
-
-type NodePosition = { nodeId: string; x: number; y: number };
 
 const nodeTypes = { card: NodeCard };
 
@@ -110,7 +140,54 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   );
 
   const inRun = route.runId !== null;
-  const source = inRun ? version?.value : workflow?.value.draft;
+
+  // Local edits, per workflow, so switching away keeps them. They stay apart from the server's
+  // revisions until the owner saves.
+  const [locals, setLocals] = useState<Record<string, LocalDraft>>({});
+  // Text typed into a field and not committed yet counts as a local edit.
+  const [typing, setTyping] = useState(false);
+  // So is a moved node waiting for its debounce; `flushMove` makes it an edit at once.
+  const [moving, setMoving] = useState(false);
+  const flushMove = useRef<(() => void) | null>(null);
+  const [pendingSave, setPendingSave] = useState<{
+    workflowId: string;
+    commandId: string | null;
+    revision: number;
+    sent: Draft;
+  } | null>(null);
+  const local = workflowId ? locals[workflowId] : undefined;
+  const updateLocal = (change: (current: LocalDraft) => LocalDraft) => {
+    if (!workflowId) return;
+    setLocals((all) => {
+      const current = all[workflowId];
+      return current ? { ...all, [workflowId]: change(current) } : all;
+    });
+  };
+  // A save's own new revision must not look like someone else's, so reads wait for its outcome.
+  const serverDraft = workflow?.value.draft as Draft | undefined;
+  const serverRevision = workflow?.value.draftRevision;
+  useEffect(() => {
+    if (
+      !workflowId ||
+      !serverDraft ||
+      serverRevision === undefined ||
+      pendingSave ||
+      typing ||
+      moving
+    )
+      return;
+    setLocals((all) => {
+      const current = all[workflowId];
+      const next = current
+        ? receive(current, serverRevision, serverDraft)
+        : startLocal(serverRevision, serverDraft);
+      return next === current ? all : { ...all, [workflowId]: next };
+    });
+  }, [workflowId, serverDraft, serverRevision, pendingSave, typing, moving]);
+  const dirty = local ? isDirty(local) : false;
+  const present = local?.history.present;
+
+  const source = inRun ? version?.value : (present ?? workflow?.value.draft);
   const document = useMemo<GraphDocument | null>(
     () => (source === undefined ? null : readDocument(source)),
     [source],
@@ -230,25 +307,265 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     }
   };
 
-  // Saves node positions on the draft at the revision on screen.
-  const move = async (positions: NodePosition[]): Promise<boolean> => {
-    if (!workflowId || !workflow?.value) return false;
-    const answer = await ask(
-      bridge().workflow.move(workflowId, workflow.value.draftRevision, positions),
-    );
-    if (answer.kind === 'command' && answer.command.state === 'accepted') {
-      setNotice(null);
-      return true;
-    }
-    setNotice(
-      answer.kind === 'command' && answer.command.state === 'unknown'
-        ? { text: 'Checking whether the layout was saved…', tone: 'busy' }
-        : answer.kind === 'command' && answer.command.code === 'REVISION_CONFLICT'
-          ? { text: 'This draft changed elsewhere, so the move was not saved.', tone: 'problem' }
-          : { text: 'The move could not be saved.', tone: 'problem' },
-    );
-    return false;
+  // ---------- Editing ----------
+
+  const editable = !inRun && workflowId !== null && present !== undefined;
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [picker, setPicker] = useState<{
+    position: { x: number; y: number };
+    from: { nodeId: string; port: string } | null;
+  } | null>(null);
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [publishProblems, setPublishProblems] = useState<DraftProblem[]>([]);
+  const [focusNode, setFocusNode] = useState<string | null>(null);
+  const [pendingPublish, setPendingPublish] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const problems = useMemo(
+    () => (present && !inRun ? [...diagnose(present), ...publishProblems] : []),
+    [present, inRun, publishProblems],
+  );
+  const problemCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const problem of problems)
+      if (problem.nodeId && problem.severity === 'error')
+        counts[problem.nodeId] = (counts[problem.nodeId] ?? 0) + 1;
+    return counts;
+  }, [problems]);
+
+  // Every edit is one undo step, on top of the layout the owner is looking at.
+  const edit = (change: (draft: Draft) => Draft) => {
+    setPublishProblems([]);
+    updateLocal((current) => {
+      const next = change(withLayout(current.history.present));
+      return { ...current, history: commit(current.history, next) };
+    });
   };
+  const apply = (result: EditResult) => {
+    if ('problem' in result) {
+      setNotice({ text: result.problem, tone: 'problem' });
+      return null;
+    }
+    setNotice(null);
+    return result.draft;
+  };
+  const tryEdit = (change: (draft: Draft) => EditResult): string | null => {
+    if (!present) return null;
+    const result = change(withLayout(present));
+    const next = apply(result);
+    if (next) edit(() => next);
+    return 'problem' in result ? result.problem : null;
+  };
+  const clearSelection = (nodeId: string) => {
+    if (route.nodeId === nodeId) navigate({ nodeId: null });
+  };
+  const add = (type: string) => {
+    if (!picker || !present) return;
+    const { position, from } = picker;
+    setPicker(null);
+    const added = addNode(withLayout(present), type, position);
+    const linked = from ? connect(added.draft, from.nodeId, from.port, added.nodeId) : null;
+    edit(() => (linked && 'draft' in linked ? linked.draft : added.draft));
+    if (linked && 'problem' in linked) setNotice({ text: linked.problem, tone: 'problem' });
+    setFocusNode(added.nodeId);
+    navigate({ nodeId: added.nodeId });
+  };
+  const removeNode = (nodeId: string) => {
+    edit((draft) => deleteNode(draft, nodeId));
+    clearSelection(nodeId);
+  };
+  const duplicate = (nodeId: string) => {
+    if (!present) return;
+    const copy = duplicateNode(withLayout(present), nodeId);
+    edit(() => copy.draft);
+    setFocusNode(copy.nodeId);
+    navigate({ nodeId: copy.nodeId });
+  };
+  const openPicker = () => {
+    const centre = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    setPicker({ position: flow.screenToFlowPosition(centre), from: null });
+  };
+  const moveNodes = (positions: NodePosition[]) => edit((draft) => withPositions(draft, positions));
+  const connectPort = (nodeId: string, port: string, target: string | null) => {
+    const existing = document?.connections.find(
+      (item) => item.fromNodeId === nodeId && item.fromPort === port,
+    );
+    if (target === null) {
+      if (existing) edit((draft) => deleteConnection(draft, existing.id));
+    } else if (existing) {
+      tryEdit((draft) => reconnect(draft, existing.id, nodeId, port, target));
+    } else {
+      tryEdit((draft) => connect(draft, nodeId, port, target));
+    }
+  };
+
+  const commandById = (id: string | null | undefined) =>
+    id ? sync.commands.find((item) => item.commandId === id) : undefined;
+  // Held from the moment a save starts until its outcome is known, so one revision is sent once.
+  const saveLock = useRef(false);
+  useEffect(() => {
+    if (!pendingSave) saveLock.current = false;
+  }, [pendingSave]);
+  const save = async () => {
+    if (!workflowId || !local || !present || saveLock.current) return;
+    saveLock.current = true;
+    const sent = present;
+    const revision = local.revision;
+    setPendingSave({ workflowId, commandId: null, revision, sent });
+    const answer = await ask(bridge().workflow.save(workflowId, revision, sent));
+    if (answer.kind === 'command')
+      setPendingSave({ workflowId, commandId: answer.command.commandId, revision, sent });
+    else {
+      setPendingSave(null);
+      setNotice({
+        text: 'The draft could not be saved. Your edits are still here.',
+        tone: 'problem',
+      });
+    }
+  };
+  const saveCommand = commandById(pendingSave?.commandId);
+  useEffect(() => {
+    if (!pendingSave || !saveCommand) return;
+    const { workflowId: id, revision, sent } = pendingSave;
+    if (saveCommand.state === 'accepted') {
+      setLocals((all) => {
+        const current = all[id];
+        return current ? { ...all, [id]: saved(current, revision + 1, sent) } : all;
+      });
+      setNotice(null);
+      setPendingSave(null);
+    } else if (saveCommand.state === 'unknown') {
+      setNotice({ text: 'Checking whether the draft was saved…', tone: 'busy' });
+    } else if (saveCommand.state === 'rejected' || saveCommand.state === 'not_applied') {
+      setNotice({
+        text:
+          saveCommand.state === 'not_applied'
+            ? 'The save did not reach the server. Your edits are still here; save again.'
+            : saveCommand.code === 'REVISION_CONFLICT'
+              ? 'This draft changed elsewhere, so nothing was overwritten.'
+              : `The draft was not saved: ${saveCommand.message ?? 'the server refused it.'}`,
+        tone: 'problem',
+      });
+      setPendingSave(null);
+    }
+  }, [saveCommand?.state]);
+  const publish = async () => {
+    if (!workflowId || !local) return;
+    setPublishing(true);
+    setPublishProblems([]);
+    const answer = await ask(bridge().workflow.publish(workflowId, local.revision));
+    setPublishing(false);
+    if (answer.kind === 'command') setPendingPublish(answer.command.commandId);
+    else setNotice({ text: 'The draft could not be published.', tone: 'problem' });
+  };
+  const publishCommand = commandById(pendingPublish);
+  useEffect(() => {
+    if (!publishCommand) return;
+    if (publishCommand.state === 'accepted') {
+      setNotice(null);
+      setPendingPublish(null);
+    } else if (publishCommand.state === 'unknown') {
+      setNotice({ text: 'Checking whether the draft was published…', tone: 'busy' });
+    } else if (publishCommand.state === 'rejected' || publishCommand.state === 'not_applied') {
+      if (publishCommand.code === 'INVALID_WORKFLOW' && present) {
+        setPublishProblems(serverProblems(present, publishCommand.diagnostics));
+        setProblemsOpen(true);
+        setNotice({
+          text: 'The server found problems, so nothing was published.',
+          tone: 'problem',
+        });
+      } else {
+        setNotice({
+          text:
+            publishCommand.code === 'REVISION_CONFLICT'
+              ? 'This draft changed elsewhere, so nothing was published.'
+              : (publishCommand.message ?? 'The draft could not be published.'),
+          tone: 'problem',
+        });
+      }
+      setPendingPublish(null);
+    }
+  }, [publishCommand?.state]);
+  const busy = pendingSave !== null || publishing || pendingPublish !== null;
+  const canUndo = editable && (local?.history.past.length ?? 0) > 0;
+  const canRedo = editable && (local?.history.future.length ?? 0) > 0;
+  const stepBack = () => updateLocal((current) => ({ ...current, history: undo(current.history) }));
+  const stepForward = () =>
+    updateLocal((current) => ({ ...current, history: redo(current.history) }));
+
+  // Editing shortcuts. In a field the keys belong to the field.
+  const shortcuts = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  shortcuts.current = (event) => {
+    // A dialog owns the keyboard; nothing behind it changes.
+    if (
+      !editable ||
+      settings !== null ||
+      paletteOpen ||
+      inboxOpen ||
+      picker !== null ||
+      inputOpen ||
+      resolveFor !== null ||
+      local?.theirs
+    )
+      return;
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target?.isContentEditable === true;
+    const command = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (command && key === 's') {
+      event.preventDefault();
+      // A field being typed in commits when it loses focus.
+      target?.blur?.();
+      if (live && !busy) requestSave();
+      return;
+    }
+    if (typing) return;
+    if (command && key === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) stepForward();
+      else stepBack();
+    } else if (command && key === 'y') {
+      event.preventDefault();
+      stepForward();
+    } else if (command && key === 'd' && selected) {
+      event.preventDefault();
+      duplicate(selected);
+    } else if ((event.key === 'Delete' || event.key === 'Backspace') && !command) {
+      if (selectedEdge) {
+        event.preventDefault();
+        edit((draft) => deleteConnection(draft, selectedEdge));
+        setSelectedEdge(null);
+      } else if (selected) {
+        event.preventDefault();
+        removeNode(selected);
+      }
+    }
+  };
+  // Runs after what is pending has become an edit and rendered.
+  const requestSave = () => {
+    flushMove.current?.();
+    const requested = workflowId;
+    setTimeout(() => {
+      if (shownWorkflow.current === requested) void saveRef.current();
+    }, 0);
+  };
+  const shownWorkflow = useRef(workflowId);
+  shownWorkflow.current = workflowId;
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => shortcuts.current(event);
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  useEffect(() => {
+    setSelectedEdge(null);
+    setPicker(null);
+    setPublishProblems([]);
+  }, [workflowId, inRun]);
 
   const latestVersion = workflow?.value.versions.at(-1);
   const publishLabel = inRun
@@ -301,6 +618,19 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                 label: 'Reconnect to the server',
                 run: () => void ask(bridge().connection.connect(connection.profileId!)),
               },
+            ]
+          : []),
+        ...(editable
+          ? [
+              { id: 'add', label: 'Add a node', run: openPicker },
+              ...(canUndo ? [{ id: 'undo', label: 'Undo', run: stepBack }] : []),
+              ...(canRedo ? [{ id: 'redo', label: 'Redo', run: stepForward }] : []),
+              ...((dirty || typing || moving) && live && !busy
+                ? [{ id: 'save', label: 'Save the draft', run: requestSave }]
+                : []),
+              ...(!dirty && !typing && !moving && live && !busy
+                ? [{ id: 'publish', label: 'Publish the draft', run: () => void publish() }]
+                : []),
             ]
           : []),
         { id: 'inbox', label: 'Open the inbox', run: () => setInboxOpen(true) },
@@ -366,15 +696,16 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     </Hint>
   ) : document && document.nodes.length === 0 ? (
     <Hint title="This draft is empty">
-      It has no nodes yet. Save a draft with <code>shift workflow save</code> to see it here.
+      {inRun ? 'It has no nodes.' : 'Add a manual trigger with the + in the toolbar to begin.'}
     </Hint>
   ) : null;
 
   return (
     <div className={inRun ? 'workspace in-run' : 'workspace'}>
       <div className="titlebar" />
-      {document && document.nodes.length > 0 ? (
+      {document ? (
         <Canvas
+          key={`${workflowId}:${inRun}`}
           document={document}
           runs={runs}
           inRun={inRun}
@@ -389,7 +720,38 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           }
           selected={selected}
           select={select}
-          move={!inRun && live && workflow?.value && !workflow.stale ? move : null}
+          problems={problemCounts}
+          editing={
+            editable
+              ? {
+                  move: moveNodes,
+                  moving: setMoving,
+                  flushRef: flushMove,
+                  connect: (connection) =>
+                    tryEdit((draft) =>
+                      connect(
+                        draft,
+                        connection.source,
+                        connection.sourceHandle ?? '',
+                        connection.target,
+                      ),
+                    ),
+                  reconnect: (id, connection) =>
+                    tryEdit((draft) =>
+                      reconnect(
+                        draft,
+                        id,
+                        connection.source,
+                        connection.sourceHandle ?? '',
+                        connection.target,
+                      ),
+                    ),
+                  dropOnCanvas: (position, from) => setPicker({ position, from }),
+                  selectedEdge,
+                  selectEdge: setSelectedEdge,
+                }
+              : null
+          }
         />
       ) : workflowId && document === null && health(connection, sync) !== 'offline' ? (
         <Skeleton />
@@ -404,6 +766,15 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           projectId={projectId}
           workflowId={workflowId}
           navigate={navigate}
+          badge={
+            inRun || !present
+              ? null
+              : dirty
+                ? 'Draft · unsaved changes'
+                : !sameDraft(present, active?.value)
+                  ? 'Draft · unpublished changes'
+                  : null
+          }
         />
         {inRun && runValue && (
           <RunStatus
@@ -433,6 +804,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           selected={selected}
           select={select}
           close={() => setListOpen(false)}
+          removeConnection={editable ? (id) => edit((draft) => deleteConnection(draft, id)) : null}
         />
       )}
       {document && selected && (
@@ -450,6 +822,58 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           live={live}
           deviceId={connection.profiles.find((item) => item.active)?.deviceId ?? null}
           commands={sync.commands}
+          editor={
+            editable ? (
+              <NodeEditor
+                key={`${workflowId}:${selected}`}
+                document={document}
+                node={document.nodes.find((node) => node.id === selected)!}
+                problems={problems}
+                focus={focusNode === selected}
+                editing={{
+                  rename: (next) => {
+                    const problem = tryEdit((draft) => renameNode(draft, selected, next));
+                    if (!problem) {
+                      setFocusNode(null);
+                      navigate({ nodeId: next });
+                    }
+                    return problem;
+                  },
+                  set: (key, value) => edit((draft) => setConfig(draft, selected, key, value)),
+                  connectPort: (port, target) => connectPort(selected, port, target),
+                  typing: setTyping,
+                  duplicate: () => duplicate(selected),
+                  remove: () => removeNode(selected),
+                }}
+              />
+            ) : null
+          }
+        />
+      )}
+      {editable && picker && (
+        <NodePicker
+          hasTrigger={document?.nodes.some((node) => node.type === 'manual_trigger') ?? false}
+          choose={add}
+          close={() => setPicker(null)}
+        />
+      )}
+      {editable && problemsOpen && (
+        <ProblemsPanel
+          problems={problems}
+          select={(nodeId) => navigate({ nodeId })}
+          close={() => setProblemsOpen(false)}
+        />
+      )}
+      {editable && local?.theirs && document && (
+        <ConflictIsland
+          revision={local.theirs.revision}
+          mine={document}
+          theirs={readDocument(local.theirs.draft)}
+          keepMine={() => updateLocal(keepMine)}
+          takeTheirs={() => {
+            updateLocal(takeTheirs);
+            setNotice(null);
+          }}
         />
       )}
       {decidable && runValue && resolveFor === runValue.id && (
@@ -501,6 +925,24 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           starting={starting}
           run={() => (trigger?.config['inputSchema'] ? setInputOpen(true) : void start({}))}
           publishLabel={publishLabel}
+          editor={
+            editable
+              ? {
+                  add: openPicker,
+                  undo: canUndo ? stepBack : null,
+                  redo: canRedo ? stepForward : null,
+                  // Text still in a field is an edit too: it must be saved before publishing.
+                  dirty: dirty || typing || moving,
+                  busy,
+                  live,
+                  save: requestSave,
+                  publish: () => void publish(),
+                  problems: problems.length,
+                  problemsOpen,
+                  toggleProblems: () => setProblemsOpen(!problemsOpen),
+                }
+              : null
+          }
         />
       )}
     </div>
@@ -527,7 +969,8 @@ function Canvas({
   needsYou,
   selected,
   select,
-  move,
+  problems,
+  editing,
 }: {
   document: GraphDocument;
   runs: ReturnType<typeof nodeRuns> | null;
@@ -536,14 +979,29 @@ function Canvas({
   needsYou: string | null;
   selected: string | null;
   select: (nodeId: string | null) => void;
-  // Present when the draft can be rearranged; resolves whether the positions were saved.
-  move: ((positions: NodePosition[]) => Promise<boolean>) | null;
+  problems: Record<string, number>;
+  // Present on an editable draft. Positions and connections go to local edits; only Save sends.
+  editing: {
+    move: (positions: NodePosition[]) => void;
+    moving: (moving: boolean) => void;
+    flushRef: { current: (() => void) | null };
+    connect: (connection: Connection) => unknown;
+    reconnect: (id: string, connection: Connection) => unknown;
+    dropOnCanvas: (
+      position: { x: number; y: number },
+      from: { nodeId: string; port: string },
+    ) => void;
+    selectedEdge: string | null;
+    selectEdge: (id: string | null) => void;
+  } | null;
 }) {
   const flow = useReactFlow();
   const laid = useMemo(() => layout(document), [document]);
   // Positions moved on screen and not yet in the document the server returned.
   const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
-  const [saving, setSaving] = useState(false);
+  // React Flow hides a node it receives without its size until it has measured it again, and these
+  // node objects are rebuilt on every drag tick, so the sizes it reports have to go back to it.
+  const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
   const dragging = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const positions = useMemo(() => {
@@ -553,28 +1011,45 @@ function Canvas({
   }, [laid, moved]);
   // A newer document carries the saved positions; local ones are no longer needed.
   useEffect(() => {
-    if (!dragging.current && !saving) setMoved({});
+    // A move waiting to commit keeps its coordinates through another edit.
+    if (!dragging.current && !pendingMove.current) setMoved({});
   }, [document]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  // A move still waiting goes to the draft it was made on: this canvas belongs to one workflow.
+  const pendingMove = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      pendingMove.current?.();
+    },
+    [],
+  );
   const latestPositions = useRef(positions);
   latestPositions.current = positions;
   const save = () => {
-    if (!move) return;
+    if (!editing) return;
     clearTimeout(timer.current);
-    // Shortly after the last movement, so arrow-key nudges save once.
-    timer.current = setTimeout(async () => {
-      setSaving(true);
-      const saved = await move(
-        [...latestPositions.current].map(([nodeId, { x, y }]) => ({ nodeId, x, y })),
-      );
-      setSaving(false);
-      if (!saved) setMoved({});
-    }, 300);
+    // Shortly after the last movement, so arrow-key nudges make one undo step.
+    editing.moving(true);
+    editing.flushRef.current = pendingMove.current = () => {
+      clearTimeout(timer.current);
+      pendingMove.current = null;
+      editing.flushRef.current = null;
+      editing.moving(false);
+      editing.move([...latestPositions.current].map(([nodeId, { x, y }]) => ({ nodeId, x, y })));
+    };
+    timer.current = setTimeout(() => pendingMove.current?.(), 300);
   };
   const onNodesChange = (changes: NodeChange<CardNode>[]) => {
-    if (!move) return;
     for (const change of changes) {
-      if (change.type !== 'position' || !change.position) continue;
+      if (change.type === 'dimensions' && change.dimensions) {
+        const { id, dimensions } = change;
+        setMeasured((current) =>
+          current[id]?.width === dimensions.width && current[id]?.height === dimensions.height
+            ? current
+            : { ...current, [id]: dimensions },
+        );
+      }
+      if (!editing || change.type !== 'position' || !change.position) continue;
       const { id, position } = change;
       setMoved((current) => ({ ...current, [id]: position }));
       // Any movement postpones a pending save until the node is still again.
@@ -589,14 +1064,17 @@ function Canvas({
         id: node.id,
         type: 'card',
         position: positions.get(node.id) ?? { x: 0, y: 0 },
+        ...(measured[node.id] ? { measured: measured[node.id] } : {}),
         selected: node.id === selected,
         data: {
           node,
           ...(inRun ? { run: runs?.get(node.id) ?? null } : {}),
           needsYou: node.id === needsYou,
+          editable: editing !== null,
+          problems: problems[node.id] ?? 0,
         },
       })),
-    [document, positions, runs, inRun, needsYou, selected],
+    [document, positions, measured, runs, inRun, needsYou, selected, editing !== null, problems],
   );
   const edges = useMemo<Edge[]>(
     () =>
@@ -609,12 +1087,21 @@ function Canvas({
           target: connection.toNodeId,
           targetHandle: 'input',
           type: 'default',
-          ...(inRun ? { className: taken ? 'followed' : 'muted' } : {}),
+          // A connection going back to an earlier node is drawn differently; it is a loop.
+          className: [
+            inRun ? (taken ? 'followed' : 'muted') : '',
+            (positions.get(connection.toNodeId)?.x ?? 0) <=
+            (positions.get(connection.fromNodeId)?.x ?? 0)
+              ? 'backward'
+              : '',
+          ].join(' '),
           focusable: false,
-          selectable: false,
+          selectable: editing !== null,
+          reconnectable: editing !== null,
+          selected: editing?.selectedEdge === connection.id,
         };
       }),
-    [document, followedConnections, inRun],
+    [document, followedConnections, inRun, positions, editing !== null, editing?.selectedEdge],
   );
   // Frame the graph whenever a different one opens.
   const shape = document.nodes.map((node) => node.id).join('|');
@@ -630,16 +1117,39 @@ function Canvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
-        nodesDraggable={move !== null && !saving}
+        nodesDraggable={editing !== null}
         onNodesChange={onNodesChange}
         onNodeDragStop={() => {
           dragging.current = false;
           save();
+          pendingMove.current?.();
         }}
-        nodesConnectable={false}
+        nodesConnectable={editing !== null}
         elementsSelectable
-        onNodeClick={(_, node) => select(node.id)}
-        onPaneClick={() => select(null)}
+        deleteKeyCode={null}
+        onNodeClick={(_, node) => {
+          editing?.selectEdge(null);
+          select(node.id);
+        }}
+        onEdgeClick={(_, edge) => {
+          select(null);
+          editing?.selectEdge(edge.id);
+        }}
+        onPaneClick={() => {
+          editing?.selectEdge(null);
+          select(null);
+        }}
+        onConnect={(connection) => editing?.connect(connection)}
+        onReconnect={(old, connection) => editing?.reconnect(old.id, connection)}
+        onConnectEnd={(event, state: FinalConnectionState) => {
+          if (!editing || state.isValid || !state.fromHandle?.id || !state.fromNode) return;
+          // Dropped on empty canvas: choose what comes next, joined to this port.
+          const point = 'changedTouches' in event ? event.changedTouches[0]! : event;
+          editing.dropOnCanvas(flow.screenToFlowPosition({ x: point.clientX, y: point.clientY }), {
+            nodeId: state.fromNode.id,
+            port: state.fromHandle.id,
+          });
+        }}
         minZoom={0.2}
         maxZoom={1.75}
         fitView

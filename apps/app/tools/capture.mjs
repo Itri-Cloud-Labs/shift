@@ -260,11 +260,60 @@ try {
       wait: 800,
     },
     { name: '11-narrow', size: [900, 640], hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
-    // Rearranging the draft: drag a node, then leave and come back to see it was saved.
+    // Editing: drag a node, save, and see it again after leaving; then add, connect and publish.
     { name: '12-draft-before-move', size: [1440, 900], hash: base, wait: 1500 },
-    { name: '13-draft-moved', drag: { node: 'summarize', by: [0, -160] }, wait: 1500 },
-    { name: '14-draft-reloaded', hash: `${base}/r/${run.id}`, wait: 800 },
-    { name: '15-draft-after-reload', hash: base, wait: 1500 },
+    { name: '13-draft-moved', drag: { node: 'summarize', by: [0, -160] }, wait: 1000 },
+    {
+      name: '14-draft-saved',
+      script:
+        "[...document.querySelectorAll('.toolbar button')].find((b) => b.textContent === 'Save').click()",
+      wait: 1500,
+    },
+    { name: '15-draft-after-reload', hash: `${base}/r/${run.id}`, wait: 800 },
+    { name: '15b-draft-back', hash: base, wait: 1500 },
+    {
+      name: '15c-node-picker',
+      script: 'document.querySelector(\'[aria-label="Add a node"]\').click()',
+      wait: 500,
+    },
+    {
+      name: '15d-added-agent',
+      script:
+        "[...document.querySelectorAll('.node-picker button')].find((b) => b.textContent.startsWith('Agent')).click()",
+      wait: 1000,
+    },
+    {
+      name: '15e-problems',
+      script:
+        "[...document.querySelectorAll('.toolbar button')].find((b) => /problem/.test(b.textContent)).click()",
+      wait: 500,
+    },
+    {
+      name: '15f-undone',
+      script: "document.querySelector('[aria-label=Undo]').click()",
+      wait: 800,
+    },
+    {
+      name: '15g-published',
+      script:
+        "document.querySelector('[aria-label=\"Close problems\"]').click(); setTimeout(() => [...document.querySelectorAll('.toolbar button')].find((b) => b.textContent === 'Save').click(), 200); setTimeout(() => [...document.querySelectorAll('.toolbar button')].find((b) => b.textContent === 'Publish').click(), 1200)",
+      wait: 2500,
+    },
+    // Another device saves while edits are open: nothing is overwritten until a choice is made.
+    {
+      name: '15h-edited-here',
+      script:
+        "document.querySelector('[aria-label=\"Add a node\"]').click(); setTimeout(() => [...document.querySelectorAll('.node-picker button')].find((b) => b.textContent.startsWith('End')).click(), 200)",
+      wait: 800,
+    },
+    // tools/capture.mjs saves the draft from the CLI once 15h is captured.
+    { name: '15i-conflict', wait: 3000 },
+    {
+      name: '15j-kept-theirs',
+      script:
+        "[...document.querySelectorAll('.conflict button')].find((b) => b.textContent.startsWith('Discard')).click()",
+      wait: 800,
+    },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
     { name: '17-inbox', script: "document.querySelector('.attention-count').click()", wait: 800 },
@@ -335,6 +384,25 @@ try {
     },
   ];
 
+  // Stands in for another device. The node's move is theirs; the added node stays local.
+  let saved = false;
+  const saveElsewhere = async () => {
+    const current = await cli(['workflow', 'show', workflow.id, ...admin]);
+    const file = join(temporaryRoot, 'elsewhere.json');
+    current.draft.nodes[0].position.y += 40;
+    await writeFile(file, JSON.stringify(current.draft));
+    await cli([
+      'workflow',
+      'save',
+      workflow.id,
+      '--revision',
+      String(current.draftRevision),
+      '--file',
+      file,
+      ...admin,
+    ]);
+  };
+
   // Launch the built app in capture mode, staged like the smoke test.
   const state = join(temporaryRoot, 'state');
   await mkdir(state);
@@ -362,6 +430,10 @@ try {
   let started = false;
   app.stdout.on('data', (chunk) => {
     process.stdout.write(chunk);
+    if (!saved && String(chunk).includes('SHIFT_CAPTURE 15h-edited-here')) {
+      saved = true;
+      void saveElsewhere();
+    }
     if (!started && String(chunk).includes('SHIFT_CAPTURE 17-inbox')) {
       started = true;
       void cli(['run', 'start', '--workflow', workflow.id, ...admin]);

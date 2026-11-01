@@ -547,3 +547,17 @@ Status: the third part of prompt 12 (M06). Session and report views still wait f
   - Device and preference requests are bounded and name IDs, never paths; without a connection, device requests are `DISCONNECTED`. The smoke test checks the new bridge surface.
   - Screenshots against a real server: the palette empty and searching, each settings section, the theme switching to light from Settings, and this device revoked from the app, which returned it to pairing.
 - **Not verified:** a notification shown by a real desktop session, which needs a notification service the capture environment lacks. The choice of when to announce is unit tested; the Electron call is not. Changing the address and forgetting the server use existing, tested connection operations, but were not exercised through the new forms.
+
+## Draft editor (13a)
+
+Status: the first of two parts of prompt 13 (M07). Rule, binding and schema builders, version browsing, creating projects and workflows, and measured budgets are 13b, so the prompt's acceptance is not met yet. Date: 2026-10-30.
+
+- **Changed:** `client-ui/draft.ts`, a pure model of edits, history, local drafts against server revisions and diagnostics; `client-ui/Editor.tsx`, with the node picker, problems panel, conflict island and node form; connectable ports, reconnecting, dashed backward edges and problem marks on the canvas; Save, Publish, undo and redo in the toolbar and palette; a draft badge. `workflow.save` and `workflow.publish` replace `workflow.move`, so a dragged node is a local edit until Save. `INVALID_WORKFLOW` diagnostics now carry the server's message, and commands keep them in memory.
+- **Verified:**
+  - Edits keep fields the editor does not know; undo and redo restore the same IDs and edges.
+  - A second edge from a port and an edge into the trigger are refused with text that says what to do; loops, self-loops and convergence pass.
+  - Saves elsewhere never replace local edits; each conflict choice does only what it says; a save's own revision is not a conflict.
+  - Save requests are bounded in size and depth.
+  - Screenshots against a real server: dragging and saving, adding a node with its problems, undo, publishing as v2, and a conflict with a save from the CLI, resolved by taking theirs. Fixes after inspection: the problems panel covered the inspector.
+  - Electron smoke with the new bridge surface.
+- **Not verified:** dragging between ports and reconnecting with real mouse input, and the keyboard route end to end. The model behind them is unit tested. Unsaved edits are lost if the app quits.

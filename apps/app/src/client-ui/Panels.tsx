@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { X, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Execution, Interaction } from '../protocol/generated/types.js';
 import type { SyncView } from '../shared/contracts.js';
@@ -26,6 +26,7 @@ export function Inspector({
   live = false,
   deviceId = null,
   commands = [],
+  editor = null,
 }: {
   document: GraphDocument;
   nodeId: string;
@@ -38,6 +39,8 @@ export function Inspector({
   live?: boolean;
   deviceId?: string | null;
   commands?: SyncView['commands'];
+  // The form for this node, on an editable draft.
+  editor?: React.ReactNode;
 }) {
   const node = document.nodes.find((item) => item.id === nodeId);
   const inRun = run !== undefined;
@@ -51,20 +54,22 @@ export function Inspector({
     requests.find((item) => item.state === 'PENDING') ??
     null;
   const pendingId = request?.state === 'PENDING' ? request.id : null;
-  const [tab, setTab] = useState<'overview' | 'output' | 'config' | 'request'>(
-    pendingId ? 'request' : inRun ? 'output' : 'overview',
+  const [tab, setTab] = useState<'edit' | 'overview' | 'output' | 'config' | 'request'>(
+    pendingId ? 'request' : inRun ? 'output' : editor ? 'edit' : 'overview',
   );
   useEffect(() => {
     if (pendingId) setTab('request');
   }, [nodeId, pendingId]);
   useEffect(() => {
-    if (!inRun && (tab === 'output' || tab === 'request')) setTab('overview');
+    if (!inRun && (tab === 'output' || tab === 'request')) setTab(editor ? 'edit' : 'overview');
+    else if (tab === 'edit' && !editor) setTab(inRun ? 'output' : 'overview');
     else if (tab === 'request' && !request) setTab('output');
   }, [inRun, tab, request]);
   if (!node) return null;
   const incoming = document.connections.filter((item) => item.toNodeId === node.id);
   const outgoing = document.connections.filter((item) => item.fromNodeId === node.id);
   const tabs = [
+    ...(editor ? [['edit', 'Edit'] as const] : []),
     ...(inRun && request ? [['request', 'Request'] as const] : []),
     ...(inRun ? [['output', 'Output'] as const] : []),
     ['overview', 'Overview'] as const,
@@ -98,6 +103,7 @@ export function Inspector({
         ))}
       </div>
       <div className="inspector-body" role="tabpanel">
+        {tab === 'edit' && editor}
         {tab === 'request' && request && (
           <HumanRequest
             key={request.id}
@@ -271,12 +277,15 @@ export function ListView({
   selected,
   select,
   close,
+  removeConnection = null,
 }: {
   document: GraphDocument;
   runs: Map<string, NodeRun> | null;
   selected: string | null;
   select: (nodeId: string) => void;
   close: () => void;
+  // On an editable draft.
+  removeConnection?: ((connectionId: string) => void) | null;
 }) {
   return (
     <aside className="island list-view" aria-label="Nodes and connections">
@@ -313,6 +322,15 @@ export function ListView({
                 {connection.fromNodeId} <span className="note">{connection.fromPort} →</span>{' '}
                 {connection.toNodeId}
               </span>
+              {removeConnection && (
+                <button
+                  className="button quiet icon"
+                  aria-label={`Remove the connection from ${connection.fromNodeId} ${connection.fromPort} to ${connection.toNodeId}`}
+                  onClick={() => removeConnection(connection.id)}
+                >
+                  <Trash2 />
+                </button>
+              )}
             </li>
           ))}
         </ul>

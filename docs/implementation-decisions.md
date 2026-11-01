@@ -592,3 +592,12 @@ Decided 2026-10-29 for the second part of prompt 12. The owner split the rest of
 - **Preferences belong to this computer.** Theme and notifications live in `preferences.json`, are validated on load and never reach the server. Main applies the theme through `nativeTheme`, so the renderer's CSS and the window controls follow it without their own state.
 - **Main sends OS notifications.** It already holds the projection, and the renderer gets no way to raise a notification with arbitrary text. They are off by default because the system can show a request's title on a lock screen. Clicking one brings the window forward; the attention count shows the item.
 - **The palette offers only what applies.** Disabled actions are left out, and Publish arrives with prompt 13. Cancelling from the palette opens the same confirmation as the run status island.
+
+## Draft editor (13a)
+
+- **Two parts.** Like prompt 12, prompt 13 ships in parts: this one is the edit model and canvas, and 13b is the visual builders and budgets.
+- **The catalog is in the client for now.** The server has no catalog endpoint, and the shipped node types are few. `draft.ts` and `Editor.tsx` mirror `nodes.ts`; the server's validation at publish stays authoritative.
+- **Saving is explicit.** Dragging used to save on its own. Now every edit is local until Save, so one undo history covers everything and a conflict can only arise at one place.
+- **History is a small snapshot list.** The app has no state library, and immutable drafts make snapshots cheap, so no dependency was added. Snapshots restore IDs and edges exactly.
+- **Each port chooses its next node in the inspector.** That is the keyboard route for connecting: no focusable handles or separate connect dialog.
+- **Removing an approval outcome keeps its connection** and shows a diagnostic, so nothing the author drew disappears silently.

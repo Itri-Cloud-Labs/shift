@@ -35,7 +35,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
     assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,device,interaction,onChange,openDocumentation,preferences,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
-    assert(Object.keys(window.shift.workflow).join(',') === 'move', 'Broad workflow bridge');
+    assert(Object.keys(window.shift.workflow).sort().join(',') === 'publish,save', 'Broad workflow bridge');
     assert(Object.keys(window.shift.data).sort().join(',') === 'devices,overview,run,version,workflow', 'Broad data bridge');
     assert(Object.keys(window.shift.device).join(',') === 'revoke', 'Broad device bridge');
     assert(Object.keys(window.shift.preferences).sort().join(',') === 'read,set', 'Broad preferences bridge');
@@ -70,7 +70,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.data.workflow('00000000-0000-4000-8000-000000000001')).code === 'DISCONNECTED', 'Unexpected resource');
     assert((await window.shift.run.start('00000000-0000-4000-8000-000000000001', {})).code === 'DISCONNECTED', 'Run started without a connection');
     assert((await window.shift.data.workflow('../etc')).code === 'INVALID_REQUEST', 'Path-like workflow ID accepted');
-    assert((await window.shift.workflow.move('00000000-0000-4000-8000-000000000001', 0, [{ nodeId: 'a', x: 1, y: 2 }])).code === 'DISCONNECTED', 'Moved without a connection');
+    assert((await window.shift.workflow.save('00000000-0000-4000-8000-000000000001', 0, { nodes: [] })).code === 'DISCONNECTED', 'Saved without a connection');
     const overview = await window.shift.data.overview();
     assert(overview.kind === 'overview' && overview.overview.projects.length === 0 && overview.overview.attention === 0, 'Unexpected overview');
     let notified = 0;
