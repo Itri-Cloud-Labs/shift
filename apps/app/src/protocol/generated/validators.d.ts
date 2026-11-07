@@ -24,6 +24,7 @@ import type {
   InteractionList,
   WorkspaceList,
   ExecutionPage,
+  RunVariables,
   Event,
   EventPage,
   Snapshot,
@@ -64,6 +65,7 @@ export const validateRunList: Validator<RunList>;
 export const validateInteractionList: Validator<InteractionList>;
 export const validateWorkspaceList: Validator<WorkspaceList>;
 export const validateExecutionPage: Validator<ExecutionPage>;
+export const validateRunVariables: Validator<RunVariables>;
 export const validateEvent: Validator<Event>;
 export const validateEventPage: Validator<EventPage>;
 export const validateSnapshot: Validator<Snapshot>;

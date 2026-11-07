@@ -69,13 +69,15 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | Type             | Config                                                                                                                                                                                                                           | Ports                               |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `manual_trigger` | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                                                                                                                | `success`                           |
-| `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value.                                                                                                             | `success`, `error`                  |
+| `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value, and [operations](#transform-operations) are computed.                                                       | `success`, `error`                  |
 | `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema` and `limits`. See [agent nodes](#agent-nodes).                                                                                       | `success`, `error`                  |
 | `condition`      | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
 | `switch`         | Required `cases`: up to 20 `{"port", "when"}` in order. The first case whose rule holds selects its `port`; none selects `default`. Passes its input through.                                                                    | one per case, `default`, `error`    |
 | `wait`           | Exactly one of `durationMs` (up to 366 days) or `until`, an ISO 8601 time with an offset such as `2026-11-01T09:00:00Z`; `until` can use `{{name}}` bindings. Passes its input through when the time comes. See [waits](#waits). | `success`, `error`                  |
 | `human_input`    | Required `title` and `form`; optional `instructions` and `timeoutMs`. `title` and `instructions` can use `{{name}}` bindings. See [human requests](#human-requests).                                                             | `success`, `timeout`, `error`       |
 | `approval`       | Required `title`; optional `instructions`, `outcomes` (default `["approved", "rejected"]`), `form` (default: an optional `comment`) and `timeoutMs`.                                                                             | one per outcome, `timeout`, `error` |
+| `set_variable`   | Required `key` and `value`, a template like a transform's `data`. Writes the [run variable](#run-variables) and passes its input through.                                                                                        | `success`, `error`                  |
+| `get_variable`   | Required `key`; optional `optional` with an explicit `fallback`. Publishes the variable's current value as its data.                                                                                                             | `success`, `error`                  |
 | `end`            | Optional `outcome` (`COMPLETED` or `FAILED`, default `COMPLETED`) and `reason`.                                                                                                                                                  | none                                |
 
 The trigger's output is the run input. A transform's output is its rendered template, at most 1 MiB. An `end` node passes its input through and finishes the run with its declared outcome.
@@ -104,15 +106,16 @@ A binding names a value, which the node's config refers to by that name.
 }
 ```
 
-| Kind      | Reads                                                                                                             |
-| --------- | ----------------------------------------------------------------------------------------------------------------- |
-| `trigger` | The run input.                                                                                                    |
-| `input`   | The incoming [output envelope](#output-envelope) from the previous node, so data paths start with `data`.         |
-| `project` | `{id, name, repositoryPath, baseRef}` of the run's project.                                                       |
-| `literal` | `value` itself.                                                                                                   |
-| `node`    | An earlier successful execution of `nodeId` on the current path. See [execution selectors](#execution-selectors). |
+| Kind       | Reads                                                                                                             |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `trigger`  | The run input.                                                                                                    |
+| `input`    | The incoming [output envelope](#output-envelope) from the previous node, so data paths start with `data`.         |
+| `project`  | `{id, name, repositoryPath, baseRef}` of the run's project.                                                       |
+| `literal`  | `value` itself.                                                                                                   |
+| `node`     | An earlier successful execution of `nodeId` on the current path. See [execution selectors](#execution-selectors). |
+| `variable` | The current value of the [run variable](#run-variables) `key`.                                                    |
 
-`path` walks object keys and array indexes. A path that finds nothing fails the node with `BINDING_MISSING`. A `node` binding with `optional: true` must state an explicit `fallback` (it can be `null`) and uses it instead. Bindings are resolved once, when an execution starts, and frozen with it, so recovery and later attempts see the same values.
+`path` walks object keys and array indexes. A path that finds nothing fails the node with `BINDING_MISSING`. A `node` or `variable` binding with `optional: true` must state an explicit `fallback` (it can be `null`) and uses it instead. Bindings are resolved once, when an execution starts, and frozen with it, so recovery and later attempts see the same values.
 
 ### Execution selectors
 
@@ -130,6 +133,29 @@ If `latest` or `first` finds no execution, or its path finds nothing, the value 
 Each execution records where its bindings came from, as its `sources` in the run view. The record has the producing execution and sequence for `node`, `input` and `trigger` bindings, and marks a fallback that was used. With each execution's `predecessorId` and `connectionId`, this shows exactly which output every value came from.
 
 A transform's `data` and an agent's `goal` refer to bindings by name. In `data`, an object `{"$binding": "words"}` becomes the value itself, keeping its type. In `goal`, `{{words}}` becomes text, and values that aren't strings are rendered as JSON. Referring to an undeclared binding is a validation error.
+
+### Transform operations
+
+A transform's `data`, and a `set_variable` node's `value`, can compute values with these objects. Each has exactly one key, and its operands are templates themselves:
+
+| Operation                | Result                                                                |
+| ------------------------ | --------------------------------------------------------------------- |
+| `{"$add": [a, b]}`       | `a + b`. `$subtract` and `$multiply` work the same way. Numbers only. |
+| `{"$length": value}`     | The number of items in a list, or of characters in text.              |
+| `{"$at": [list, index]}` | The item at a whole-number `index`, counting from 0.                  |
+
+An operand of the wrong type fails the node with `TRANSFORM_TYPE`, and an index outside the list with `TRANSFORM_INDEX`; neither is guessed. Publishing refuses any other object whose only key starts with `$`, and an operation with the wrong number of operands. A list is one value: nothing runs once per item. To visit each item, loop explicitly, as below.
+
+## Run variables
+
+A run variable is a named JSON value that belongs to one run. `set_variable` writes it, and a `variable` binding or `get_variable` reads it. Values are at most 256 KiB, and keys follow the node ID rules.
+
+- **Writes commit with the node.** A write is stored in the same transaction that completes its execution. A failed or interrupted attempt writes nothing, and a completed one has both its output and its write.
+- **Every write is a new revision.** Revisions number from 1 and keep the execution that wrote them. `shift run variables <run-id>` shows the current values and every revision.
+- **Reads are frozen.** An execution reads variables once, when it starts, and keeps those values and their revisions in its `sources`. A retry, a wait or a restart sees the same values even after a later write.
+- **Writes check the revision they replace.** `set_variable` records the revision it saw when it started. If the variable changed in the meantime, the node fails with `VARIABLE_CONFLICT` instead of overwriting it.
+
+[`collection-loop.json`](examples/collection-loop.json) visits each item of the run input's `items` in turn. `init` sets `index` to 0. `look` reads `index` and the list's `$length`, and `more` compares them. While items remain, `visit` takes `{"$at": [items, index]}`, and `next` sets `index` to `{"$add": [index, 1]}` and connects back to `look`. When `index` reaches the length, the run ends. Each node's `maxExecutionsPerRun` (50 by default) bounds how many items it can visit.
 
 ## Output envelope
 
@@ -369,7 +395,6 @@ A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn
 
 Publishing refuses these, so a document never silently ignores them:
 
-- Run variables (M04a).
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 

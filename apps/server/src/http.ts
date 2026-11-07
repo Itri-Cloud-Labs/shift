@@ -23,6 +23,7 @@ import {
   validateRunResponse,
   validateRunList,
   validateExecutionPage,
+  validateRunVariables,
   validateInteractionResponse,
   validateInteractionList,
   validateWorkspaceResponse,
@@ -264,6 +265,15 @@ export function createHttpServer(options: {
           number('limit', 100, 1, 500),
         ) as Record<string, unknown>,
         validateExecutionPage,
+      );
+    });
+    // A run's variables now, and every revision with the execution that wrote it.
+    router.get('/runs/:id/variables', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        engine.repository.variableHistory(id(req)) as Record<string, unknown>,
+        validateRunVariables,
       );
     });
     for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
