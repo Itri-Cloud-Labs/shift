@@ -151,7 +151,9 @@ textarea {
 }
 
 .island,
-.island * {
+.island *,
+.popover,
+.popover * {
   app-region: no-drag;
 }
 
@@ -262,7 +264,8 @@ textarea {
   top: 8px;
   left: 8px;
   right: 264px;
-  z-index: var(--z-island);
+  /* Its menus open over the islands below it, such as the node list. */
+  z-index: var(--z-popover);
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -294,6 +297,10 @@ textarea {
 
 .top-left > .island {
   position: static;
+  pointer-events: auto;
+}
+
+.top-left > .popover {
   pointer-events: auto;
 }
 
@@ -2158,4 +2165,58 @@ textarea {
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
+}
+
+/* The builders in the node form. */
+.builder-row {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.builder-row-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.builder-row-head .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.builder-row-head > .button {
+  margin-top: 26px;
+}
+
+.builder-pair {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: var(--space-2);
+}
+
+.run-input-fields {
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.create-dialog {
+  top: 20vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-modal);
+  width: min(460px, calc(100vw - 32px));
+  padding: var(--space-4);
+  box-shadow: var(--shadow-modal);
+  animation: island-in var(--duration) var(--ease-out);
+}
+
+.create-dialog h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.switcher-create {
+  width: 100%;
 }

@@ -1,6 +1,15 @@
 import {
+  renameRuleBinding,
+  renameTemplateBinding,
+  renameKey,
+  ruleBindings,
+  validName,
+} from './config.js';
+import {
   hasInput,
   layout,
+  nodeHeight,
+  nodeWidth,
   outputPorts,
   readDocument,
   typeLabels,
@@ -64,6 +73,7 @@ export const addableTypes = [
 ] as const;
 
 const startingConfig: Record<string, Raw> = {
+  transform: { data: {} },
   wait: { durationMs: 60_000 },
   human_input: { form: { type: 'object', properties: {} } },
 };
@@ -75,6 +85,33 @@ function freeId(base: string, used: Set<string>): string {
 
 const nodeIds = (draft: Draft) => new Set(nodesOf(draft).map((node) => String(node['id'])));
 
+const spotGap = 24;
+
+// The nearest place below `position` where a new card covers no other, so nothing lands hidden.
+function freeSpot(draft: Draft, position: { x: number; y: number }, height = 84) {
+  const placed = layout(readDocument(draft));
+  const cards = readDocument(draft).nodes.map((node) => ({
+    ...(placed.get(node.id) ?? { x: 0, y: 0 }),
+    height: nodeHeight(node),
+  }));
+  const spot = { x: Math.round(position.x), y: Math.round(position.y) };
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const card of cards) {
+      const covers =
+        spot.x < card.x + nodeWidth + spotGap &&
+        card.x < spot.x + nodeWidth + spotGap &&
+        spot.y < card.y + card.height + spotGap &&
+        card.y < spot.y + height + spotGap;
+      if (covers) {
+        spot.y = card.y + card.height + spotGap;
+        moved = true;
+      }
+    }
+  }
+  return spot;
+}
+
 export function addNode(
   draft: Draft,
   type: string,
@@ -85,12 +122,12 @@ export function addNode(
     id: nodeId,
     type,
     config: structuredClone(startingConfig[type] ?? {}),
-    position: { x: Math.round(position.x), y: Math.round(position.y) },
+    position: freeSpot(draft, position),
   };
   return { draft: { ...draft, nodes: [...nodesOf(draft), node] }, nodeId };
 }
 
-// A copy with a new ID and no connections, a little below and to the right.
+// A copy with a new ID and no connections, in the nearest free place a little to the right.
 export function duplicateNode(draft: Draft, nodeId: string): { draft: Draft; nodeId: string } {
   const source = nodesOf(draft).find((node) => node['id'] === nodeId);
   if (!source) return { draft, nodeId };
@@ -99,7 +136,11 @@ export function duplicateNode(draft: Draft, nodeId: string): { draft: Draft; nod
   const copy = {
     ...structuredClone(source),
     id,
-    position: { x: position.x + 40, y: position.y + 40 },
+    position: freeSpot(
+      draft,
+      { x: position.x + 40, y: position.y + 40 },
+      nodeHeight(readDocument({ nodes: [source] }).nodes[0]!),
+    ),
   };
   return { draft: { ...draft, nodes: [...nodesOf(draft), copy] }, nodeId: id };
 }
@@ -198,6 +239,93 @@ export function setConfig(draft: Draft, nodeId: string, key: string, value: unkn
       else config[key] = value;
       return { ...node, config };
     }),
+  };
+}
+
+// Sets or, with `undefined`, removes one binding. Bindings keep their order.
+export function setBinding(draft: Draft, nodeId: string, name: string, source?: unknown): Draft {
+  return {
+    ...draft,
+    nodes: nodesOf(draft).map((node) => {
+      if (node['id'] !== nodeId) return node;
+      const bindings = { ...((node['bindings'] ?? {}) as Raw) };
+      if (source === undefined) delete bindings[name];
+      else bindings[name] = source;
+      return { ...node, bindings };
+    }),
+  };
+}
+
+const ruleFields = (config: Raw, change: (rule: unknown) => unknown): Raw => ({
+  ...config,
+  ...('when' in config ? { when: change(config['when']) } : {}),
+  ...(Array.isArray(config['cases'])
+    ? {
+        cases: (config['cases'] as Raw[]).map((item) => ({ ...item, when: change(item['when']) })),
+      }
+    : {}),
+});
+
+// Renames a binding along with the rules and templates of its node that read it.
+export function renameBinding(draft: Draft, nodeId: string, from: string, to: string): EditResult {
+  if (!validName(to)) return { problem: 'Use a letter first, then letters, digits, _ or -.' };
+  const node = nodesOf(draft).find((item) => item['id'] === nodeId);
+  const bindings = (node?.['bindings'] ?? {}) as Raw;
+  if (to !== from && to in bindings)
+    return { problem: `This node already has a value called ${to}.` };
+  return {
+    draft: {
+      ...draft,
+      nodes: nodesOf(draft).map((item) => {
+        if (item['id'] !== nodeId) return item;
+        const config = ruleFields((item['config'] ?? {}) as Raw, (rule) =>
+          renameRuleBinding(rule, from, to),
+        );
+        for (const field of ['goal', 'data', 'until', 'title', 'instructions'])
+          if (field in config) config[field] = renameTemplateBinding(config[field], from, to);
+        return { ...item, config, bindings: renameKey(bindings, from, to) };
+      }),
+    },
+  };
+}
+
+const portName = /^[a-z][a-z0-9_]{0,39}$/;
+
+export const casePortProblem = (port: string, others: string[]): string | null =>
+  !portName.test(port)
+    ? 'Use a lowercase letter first, then lowercase letters, digits or _.'
+    : port === 'default' || port === 'error'
+      ? `Every Switch already has a ${port} port.`
+      : others.includes(port)
+        ? `Another case already uses ${port}.`
+        : null;
+
+// Renames a case's port; the connection leaving that port stays with it.
+export function renameCase(draft: Draft, nodeId: string, index: number, next: string): EditResult {
+  const node = nodesOf(draft).find((item) => item['id'] === nodeId);
+  const cases = ((node?.['config'] as Raw | undefined)?.['cases'] ?? []) as Raw[];
+  const current = cases[index]?.['port'];
+  const problem = casePortProblem(
+    next,
+    cases.flatMap((item, other) =>
+      other !== index && typeof item['port'] === 'string' ? [item['port']] : [],
+    ),
+  );
+  if (problem) return { problem };
+  return {
+    draft: {
+      ...setConfig(
+        draft,
+        nodeId,
+        'cases',
+        cases.map((item, other) => (other === index ? { ...item, port: next } : item)),
+      ),
+      connections: connectionsOf(draft).map((item) =>
+        item['fromNodeId'] === nodeId && item['fromPort'] === current
+          ? { ...item, fromPort: next }
+          : item,
+      ),
+    },
   };
 }
 
@@ -385,6 +513,22 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
     (node.config['durationMs'] === undefined) === (node.config['until'] === undefined)
   )
     add('durationMs', `${node.id} needs either a duration or a time to wait until.`);
+  if (node.type === 'switch' && Array.isArray(node.config['cases'])) {
+    const ports = (node.config['cases'] as Raw[]).map((item) => String(item['port']));
+    ports.forEach((port, index) => {
+      const problem = casePortProblem(port, ports.slice(0, index));
+      if (problem) add('cases', `${node.id}, case ${port}: ${problem}`);
+    });
+  }
+  const rules =
+    node.type === 'condition'
+      ? [node.config['when']]
+      : Array.isArray(node.config['cases'])
+        ? (node.config['cases'] as Raw[]).map((item) => item['when'])
+        : [];
+  for (const name of new Set(rules.flatMap(ruleBindings)))
+    if (!(name in bindings))
+      add(null, `A rule of ${node.id} reads ${name}, which it does not declare.`);
   const templated = ['goal', 'data', 'until', 'title', 'instructions'].map(
     (field) => node.config[field],
   );

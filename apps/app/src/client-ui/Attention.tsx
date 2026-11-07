@@ -248,7 +248,7 @@ function Settled({ interaction, deviceId }: { interaction: Interaction; deviceId
 }
 
 // The typed widgets of a form: text, choices, numbers, dates, checkboxes, groups and lists.
-function Fields({
+export function Fields({
   schema,
   draft,
   path,

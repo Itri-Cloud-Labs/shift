@@ -601,3 +601,7 @@ Decided 2026-10-29 for the second part of prompt 12. The owner split the rest of
 - **History is a small snapshot list.** The app has no state library, and immutable drafts make snapshots cheap, so no dependency was added. Snapshots restore IDs and edges exactly.
 - **Each port chooses its next node in the inspector.** That is the keyboard route for connecting: no focusable handles or separate connect dialog.
 - **Removing an approval outcome keeps its connection** and shows a diagnostic, so nothing the author drew disappears silently.
+- **Builders show plain shapes and keep the rest.** A rule is one test or one group, a schema is flat fields, and a Transform's data is flat fields; anything deeper is shown as kept and sent back unchanged. Prompt 14 owns nested widgets, so 13b adds no schema form dependency.
+- **A new workflow starts with its trigger,** built in main. The bridge's `workflow.create` takes only a project and a name, so the renderer cannot send a large first document around the save path.
+- **The quit question is asked in main.** The renderer only holds back unloading with `beforeunload`, and `will-prevent-unload` shows the native dialog, so no new bridge call exists for it.
+- **A value's type is chosen, not guessed.** Typing 20 into a text field stays text, because a rule comparing a number with text fails the node at run time.

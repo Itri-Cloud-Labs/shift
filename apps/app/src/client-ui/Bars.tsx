@@ -21,10 +21,13 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Run } from '../protocol/generated/types.js';
 import type { ConnectionView, SyncView } from '../shared/contracts.js';
+import { Fields } from './Attention.js';
 import { ask, bridge } from './bridge.js';
+import { plainForm } from './config.js';
+import { asSchema, initialDraft, setAt, toResponse, type Draft } from './forms.js';
 import { finished, runReason, runStateLabels } from './graph.js';
 import { StatusIcon, runTone } from './icons.js';
 import { clock, relativeTime } from './time.js';
@@ -285,7 +288,7 @@ export function Toolbar({
       <button
         className="button quiet icon"
         aria-label="Fit the graph"
-        onClick={() => void flow.fitView({ padding: 0.2, duration: 200 })}
+        onClick={() => void flow.fitView({ padding: 0.15, maxZoom: 1.1, duration: 200 })}
       >
         <Maximize />
       </button>
@@ -413,8 +416,20 @@ export function RunInput({
 }) {
   const [text, setText] = useState('{\n  \n}');
   const [error, setError] = useState('');
+  // A schema of plain fields gets widgets; anything else is written as JSON.
+  const form = plainForm(schema) ? asSchema(schema) : null;
+  const [answers, setAnswers] = useState<Draft>(() => initialDraft(form ?? {}));
+  const [problems, setProblems] = useState<Map<string, string>>(new Map());
+  const first = useRef<HTMLDivElement>(null);
+  useEffect(() => first.current?.querySelector('input')?.focus(), []);
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (form) {
+      const converted = toResponse(form, answers);
+      setProblems(converted.problems);
+      if (converted.problems.size === 0) start(converted.value);
+      return;
+    }
     try {
       start(JSON.parse(text));
     } catch {
@@ -427,25 +442,40 @@ export function RunInput({
   return (
     <form className="island run-input" onSubmit={submit} aria-label="Run input">
       <h2>Start a run</h2>
-      <p>
-        This workflow takes input{fields.length ? `: ${fields.join(', ')}` : ''}. The server checks
-        it against the trigger's schema.
-      </p>
-      <label className="visually-hidden" htmlFor="run-input">
-        Input as JSON
-      </label>
-      <textarea
-        id="run-input"
-        autoFocus
-        spellCheck={false}
-        value={text}
-        aria-invalid={error !== ''}
-        onChange={(event) => {
-          setText(event.target.value);
-          setError('');
-        }}
-      />
-      {error && <p className="field-error">{error}</p>}
+      {form ? (
+        <div className="run-input-fields" ref={first}>
+          <Fields
+            schema={form}
+            draft={answers}
+            path={[]}
+            problems={problems}
+            disabled={false}
+            change={(path, value) => setAnswers((current) => setAt(current, path, value))}
+          />
+        </div>
+      ) : (
+        <>
+          <p>
+            This workflow takes input{fields.length ? `: ${fields.join(', ')}` : ''}. The server
+            checks it against the trigger's schema.
+          </p>
+          <label className="visually-hidden" htmlFor="run-input">
+            Input as JSON
+          </label>
+          <textarea
+            id="run-input"
+            autoFocus
+            spellCheck={false}
+            value={text}
+            aria-invalid={error !== ''}
+            onChange={(event) => {
+              setText(event.target.value);
+              setError('');
+            }}
+          />
+          {error && <p className="field-error">{error}</p>}
+        </>
+      )}
       <div className="actions">
         <button type="button" className="button quiet" onClick={close}>
           Not now

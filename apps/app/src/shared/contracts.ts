@@ -85,6 +85,16 @@ export const requestSchema = v.variant('kind', [
     workflowId: profileId,
     revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
   }),
+  // A project is a repository on the server, so its path means nothing on this computer.
+  v.strictObject({
+    kind: v.literal('project.create'),
+    path: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
+  }),
+  v.strictObject({
+    kind: v.literal('workflow.create'),
+    projectId: profileId,
+    name: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
+  }),
   v.strictObject({ kind: v.literal('data.devices') }),
   v.strictObject({ kind: v.literal('device.revoke'), deviceId: profileId }),
   v.strictObject({ kind: v.literal('preferences.read') }),
@@ -271,6 +281,8 @@ export const responseSchema = v.variant('kind', [
     kind: v.literal('command'),
     command: commandViewSchema,
     runId: v.nullable(uuid),
+    // What a create command made, when its answer has arrived.
+    createdId: v.optional(uuid),
   }),
   // Checked by the generated protocol validator before this crosses IPC.
   v.strictObject({ kind: v.literal('devices'), value: v.unknown() }),
@@ -319,6 +331,10 @@ export interface DesktopBridge {
     ): Promise<DesktopResponse>;
     // Publishes exactly the draft at `revision`.
     publish(workflowId: string, revision: number): Promise<DesktopResponse>;
+    create(projectId: string, name: string): Promise<DesktopResponse>;
+  };
+  project: {
+    create(path: string): Promise<DesktopResponse>;
   };
   device: {
     revoke(deviceId: string): Promise<DesktopResponse>;

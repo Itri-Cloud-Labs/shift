@@ -8,11 +8,19 @@ export interface Route {
   workflowId: string | null;
   // null shows the draft.
   runId: string | null;
+  // A published version shown instead of the draft. A run takes precedence.
+  versionId: string | null;
   nodeId: string | null;
 }
 
-const empty: Route = { projectId: null, workflowId: null, runId: null, nodeId: null };
-const keys = { p: 'projectId', w: 'workflowId', r: 'runId', n: 'nodeId' } as const;
+const empty: Route = {
+  projectId: null,
+  workflowId: null,
+  runId: null,
+  versionId: null,
+  nodeId: null,
+};
+const keys = { p: 'projectId', w: 'workflowId', r: 'runId', v: 'versionId', n: 'nodeId' } as const;
 
 export function parseRoute(hash: string): Route {
   const route: Route = { ...empty };

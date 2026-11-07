@@ -1,4 +1,13 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, protocol, session, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  protocol,
+  session,
+  shell,
+} from 'electron';
 import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +162,23 @@ async function createWindow(): Promise<void> {
       (url) => shell.openExternal(url),
     ),
   );
+  // The renderer holds back unloading while edits are unsaved; the choice is made here. Capture
+  // answers on its own, to prove the guard without a native dialog nobody can click.
+  contents.on('will-prevent-unload', (event) => {
+    if (capture) {
+      console.log('SHIFT_CAPTURE unload-held');
+      return;
+    }
+    const choice = dialog.showMessageBoxSync(owned, {
+      type: 'warning',
+      message: 'Quit without saving?',
+      detail: 'This computer has edits that were not saved to the server. They will be lost.',
+      buttons: ['Keep editing', 'Quit without saving'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (choice === 1) event.preventDefault();
+  });
   contents.on('render-process-gone', () => {
     if (smoke) app.exit(1);
   });

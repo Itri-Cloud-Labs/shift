@@ -1,7 +1,16 @@
 import { CircleAlert, Copy, GitCompareArrows, Trash2, TriangleAlert, X } from 'lucide-react';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEscape } from './Attention.js';
+import {
+  BindingsBuilder,
+  CasesBuilder,
+  DataBuilder,
+  RuleBuilder,
+  SchemaBuilder,
+  type BindingEditing,
+} from './Builders.js';
 import { addableTypes, type DraftProblem } from './draft.js';
+import { TextField, Typing } from './Fields.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
 import { TypeIcon } from './icons.js';
 
@@ -165,93 +174,20 @@ export function ConflictIsland({
   );
 }
 
-// Tells the workspace a field holds text that is not committed yet, so a server revision waits.
-const Typing = createContext<(typing: boolean) => void>(() => undefined);
-
-// A text field that commits when it loses focus or on Enter, so one edit is one undo step. An
-// undo elsewhere replaces what it shows.
-function TextField({
-  id,
-  label,
-  value,
-  multiline,
-  placeholder,
-  note,
-  problem,
-  numeric,
-  autoFocus,
-  commit,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  multiline?: boolean;
-  placeholder?: string;
-  note?: string | undefined;
-  problem?: string | undefined;
-  numeric?: boolean;
-  autoFocus?: boolean;
-  commit: (value: string) => void;
-}) {
-  const [text, setText] = useState(value);
-  useEffect(() => setText(value), [value]);
-  const typing = useContext(Typing);
-  // From the first keystroke until the field loses focus, when it commits or shows its problem.
-  const [typed, setTyped] = useState(false);
-  useEffect(() => {
-    typing(typed && text !== value);
-    return () => typing(false);
-  }, [typed, text, value]);
-  const props = {
-    id,
-    value: text,
-    placeholder,
-    autoFocus,
-    spellCheck: false,
-    'aria-invalid': problem ? true : undefined,
-    onChange: (event: { target: { value: string } }) => {
-      setText(event.target.value);
-      setTyped(true);
-    },
-    onBlur: () => {
-      setTyped(false);
-      if (text !== value) commit(text);
-    },
-  };
-  return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
-      {multiline ? (
-        <textarea {...props} rows={5} />
-      ) : (
-        <input
-          {...props}
-          type={numeric ? 'number' : 'text'}
-          min={numeric ? 0 : undefined}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && text !== value) commit(text);
-          }}
-        />
-      )}
-      {note && <p className="note">{note}</p>}
-      {problem && <p className="field-error">{problem}</p>}
-    </div>
-  );
-}
-
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 const seconds = (value: unknown) => (typeof value === 'number' ? String(value / 1000) : '');
 
-// Forms for what can be set with plain fields. Everything else in a node's config is kept as it
-// came; the builders for rules, bindings and schemas come with the rest of prompt 13.
+// The form for each node type. Whatever a form does not show is kept as it came.
 function ConfigFields({
   node,
   problems,
   set,
+  renameCase,
 }: {
   node: DocumentNode;
   problems: DraftProblem[];
   set: (key: string, value: unknown) => void;
+  renameCase: (index: number, next: string) => string | null;
 }) {
   const { config, id } = node;
   const problem = (field: string) => problems.find((item) => item.field === field)?.message;
@@ -286,6 +222,35 @@ function ConfigFields({
     />
   );
   switch (node.type) {
+    case 'manual_trigger':
+      return (
+        <SchemaBuilder
+          id={`${id}-input`}
+          legend="Input a run asks for"
+          empty="A run starts without asking for anything."
+          schema={config['inputSchema']}
+          set={(schema) => set('inputSchema', schema)}
+        />
+      );
+    case 'transform':
+      return (
+        <DataBuilder node={node} problem={problem('data')} set={(data) => set('data', data)} />
+      );
+    case 'condition':
+      return (
+        <fieldset className="field-group">
+          <legend>Takes the true port when</legend>
+          <RuleBuilder
+            id={`${id}-when`}
+            rule={config['when']}
+            bindings={Object.keys(node.bindings)}
+            problem={problem('when')}
+            change={(when) => set('when', when)}
+          />
+        </fieldset>
+      );
+    case 'switch':
+      return <CasesBuilder node={node} set={(cases) => set('cases', cases)} rename={renameCase} />;
     case 'agent':
       return (
         <>
@@ -301,6 +266,13 @@ function ConfigFields({
               Read only: no file edits or shell commands
             </label>
           </div>
+          <SchemaBuilder
+            id={`${id}-result`}
+            legend="Result it must return"
+            empty="The agent may return anything."
+            schema={config['resultSchema']}
+            set={(schema) => set('resultSchema', schema)}
+          />
         </>
       );
     case 'wait':
@@ -324,6 +296,14 @@ function ConfigFields({
           {field('title', 'Title')}
           {field('instructions', 'Instructions (optional)', true)}
           {timeout}
+          <SchemaBuilder
+            id={`${id}-form`}
+            legend="Form to fill in"
+            empty="The form has no fields yet."
+            schema={config['form']}
+            keepEmpty
+            set={(schema) => set('form', schema)}
+          />
         </>
       );
     case 'approval':
@@ -348,6 +328,13 @@ function ConfigFields({
             }}
           />
           {timeout}
+          <SchemaBuilder
+            id={`${id}-form`}
+            legend="Form beside the decision"
+            empty="It asks for an optional comment."
+            schema={config['form']}
+            set={(schema) => set('form', schema)}
+          />
         </>
       );
     case 'end':
@@ -379,11 +366,22 @@ function ConfigFields({
 }
 
 // These problems already appear under their own field.
-const shownOnField = new Set(['goal', 'title', 'durationMs', 'model', 'until', 'reason']);
+const shownOnField = new Set([
+  'goal',
+  'title',
+  'durationMs',
+  'model',
+  'until',
+  'reason',
+  'when',
+  'data',
+]);
 
 export interface NodeEditing {
   rename: (next: string) => string | null;
   set: (key: string, value: unknown) => void;
+  bindings: BindingEditing;
+  renameCase: (index: number, next: string) => string | null;
   connectPort: (port: string, target: string | null) => void;
   typing: (typing: boolean) => void;
   duplicate: () => void;
@@ -422,7 +420,15 @@ export function NodeEditor({
           note="Other nodes refer to it by this name."
           commit={(value) => setRenameProblem(editing.rename(value) ?? undefined)}
         />
-        <ConfigFields node={node} problems={own} set={editing.set} />
+        {node.type !== 'manual_trigger' && node.type !== 'end' && (
+          <BindingsBuilder document={document} node={node} editing={editing.bindings} />
+        )}
+        <ConfigFields
+          node={node}
+          problems={own}
+          set={editing.set}
+          renameCase={editing.renameCase}
+        />
       </Typing.Provider>
       {ports.length > 0 && (
         <fieldset className="field-group">

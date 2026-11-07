@@ -231,6 +231,16 @@ try {
   const stuck = await cli(['run', 'start', '--workflow', loop.id, ...admin]);
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
+  // Added through the app in step j01.
+  const secondRepository = join(temporaryRoot, 'second-repo');
+  await mkdir(secondRepository);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: secondRepository });
+  execFileSync(
+    'git',
+    ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'],
+    { cwd: secondRepository },
+  );
+
   const base = `#/p/${project.id}/w/${workflow.id}`;
   const steps = [
     { name: '01-pairing-dark', theme: 'dark', size: [1440, 900] },
@@ -314,6 +324,262 @@ try {
         "[...document.querySelectorAll('.conflict button')].find((b) => b.textContent.startsWith('Discard')).click()",
       wait: 800,
     },
+    // The location menus with a real mouse, with the node list open beneath them.
+    {
+      name: 'm0-list-open',
+      hash: base,
+      wait: 800,
+      expect: 'document.querySelector(\'[aria-label="Close list"]\')',
+    },
+    {
+      name: 'm1-runs-menu',
+      click: '[data-crumb=run]',
+      wait: 400,
+      expect: "document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm2-open-version',
+      click: '.runs-menu .option:nth-of-type(2)',
+      wait: 800,
+      expect: "location.hash.includes('/v/') && !document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm3-runs-menu',
+      click: '[data-crumb=run]',
+      wait: 400,
+      expect: "document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm4-back-to-draft',
+      click: '.runs-menu .option',
+      wait: 800,
+      expect: "!location.hash.includes('/v/') && !document.querySelector('.runs-menu')",
+    },
+    {
+      name: 'm5-switcher',
+      click: '.location .crumb',
+      wait: 400,
+      expect: "document.querySelector('.switcher')",
+    },
+    {
+      name: 'm6-switch-workflow',
+      click: '.switcher-column[aria-label=Workflows] .option:not(.active)',
+      wait: 800,
+      expect: "!document.querySelector('.switcher') && !location.hash.includes('${workflow.id}')",
+    },
+    // The whole journey through the UI, with no JSON: add a project and a workflow, build a branch,
+    // connect it by mouse and by keyboard, publish, run, browse versions. `J` is defined in j00.
+    {
+      name: 'j00-add-project-refused',
+      script: `window.J = {
+        set(selector, value) {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error('No ' + selector);
+          const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
+          element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
+          element.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        },
+        click(selector, text) {
+          const element = [...document.querySelectorAll(selector)].find((item) => text === undefined || item.textContent.trim().startsWith(text));
+          if (!element) throw new Error('No ' + selector + ' ' + text);
+          element.click();
+        },
+      };
+      J.click('.location .crumb');
+      setTimeout(() => J.click('.switcher-create', 'Add a project'), 200);
+      setTimeout(() => { J.set('#create-value', '/does/not/exist'); J.click('.create-dialog button[type=submit]'); }, 500);`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.create-dialog .field-error')?.textContent.includes('does not exist')",
+    },
+    {
+      name: 'j01-add-project',
+      script: `J.set('#create-value', ${JSON.stringify(secondRepository)}); J.click('.create-dialog button[type=submit]');`,
+      wait: 1500,
+      expect:
+        "!document.querySelector('.create-dialog') && document.querySelector('.location').textContent.includes('second-repo') && document.querySelector('.hint').textContent.includes('no workflows')",
+    },
+    {
+      name: 'j02-new-workflow',
+      script: `J.click('.hint button', 'New workflow'); setTimeout(() => { J.set('#create-value', 'Branch by size'); J.click('.create-dialog button[type=submit]'); }, 200);`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.location').textContent.includes('Branch by size') && document.querySelector('.react-flow__node[data-id=start]')",
+      report: 'location.hash',
+    },
+    {
+      name: 'j03-trigger-input',
+      script: `location.hash += '/n/start'; setTimeout(() => J.click('.node-editor button', 'Add a field'), 300);
+        setTimeout(() => { J.set('#start-input-0-name', 'files'); }, 600);
+        setTimeout(() => { J.set('#start-input-0-type', 'integer'); }, 800);
+        setTimeout(() => J.click('.node-editor .field-check input'), 1000);`,
+      wait: 1500,
+      expect:
+        "document.querySelector('#start-input-0-type').value === 'integer' && document.querySelector('.node-editor .field-check input').checked",
+    },
+    {
+      name: 'j04-condition',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'Condition'), 200);
+        setTimeout(() => J.click('.node-editor button', 'Add a value'), 600);
+        setTimeout(() => J.set('#condition-binding-0-name', 'files'), 900);
+        setTimeout(() => J.set('#condition-binding-0-kind', 'trigger'), 1100);
+        setTimeout(() => J.set('#condition-binding-0-path', 'files'), 1300);
+        setTimeout(() => J.click('.builder-rule button, .node-editor button', 'Add a test'), 1500);
+        setTimeout(() => J.set('#condition-when-0-op', 'gt'), 1700);
+        setTimeout(() => J.set('#condition-when-0-right-value-kind', 'number'), 1900);
+        setTimeout(() => J.set('#condition-when-0-right-value', '20'), 2100);`,
+      wait: 2600,
+      expect:
+        "document.querySelector('#condition-when-0-left-source').value === '=files' && document.querySelector('#condition-when-0-right-value').value === '20'",
+    },
+    {
+      name: 'j05-two-ends',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'End'), 200);
+        setTimeout(() => J.click('[aria-label="Add a node"]'), 500); setTimeout(() => J.click('.node-picker button', 'End'), 700);
+        setTimeout(() => J.click('[aria-label="Close"], .inspector [aria-label^="Close"]'), 1000);
+        setTimeout(() => J.click('[aria-label="Fit the graph"], [aria-label="Fit"]'), 1200);`,
+      wait: 1800,
+      expect: "document.querySelectorAll('.react-flow__node').length === 4",
+    },
+    {
+      name: 'j06-connect-by-mouse',
+      pull: {
+        from: '.react-flow__node[data-id="start"] .react-flow__handle.source',
+        to: '.react-flow__node[data-id="condition"] .react-flow__handle.target',
+      },
+      wait: 500,
+      expect: "document.querySelectorAll('.react-flow__edge').length === 1",
+    },
+    {
+      name: 'j07-connect-true-by-mouse',
+      pull: {
+        from: '.react-flow__node[data-id="condition"] .react-flow__handle[data-handleid="true"]',
+        to: '.react-flow__node[data-id="end"] .react-flow__handle.target',
+      },
+      wait: 500,
+      expect: "document.querySelectorAll('.react-flow__edge').length === 2",
+    },
+    {
+      name: 'j08-connect-false-by-keyboard',
+      script: `location.hash += '/n/condition'; new Promise((done) => setTimeout(done, 500)).then(() => document.querySelector('#condition-port-false').focus())`,
+      keys: ['Down', 'Down', 'Down'],
+      wait: 700,
+      expect:
+        "document.activeElement.id === 'condition-port-false' && document.querySelector('#condition-port-false').value !== ''",
+      report: "document.querySelector('#condition-port-false').value",
+    },
+    {
+      name: 'j08b-add-by-keyboard',
+      script: `document.querySelector('[aria-label="Add a node"]').focus();`,
+      keys: ['Return', 'Return'],
+      wait: 800,
+      expect:
+        "document.querySelector('.react-flow__node[data-id=agent]') && document.activeElement.id === 'agent-id'",
+    },
+    {
+      name: 'j08c-delete-by-keyboard',
+      script: `[...document.querySelectorAll('.node-editor .button.danger')][0].focus();`,
+      keys: ['Return'],
+      wait: 500,
+      expect: "!document.querySelector('.react-flow__node[data-id=agent]')",
+    },
+    {
+      name: 'j08d-reconnect-by-mouse',
+      pull: {
+        from: '.react-flow__edge[data-id="c2"] .react-flow__edgeupdater-target',
+        to: '.react-flow__node[data-id="end_2"] .react-flow__handle.target',
+      },
+      wait: 500,
+      expect:
+        "document.querySelector('.react-flow__edge[data-id=\"c2\"]').getAttribute('aria-label')?.includes('end_2')",
+      report: `[...document.querySelectorAll('.react-flow__edge')].map((edge) => edge.dataset.id + ':' + (edge.getAttribute('aria-label') ?? ''))`,
+    },
+    {
+      name: 'j08e-undo-reconnect',
+      script: `document.querySelector('[aria-label=Undo]').click();`,
+      wait: 400,
+    },
+    {
+      name: 'j08f-drop-on-canvas',
+      pull: {
+        from: '.react-flow__node[data-id="condition"] .react-flow__handle[data-handleid="error"]',
+        to: [960, 780],
+      },
+      wait: 500,
+      expect: "document.querySelector('.node-picker')",
+    },
+    {
+      name: 'j08g-joined-to-port',
+      script: `J.click('.node-picker button', 'End');`,
+      wait: 700,
+      expect:
+        "document.querySelector('.react-flow__node[data-id=end_3]') && document.querySelectorAll('.react-flow__edge').length === 4",
+    },
+    {
+      name: 'j08h-undo-drop',
+      script: `document.querySelector('[aria-label=Undo]').click();`,
+      wait: 400,
+      expect:
+        "!document.querySelector('.react-flow__node[data-id=end_3]') && document.querySelectorAll('.react-flow__edge').length === 3",
+    },
+    {
+      name: 'j09-saved-published',
+      script: `setTimeout(() => J.click('.toolbar button', 'Save'), 300);
+        setTimeout(() => J.click('.toolbar button', 'Publish'), 1500);`,
+      wait: 3000,
+      expect:
+        "document.querySelector('.toolbar').textContent.includes('v1 published') && document.querySelectorAll('.react-flow__edge').length === 3",
+    },
+    {
+      name: 'j10-run-form',
+      script: `J.click('.toolbar button', 'Run');`,
+      wait: 500,
+      expect: "document.querySelector('.run-input input') && !document.querySelector('#run-input')",
+    },
+    {
+      name: 'j11-run-finished',
+      script: `J.set('.run-input input', '42'); J.click('.run-input button[type=submit]');`,
+      wait: 3000,
+      expect:
+        "location.hash.includes('/r/') && document.querySelector('.react-flow__node[data-id=end] .node-state') && !document.querySelector('.react-flow__node[data-id=end_2] .node-state[data-status=completed]')",
+    },
+    {
+      name: 'j12-version-read-only',
+      script: `J.click('[data-crumb=run]'); setTimeout(() => J.click('.runs-menu button', 'Version 1'), 200);`,
+      wait: 1200,
+      expect:
+        "document.querySelector('.location').textContent.includes('Version 1') && document.querySelector('.location').textContent.includes('Read only') && !location.hash.includes('/r/') && !document.querySelector('.toolbar [aria-label=\"Add a node\"]') && document.querySelectorAll('.react-flow__edge').length === 3",
+    },
+    {
+      name: 'j13-unsaved-holds-close',
+      script: `J.click('[data-crumb=run]'); setTimeout(() => J.click('.runs-menu button', 'Draft'), 200);
+        setTimeout(() => J.click('[aria-label="Add a node"]'), 800); setTimeout(() => J.click('.node-picker button', 'Wait'), 1000);`,
+      wait: 1500,
+    },
+    {
+      name: 'j14-still-open',
+      close: true,
+      wait: 800,
+      expect: "document.querySelector('.location').textContent.includes('unsaved')",
+    },
+    // tools/capture.mjs saves this draft from the CLI once j14 is captured.
+    { name: 'j15-conflict', wait: 3000, expect: "document.querySelector('.conflict')" },
+    {
+      name: 'j16-kept-mine',
+      script: `J.click('.conflict button', 'Keep mine');`,
+      wait: 500,
+      expect:
+        "!document.querySelector('.conflict') && document.querySelector('.react-flow__node[data-id=wait]')",
+    },
+    {
+      name: 'j17-saved-over-theirs',
+      script: `J.click('.toolbar button', 'Save');`,
+      wait: 1500,
+      expect:
+        "!document.querySelector('.conflict') && !document.querySelector('.location').textContent.includes('unsaved')",
+      report: 'location.hash',
+    },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
     { name: '17-inbox', script: "document.querySelector('.attention-count').click()", wait: 800 },
@@ -386,15 +652,15 @@ try {
 
   // Stands in for another device. The node's move is theirs; the added node stays local.
   let saved = false;
-  const saveElsewhere = async () => {
-    const current = await cli(['workflow', 'show', workflow.id, ...admin]);
+  const saveElsewhere = async (id = workflow.id) => {
+    const current = await cli(['workflow', 'show', id, ...admin]);
     const file = join(temporaryRoot, 'elsewhere.json');
     current.draft.nodes[0].position.y += 40;
     await writeFile(file, JSON.stringify(current.draft));
     await cli([
       'workflow',
       'save',
-      workflow.id,
+      id,
       '--revision',
       String(current.draftRevision),
       '--file',
@@ -428,8 +694,18 @@ try {
   }));
   const app = spawn(executable, args, { env, stdio: ['ignore', 'pipe', 'inherit'] });
   let started = false;
+  let held = false;
+  let journeyWorkflow;
   app.stdout.on('data', (chunk) => {
     process.stdout.write(chunk);
+    const text = String(chunk);
+    if (text.includes('SHIFT_CAPTURE unload-held')) held = true;
+    const reported = /SHIFT_REPORT j02-new-workflow "[^"]*\/w\/([0-9a-f-]{36})/.exec(text);
+    if (reported) journeyWorkflow = reported[1];
+    if (text.includes('SHIFT_CAPTURE j14-still-open')) {
+      if (!held) throw new Error('Closing with unsaved edits was not held');
+      void saveElsewhere(journeyWorkflow);
+    }
     if (!saved && String(chunk).includes('SHIFT_CAPTURE 15h-edited-here')) {
       saved = true;
       void saveElsewhere();

@@ -52,6 +52,17 @@ function syncView(core: ClientCore): SyncView {
   };
 }
 
+// A new workflow opens with the one node every workflow has.
+const startingDraft = {
+  nodes: [{ id: 'start', type: 'manual_trigger', position: { x: 80, y: 240 } }],
+  connections: [],
+};
+
+const created = (resource: unknown): { createdId?: string } => {
+  const id = (resource as { id?: unknown } | null | undefined)?.id;
+  return typeof id === 'string' ? { createdId: id } : {};
+};
+
 export function validResource(kind: 'workflow' | 'version' | 'run', value: unknown): boolean {
   if (kind === 'workflow') return validateWorkflowResponse(value);
   if (kind === 'version') return validateWorkflowVersionResponse(value);
@@ -192,6 +203,32 @@ export async function dispatch(
           { revision: request.revision },
         );
         response = { kind: 'command', command, runId: null };
+        break;
+      }
+      case 'project.create': {
+        const { command, response: answer } = await core.command('POST', '/api/v0/projects', {
+          path: request.path,
+        });
+        response = {
+          kind: 'command',
+          command,
+          runId: null,
+          ...created((answer as { project?: unknown } | null)?.project),
+        };
+        break;
+      }
+      case 'workflow.create': {
+        const { command, response: answer } = await core.command('POST', '/api/v0/workflows', {
+          projectId: request.projectId,
+          name: request.name,
+          draft: startingDraft,
+        });
+        response = {
+          kind: 'command',
+          command,
+          runId: null,
+          ...created((answer as { workflow?: unknown } | null)?.workflow),
+        };
         break;
       }
       case 'data.devices':
