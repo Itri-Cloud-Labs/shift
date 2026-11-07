@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Run, Workflow } from '../protocol/generated/types.js';
 import type { DesktopResponse } from '../shared/contracts.js';
+import type { KeptDraft } from '../client-core/recovery.js';
 import {
   ConnectionBanner,
   Hint,
@@ -42,6 +43,7 @@ import {
   keepMine,
   reconnect,
   receive,
+  recover,
   redo,
   renameBinding,
   renameCase,
@@ -51,6 +53,7 @@ import {
   serverProblems,
   setBinding,
   setConfig,
+  setNodeField,
   startLocal,
   takeTheirs,
   undo,
@@ -181,6 +184,33 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   // A save's own new revision must not look like someone else's, so reads wait for its outcome.
   const serverDraft = workflow?.value.draft as Draft | undefined;
   const serverRevision = workflow?.value.draftRevision;
+  // Edits kept on this computer from an earlier session, read once per connection. Each is taken
+  // up when its workflow first opens.
+  const profileId = connection.profileId;
+  const [kept, setKept] = useState<{ profileId: string | null; drafts: KeptDraft[] } | null>(null);
+  useEffect(() => {
+    setKept(null);
+    if (!profileId) return;
+    let current = true;
+    void ask(bridge().recovery.list()).then((answer) => {
+      if (current) setKept({ profileId, drafts: answer.kind === 'recovery' ? answer.drafts : [] });
+    });
+    return () => {
+      current = false;
+    };
+  }, [profileId]);
+  const keptReady = kept !== null && kept.profileId === profileId;
+  // Opened without a place to go, as after a restart: go back to the newest kept edits.
+  const reopened = useRef(false);
+  useEffect(() => {
+    if (!keptReady || reopened.current) return;
+    reopened.current = true;
+    if (route.workflowId) return;
+    const newest = kept.drafts
+      .map((item) => overview.workflows.find((workflow) => workflow.id === item.workflowId))
+      .find((workflow) => workflow !== undefined);
+    if (newest) navigate({ projectId: newest.projectId, workflowId: newest.id });
+  }, [keptReady]);
   useEffect(() => {
     if (
       !workflowId ||
@@ -188,9 +218,23 @@ function Shell({ desktop }: { desktop: DesktopState }) {
       serverRevision === undefined ||
       pendingSave ||
       typing ||
-      moving
+      moving ||
+      !keptReady
     )
       return;
+    const earlier = kept.drafts.find((item) => item.workflowId === workflowId);
+    if (!locals[workflowId] && earlier) {
+      const recovered = recover(serverRevision, serverDraft, earlier);
+      setLocals((all) => ({ ...all, [workflowId]: recovered }));
+      setKept({ ...kept, drafts: kept.drafts.filter((item) => item !== earlier) });
+      if (!isDirty(recovered) && !recovered.theirs) void ask(bridge().recovery.forget(workflowId));
+      else
+        setNotice({
+          text: 'Edits from an earlier session are back. They are not saved yet.',
+          tone: 'problem',
+        });
+      return;
+    }
     setLocals((all) => {
       const current = all[workflowId];
       const next = current
@@ -198,7 +242,27 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         : startLocal(serverRevision, serverDraft);
       return next === current ? all : { ...all, [workflowId]: next };
     });
-  }, [workflowId, serverDraft, serverRevision, pendingSave, typing, moving]);
+  }, [workflowId, serverDraft, serverRevision, pendingSave, typing, moving, keptReady]);
+  // Unsaved edits are kept on this computer shortly after each change, and forgotten once saved
+  // or discarded, so a crash or quit loses at most the last moment.
+  const sent = useRef(new Map<string, Draft | null>());
+  useEffect(() => {
+    if (!keptReady) return;
+    const timer = setTimeout(() => {
+      for (const [id, item] of Object.entries(locals)) {
+        const present = isDirty(item) || item.theirs ? item.history.present : null;
+        if (sent.current.get(id) === present) continue;
+        if (present === null && !sent.current.has(id)) continue;
+        sent.current.set(id, present);
+        void ask(
+          present
+            ? bridge().recovery.keep(id, item.revision, present)
+            : bridge().recovery.forget(id),
+        );
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [locals, keptReady]);
   const dirty = local ? isDirty(local) : false;
   const present = local?.history.present;
 
@@ -910,6 +974,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                     return problem;
                   },
                   set: (key, value) => edit((draft) => setConfig(draft, selected, key, value)),
+                  setNode: (key, value) =>
+                    edit((draft) => setNodeField(draft, selected, key, value)),
                   bindings: {
                     set: (name, source) =>
                       edit((draft) => setBinding(draft, selected, name, source)),

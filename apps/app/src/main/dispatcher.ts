@@ -115,8 +115,9 @@ export async function dispatch(
         break;
       case 'connection.clear':
         await core.connection.clear(request.profileId);
-        // The cached server state goes with the profile.
+        // The cached server state and kept edits go with the profile.
         await core.sync.forget(request.profileId);
+        await core.recovery.clear(request.profileId);
         response = { kind: 'connection', connection: await connectionView(core) };
         break;
       case 'sync.read':
@@ -229,6 +230,21 @@ export async function dispatch(
           runId: null,
           ...created((answer as { workflow?: unknown } | null)?.workflow),
         };
+        break;
+      }
+      case 'recovery.list':
+      case 'recovery.keep':
+      case 'recovery.forget': {
+        const profileId = core.connection.state.profileId;
+        if (!profileId) throw new ClientFailure('DISCONNECTED');
+        if (request.kind === 'recovery.list') {
+          response = { kind: 'recovery', drafts: await core.recovery.list(profileId) };
+          break;
+        }
+        if (request.kind === 'recovery.keep')
+          await core.recovery.keep(profileId, request.workflowId, request.revision, request.draft);
+        else await core.recovery.forget(profileId, request.workflowId);
+        response = { kind: 'kept' };
         break;
       }
       case 'data.devices':

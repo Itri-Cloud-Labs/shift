@@ -10,6 +10,10 @@ export interface DocumentNode {
   type: string;
   config: Record<string, unknown>;
   bindings: Record<string, unknown>;
+  retry?: Record<string, unknown>;
+  limits?: Record<string, unknown>;
+  // Fields of the stored node this app does not know, kept as they came.
+  extra?: Record<string, unknown>;
   position?: { x: number; y: number };
 }
 
@@ -31,6 +35,17 @@ const record = (value: unknown): Record<string, unknown> =>
     ? (value as Record<string, unknown>)
     : {};
 
+const storedKeys = new Set([
+  'id',
+  'type',
+  'typeVersion',
+  'config',
+  'bindings',
+  'retry',
+  'limits',
+  'position',
+]);
+
 // Reads the nodes and connections of a workflow document, skipping malformed entries rather
 // than failing the whole view: a draft may be invalid.
 export function readDocument(value: unknown): GraphDocument {
@@ -48,6 +63,13 @@ export function readDocument(value: unknown): GraphDocument {
       type: node['type'],
       config: record(node['config']),
       bindings: record(node['bindings']),
+      ...(node['retry'] !== undefined ? { retry: record(node['retry']) } : {}),
+      ...(node['limits'] !== undefined ? { limits: record(node['limits']) } : {}),
+      ...(Object.keys(node).some((key) => !storedKeys.has(key))
+        ? {
+            extra: Object.fromEntries(Object.entries(node).filter(([key]) => !storedKeys.has(key))),
+          }
+        : {}),
       ...(typeof position['x'] === 'number' && typeof position['y'] === 'number'
         ? { position: { x: position['x'], y: position['y'] } }
         : {}),
