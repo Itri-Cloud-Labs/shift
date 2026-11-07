@@ -3073,11 +3073,15 @@ test('transform operations compute bounded values, and wrong types fail the node
           size: { $length: { $binding: 'list' } },
           last: { $at: [{ $binding: 'list' }, 1] },
           text: { $length: 'four' },
+          // Keys that only look like built-ins are plain data.
+          plain: { toString: 'kept' },
         }),
       ),
       { input: { list: ['x', 'y'] } },
     );
-    assert.deepEqual(ok.outcome, { data: { sum: 14, less: -2, size: 2, last: 'y', text: 4 } });
+    assert.deepEqual(ok.outcome, {
+      data: { sum: 14, less: -2, size: 2, last: 'y', text: 4, plain: { toString: 'kept' } },
+    });
     const outside = await startNow(
       harnessed,
       await publish(harnessed, workflow({ item: { $at: [{ $binding: 'list' }, 5] } })),

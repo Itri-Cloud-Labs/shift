@@ -236,7 +236,7 @@ export function renderTemplate(template: Json, bindings: Record<string, Json>): 
     ) {
       return bindings[entries[0]![1]] ?? null;
     }
-    if (entries.length === 1 && entries[0]![0] in operations) {
+    if (entries.length === 1 && Object.hasOwn(operations, entries[0]![0])) {
       const [operation, argument] = entries[0]!;
       const operands = operations[operation] === 1 ? [argument] : (argument as Json[]);
       return operate(
