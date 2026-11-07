@@ -11,6 +11,9 @@ import {
   readDataValue,
   readFields,
   readRule,
+  formProblem,
+  unknownConfig,
+  kindOf,
   removeField,
   renameField,
   ruleBindings,
@@ -18,36 +21,69 @@ import {
   valueKind,
   withKind,
   withOperator,
-  writeRule,
 } from '../src/client-ui/config.js';
 import {
   addNode,
   connect,
   diagnose,
   duplicateNode,
+  keepMine,
+  recover,
   renameBinding,
   renameCase,
   setBinding,
   setConfig,
+  setNodeField,
+  takeTheirs,
   type Draft,
 } from '../src/client-ui/draft.js';
 import { nodeWidth, readDocument } from '../src/client-ui/graph.js';
 
 const comparison = { op: 'gt', left: { binding: 'files' }, right: { value: 20 } };
 
-test('a rule reads as one test or one group, and deeper groups are not offered', () => {
-  assert.deepEqual(readRule(comparison), { group: 'all', items: [comparison] });
-  assert.deepEqual(readRule({ any: [comparison, comparison] })?.group, 'any');
-  assert.equal(readRule({ all: [{ any: [comparison] }] }), null);
-  assert.equal(readRule({ all: [] }), null);
-  assert.equal(readRule('nonsense'), null);
+test('a rule reads as a test, a group or something kept', () => {
+  assert.deepEqual(readRule(comparison), { kind: 'test', comparison });
+  assert.deepEqual(readRule({ any: [comparison, { all: [comparison] }] }), {
+    kind: 'group',
+    group: 'any',
+    items: [comparison, { all: [comparison] }],
+  });
+  assert.equal(readRule({ all: [] }).kind, 'kept');
+  assert.equal(readRule({ all: [comparison], extra: 1 }).kind, 'kept');
+  assert.equal(readRule('nonsense').kind, 'kept');
 });
 
-test('one test is written without a group, and several keep theirs', () => {
-  assert.deepEqual(writeRule({ group: 'any', items: [comparison] }), comparison);
-  assert.deepEqual(writeRule({ group: 'any', items: [comparison, comparison] }), {
-    any: [comparison, comparison],
+test('form problems match the server, pointer and message', () => {
+  const form = (properties: unknown) => ({ type: 'object', properties });
+  assert.equal(formProblem(form({ a: { type: 'string' } })), null);
+  assert.deepEqual(formProblem({ type: 'array' }), {
+    at: '',
+    message: 'A form is an object schema.',
   });
+  assert.deepEqual(formProblem(form({ a: { type: 'string', oneOf: [] } })), {
+    at: '/properties/a/oneOf',
+    message: 'Forms do not support oneOf on string.',
+  });
+  assert.deepEqual(formProblem(form({ a: { type: 'string', format: 'uuid' } })), {
+    at: '/properties/a/format',
+    message: 'Use date, date-time, email or uri.',
+  });
+  const nest = (depth: number): unknown =>
+    depth === 0 ? { type: 'string' } : { type: 'object', properties: { a: nest(depth - 1) } };
+  assert.equal(formProblem(nest(4)), null);
+  assert.deepEqual(formProblem(nest(5)), {
+    at: '/properties/a/properties/a/properties/a/properties/a',
+    message: 'Forms nest at most 4 levels.',
+  });
+  assert.deepEqual(formProblem(form({ a: { type: 'array' } })), {
+    at: '/properties/a',
+    message: 'An array field needs items.',
+  });
+});
+
+test('settings a node type does not have are found', () => {
+  assert.deepEqual(unknownConfig('agent', { goal: 'g', later: 1 }), { later: 1 });
+  assert.deepEqual(unknownConfig('future_type', { a: 1 }), {});
 });
 
 test('the operator decides the operands', () => {
@@ -75,7 +111,8 @@ test('values keep their type, and what has no plain form is marked', () => {
   assert.equal(convertValue('twelve', 'number'), 0);
   assert.equal(valueKind({ a: 1 }), 'kept');
   assert.equal(valueKind([1, 2]), 'kept');
-  assert.equal(valueKind(null), 'kept');
+  assert.equal(valueKind(null), 'null');
+  assert.equal(convertValue('x', 'null'), null);
 });
 
 test('a path with a dot in a key is not offered as text', () => {
@@ -105,7 +142,14 @@ test('schema edits keep the keywords they do not touch', () => {
   assert.deepEqual(Object.keys(renamed['properties'] as object), ['zone', 'nested']);
   assert.equal(removeField(schema, 'area')['required'], undefined);
   assert.deepEqual(setRequired(schema, 'nested', true)['required'], ['area', 'nested']);
-  assert.equal(readFields(schema)?.[1]?.kind, null);
+  assert.equal(readFields(schema)?.[1]?.kind, 'object');
+  assert.equal(kindOf({ type: 'array' }), null);
+  assert.equal(kindOf({ oneOf: [] }), null);
+  assert.deepEqual(withKind({ type: 'string', title: 'T' }, 'array'), {
+    title: 'T',
+    type: 'array',
+    items: { type: 'string' },
+  });
   assert.equal(readFields(true), null);
   assert.equal(readFields({ oneOf: [] }), null);
   assert.deepEqual(readFields(undefined), []);
@@ -125,7 +169,8 @@ test('only flat schemas of known fields get widgets for run input', () => {
     plainForm({ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }),
     true,
   );
-  assert.equal(plainForm({ type: 'object', properties: { a: { type: 'object' } } }), false);
+  assert.equal(plainForm({ type: 'object', properties: { a: { type: 'object' } } }), true);
+  assert.equal(plainForm({ type: 'object', properties: { a: { type: 'array' } } }), false);
   assert.equal(plainForm({ type: 'object', oneOf: [] }), false);
   assert.equal(plainForm(true), false);
 });
@@ -133,7 +178,9 @@ test('only flat schemas of known fields get widgets for run input', () => {
 test('a transform field reads as a binding, a value or nested', () => {
   assert.deepEqual(readDataValue({ $binding: 'a' }), { kind: 'binding', name: 'a' });
   assert.deepEqual(readDataValue(3), { kind: 'value', value: 3 });
-  assert.deepEqual(readDataValue({ a: 1 }), { kind: 'kept' });
+  assert.deepEqual(readDataValue({ a: 1 }), { kind: 'object' });
+  assert.deepEqual(readDataValue({ $binding: 1 }), { kind: 'kept' });
+  assert.deepEqual(readDataValue([{ a: 1 }]), { kind: 'kept' });
 });
 
 const draft: Draft = {
@@ -274,4 +321,68 @@ test('a new node lands where it covers no other', () => {
   const copy = duplicateNode(cards, 'a');
   assert.notDeepEqual(node(copy.draft, copy.nodeId).position, { x: 140, y: 140 });
   assert.ok(must(connect(added.draft, 'a', 'x', added.nodeId)));
+});
+
+test('recovered edits come back as edits, or meet a newer save as a conflict', () => {
+  const server = { nodes: [{ id: 'start', type: 'manual_trigger' }] };
+  const mine = { nodes: [...server.nodes, { id: 'end', type: 'end' }] };
+  const same = recover(3, server, { revision: 3, draft: mine });
+  assert.equal(same.revision, 3);
+  assert.equal(same.history.present, mine);
+  assert.equal(same.base, server);
+  assert.equal(same.theirs, null);
+  const newer = recover(5, server, { revision: 3, draft: mine });
+  assert.equal(newer.revision, 3);
+  assert.equal(newer.history.present, mine);
+  assert.deepEqual(newer.theirs, { revision: 5, draft: server });
+  // Keeping mine then aims the save at their revision.
+  assert.equal(keepMine(newer).revision, 5);
+  assert.equal(takeTheirs(newer).history.present, server);
+  // Nothing changed: an ordinary draft, no edits.
+  const clean = recover(5, server, { revision: 3, draft: structuredClone(server) });
+  assert.equal(clean.history.present, server);
+  assert.equal(clean.revision, 5);
+});
+
+test('diagnostics follow the server on forms, retries, unknown settings and size', () => {
+  const messages = (from: Draft) =>
+    diagnose(from)
+      .map((item) => item.message)
+      .join('\n');
+  const one = (node: Record<string, unknown>) => ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'n', ...node },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'n', toPort: 'input' },
+    ],
+  });
+  const dated = { type: 'object', properties: { a: { type: 'date' } } };
+  assert.match(
+    messages(one({ type: 'human_input', config: { title: 't', form: dated } })),
+    /n, form at \/properties\/a\/type: Use string/,
+  );
+  assert.match(
+    messages(
+      one({ type: 'end', retry: { maxAttempts: 2, initialDelayMs: 5000, maxDelayMs: 1000 } }),
+    ),
+    /longest wait is shorter/,
+  );
+  assert.match(messages(one({ type: 'end', config: { later: 1 } })), /setting later/);
+  assert.match(
+    messages(one({ type: 'end', config: { reason: 'x'.repeat(1024 * 1024) } })),
+    /larger than 1 MiB/,
+  );
+  let deep: unknown = comparison;
+  for (let level = 0; level < 5; level++) deep = { all: [deep] };
+  assert.match(messages(one({ type: 'condition', config: { when: deep } })), /4 groups deep/);
+});
+
+test('a node field is set without touching the rest', () => {
+  const retry = { maxAttempts: 3, initialDelayMs: 1, maxDelayMs: 2 };
+  const edited = setNodeField(draft, 'pick', 'retry', retry);
+  const pick = (edited['nodes'] as Record<string, unknown>[])[1]!;
+  assert.deepEqual(pick['retry'], retry);
+  assert.deepEqual(pick['config'], (draft['nodes'] as Record<string, unknown>[])[1]!['config']);
 });

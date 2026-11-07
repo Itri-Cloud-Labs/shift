@@ -21,6 +21,7 @@ import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
 import { MemoryPreferenceStore, PreferenceRuntime, type PreferenceStore } from './preferences.js';
 import { SyncFailure, SyncRuntime, type CommandView } from './sync.js';
+import { DraftRecovery, MemoryRecoveryStore, type RecoveryStore } from './recovery.js';
 
 export class ClientFailure extends Error {
   constructor(readonly code: 'DISCONNECTED' | 'INVALID_RESPONSE' | 'NOT_FOUND') {
@@ -60,13 +61,16 @@ export class ClientCore {
   #samples: boolean;
   readonly sync: SyncRuntime;
   readonly preferences: PreferenceRuntime;
+  readonly recovery: DraftRecovery;
   constructor(
     readonly connection: ConnectionRuntime,
     private readonly http: ServerHttp,
     samples = false,
     store: SyncStore = new MemorySyncStore(),
     preferences: PreferenceStore = new MemoryPreferenceStore(),
+    recovery: RecoveryStore = new MemoryRecoveryStore(),
   ) {
+    this.recovery = new DraftRecovery(recovery);
     this.#samples = samples;
     this.sync = new SyncRuntime({ connection, http, store });
     this.preferences = new PreferenceRuntime(preferences);

@@ -34,9 +34,12 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,device,interaction,onChange,openDocumentation,preferences,project,queryServer,readShell,run,setSamples,sync,workflow', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,data,device,interaction,onChange,openDocumentation,preferences,project,queryServer,readShell,recovery,run,setSamples,sync,workflow', 'Broad bridge');
     assert(Object.keys(window.shift.workflow).sort().join(',') === 'create,publish,save', 'Broad workflow bridge');
     assert(Object.keys(window.shift.project).join(',') === 'create', 'Broad project bridge');
+    assert(Object.keys(window.shift.recovery).sort().join(',') === 'forget,keep,list', 'Broad recovery bridge');
+    assert((await window.shift.recovery.list()).code === 'DISCONNECTED', 'Kept drafts read without a profile');
+    assert((await window.shift.recovery.keep('../x', 0, {})).code === 'INVALID_REQUEST', 'Path-like workflow ID kept');
     assert((await window.shift.project.create('/repo')).code === 'DISCONNECTED', 'Project created without a connection');
     assert((await window.shift.workflow.create('../etc', 'x')).code === 'INVALID_REQUEST', 'Path-like project ID accepted');
     assert(Object.keys(window.shift.data).sort().join(',') === 'devices,overview,run,version,workflow', 'Broad data bridge');

@@ -9,6 +9,7 @@ import {
 } from '../client-core/credentials.js';
 import type { PreferenceStore } from '../client-core/preferences.js';
 import type { SyncRecord, SyncStore } from '../client-core/projection.js';
+import type { KeptDraft, RecoveryStore } from '../client-core/recovery.js';
 import type { Preferences } from '../shared/contracts.js';
 
 // Electron storage adapters (client specification 4.2). Device tokens are encrypted with
@@ -134,6 +135,48 @@ export class FileSyncStore implements SyncStore {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const path = this.#path(profileId);
     await writeFile(`${path}.tmp`, JSON.stringify(record), { mode: 0o600 });
+    await rename(`${path}.tmp`, path);
+  }
+
+  async remove(profileId: string): Promise<void> {
+    await rm(this.#path(profileId), { force: true });
+  }
+}
+
+// Unsaved workflow edits, one file per connection profile, readable only by this user.
+export class FileRecoveryStore implements RecoveryStore {
+  constructor(private readonly directory: string) {}
+
+  #path(profileId: string): string {
+    if (!handlePattern.test(profileId)) throw new Error('Invalid profile ID');
+    return join(this.directory, `${profileId}.json`);
+  }
+
+  async load(profileId: string): Promise<KeptDraft[] | undefined> {
+    try {
+      const drafts = JSON.parse(await readFile(this.#path(profileId), 'utf8')) as unknown;
+      if (!Array.isArray(drafts)) return undefined;
+      return drafts.filter(
+        (item): item is KeptDraft =>
+          typeof item?.workflowId === 'string' &&
+          handlePattern.test(item.workflowId) &&
+          Number.isInteger(item.revision) &&
+          item.revision >= 0 &&
+          typeof item.draft === 'object' &&
+          item.draft !== null &&
+          !Array.isArray(item.draft) &&
+          typeof item.keptAt === 'number',
+      );
+    } catch {
+      // Missing or unreadable.
+      return undefined;
+    }
+  }
+
+  async save(profileId: string, drafts: KeptDraft[]): Promise<void> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const path = this.#path(profileId);
+    await writeFile(`${path}.tmp`, JSON.stringify(drafts), { mode: 0o600 });
     await rename(`${path}.tmp`, path);
   }
 

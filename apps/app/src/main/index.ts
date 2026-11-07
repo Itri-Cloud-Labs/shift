@@ -19,6 +19,7 @@ import {
   credentialStore,
   FilePreferenceStore,
   FileProfileStore,
+  FileRecoveryStore,
   FileSyncStore,
 } from './storage.js';
 import { CHANGE_CHANNEL, IPC_CHANNEL } from '../shared/contracts.js';
@@ -67,6 +68,7 @@ function createCore(): ClientCore {
     !app.isPackaged,
     new FileSyncStore(join(app.getPath('userData'), 'sync')),
     new FilePreferenceStore(join(app.getPath('userData'), 'preferences.json')),
+    new FileRecoveryStore(join(app.getPath('userData'), 'drafts')),
   );
 }
 

@@ -95,6 +95,15 @@ export const requestSchema = v.variant('kind', [
     projectId: profileId,
     name: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
   }),
+  // Unsaved edits kept on this computer for the connected server; they never leave main.
+  v.strictObject({ kind: v.literal('recovery.list') }),
+  v.strictObject({
+    kind: v.literal('recovery.keep'),
+    workflowId: profileId,
+    revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+    draft: v.record(v.string(), v.unknown()),
+  }),
+  v.strictObject({ kind: v.literal('recovery.forget'), workflowId: profileId }),
   v.strictObject({ kind: v.literal('data.devices') }),
   v.strictObject({ kind: v.literal('device.revoke'), deviceId: profileId }),
   v.strictObject({ kind: v.literal('preferences.read') }),
@@ -287,6 +296,21 @@ export const responseSchema = v.variant('kind', [
   // Checked by the generated protocol validator before this crosses IPC.
   v.strictObject({ kind: v.literal('devices'), value: v.unknown() }),
   v.strictObject({ kind: v.literal('preferences'), preferences: preferencesSchema }),
+  v.strictObject({
+    kind: v.literal('recovery'),
+    drafts: v.pipe(
+      v.array(
+        v.strictObject({
+          workflowId: uuid,
+          revision: v.pipe(v.number(), v.integer(), v.minValue(0)),
+          draft: v.record(v.string(), v.unknown()),
+          keptAt: v.number(),
+        }),
+      ),
+      v.maxLength(20),
+    ),
+  }),
+  v.strictObject({ kind: v.literal('kept') }),
   v.strictObject({ kind: v.literal('opened') }),
   // Generated protocol validators validate the value before this crosses IPC.
   v.strictObject({ kind: v.literal('server'), operation: querySchema, value: v.unknown() }),
@@ -336,6 +360,15 @@ export interface DesktopBridge {
   project: {
     create(path: string): Promise<DesktopResponse>;
   };
+  recovery: {
+    list(): Promise<DesktopResponse>;
+    keep(
+      workflowId: string,
+      revision: number,
+      draft: Record<string, unknown>,
+    ): Promise<DesktopResponse>;
+    forget(workflowId: string): Promise<DesktopResponse>;
+  };
   device: {
     revoke(deviceId: string): Promise<DesktopResponse>;
   };
@@ -381,13 +414,14 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
   const kind =
     typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
   const limit =
-    kind === 'workflow.save'
+    kind === 'workflow.save' || kind === 'recovery.keep'
       ? SAVE_LIMIT
       : kind === 'interaction.respond' || kind === 'run.control'
         ? ANSWER_LIMIT
         : REQUEST_LIMIT;
   // A draft may nest 32 levels below its envelope.
-  if (!withinLimit(value, limit, kind === 'workflow.save' ? 48 : 16)) return undefined;
+  if (!withinLimit(value, limit, kind === 'workflow.save' || kind === 'recovery.keep' ? 48 : 16))
+    return undefined;
   const result = v.safeParse(requestSchema, value);
   return result.success ? result.output : undefined;
 }
@@ -396,7 +430,7 @@ export function parseResponse(value: unknown): DesktopResponse | undefined {
   // requests carry their frozen forms.
   const kind =
     typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
-  const resource = kind === 'resource' || kind === 'interactions';
+  const resource = kind === 'resource' || kind === 'interactions' || kind === 'recovery';
   if (!withinLimit(value, resource ? RESOURCE_LIMIT : RESPONSE_LIMIT, resource ? 48 : 16))
     return undefined;
   const result = v.safeParse(responseSchema, value);

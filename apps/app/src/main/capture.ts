@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ClientCore } from '../client-core/runtime.js';
+import { APP_URL } from './security.js';
 
 // Development screenshots for design review, driven by tools/capture.mjs. Only unpackaged
 // builds reach this. Each step can pair with a server, switch theme, change the route, run a
@@ -23,6 +24,8 @@ interface Step {
   click?: string;
   // Real key presses, for what must work without a mouse.
   keys?: string[];
+  // Crashes the page and loads it again, as after a crash: only what main kept survives.
+  crash?: boolean;
   // Asks the window to close; a guard may hold it open.
   close?: boolean;
   wait?: number;
@@ -111,6 +114,11 @@ export async function runCapture(window: BrowserWindow, core: ClientCore): Promi
         contents.sendInputEvent({ type: 'char', keyCode });
       contents.sendInputEvent({ type: 'keyUp', keyCode });
       await delay(60);
+    }
+    if (step.crash) {
+      contents.forcefullyCrashRenderer();
+      await delay(300);
+      await contents.loadURL(APP_URL);
     }
     if (step.close) window.close();
     await delay(step.wait ?? 1200);

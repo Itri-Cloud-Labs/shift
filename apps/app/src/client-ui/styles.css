@@ -2220,3 +2220,35 @@ textarea {
 .switcher-create {
   width: 100%;
 }
+
+.builder-group {
+  margin: var(--space-2) 0 var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--hairline);
+}
+
+.builder-actions {
+  justify-content: flex-start;
+  margin-top: var(--space-2);
+}
+
+.builder-pair-note {
+  align-self: center;
+}
+
+.token-picker {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.field-group.retry summary,
+.field-group.advanced summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.field-group.advanced pre {
+  overflow: auto;
+  max-height: 200px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}

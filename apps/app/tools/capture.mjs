@@ -242,6 +242,22 @@ try {
   );
 
   const base = `#/p/${project.id}/w/${workflow.id}`;
+  // Page helpers for the journey: set a field as typing would, and click by text.
+  const JOURNEY_HELPERS = `window.J = {
+        set(selector, value) {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error('No ' + selector);
+          const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
+          element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
+          element.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        },
+        click(selector, text) {
+          const element = [...document.querySelectorAll(selector)].find((item) => text === undefined || item.textContent.trim().startsWith(text));
+          if (!element) throw new Error('No ' + selector + ' ' + text);
+          element.click();
+        },
+      };`;
   const steps = [
     { name: '01-pairing-dark', theme: 'dark', size: [1440, 900] },
     { name: '02-pairing-light', theme: 'light' },
@@ -371,21 +387,7 @@ try {
     // connect it by mouse and by keyboard, publish, run, browse versions. `J` is defined in j00.
     {
       name: 'j00-add-project-refused',
-      script: `window.J = {
-        set(selector, value) {
-          const element = document.querySelector(selector);
-          if (!element) throw new Error('No ' + selector);
-          const prototype = element instanceof HTMLSelectElement ? HTMLSelectElement.prototype : element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-          Object.getOwnPropertyDescriptor(prototype, 'value').set.call(element, value);
-          element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
-          element.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-        },
-        click(selector, text) {
-          const element = [...document.querySelectorAll(selector)].find((item) => text === undefined || item.textContent.trim().startsWith(text));
-          if (!element) throw new Error('No ' + selector + ' ' + text);
-          element.click();
-        },
-      };
+      script: `${JOURNEY_HELPERS}
       J.click('.location .crumb');
       setTimeout(() => J.click('.switcher-create', 'Add a project'), 200);
       setTimeout(() => { J.set('#create-value', '/does/not/exist'); J.click('.create-dialog button[type=submit]'); }, 500);`,
@@ -426,12 +428,12 @@ try {
         setTimeout(() => J.set('#condition-binding-0-kind', 'trigger'), 1100);
         setTimeout(() => J.set('#condition-binding-0-path', 'files'), 1300);
         setTimeout(() => J.click('.builder-rule button, .node-editor button', 'Add a test'), 1500);
-        setTimeout(() => J.set('#condition-when-0-op', 'gt'), 1700);
-        setTimeout(() => J.set('#condition-when-0-right-value-kind', 'number'), 1900);
-        setTimeout(() => J.set('#condition-when-0-right-value', '20'), 2100);`,
+        setTimeout(() => J.set('#condition-when-op', 'gt'), 1700);
+        setTimeout(() => J.set('#condition-when-right-value-kind', 'number'), 1900);
+        setTimeout(() => J.set('#condition-when-right-value', '20'), 2100);`,
       wait: 2600,
       expect:
-        "document.querySelector('#condition-when-0-left-source').value === '=files' && document.querySelector('#condition-when-0-right-value').value === '20'",
+        "document.querySelector('#condition-when-left-source').value === '=files' && document.querySelector('#condition-when-right-value').value === '20'",
     },
     {
       name: 'j05-two-ends',
@@ -580,6 +582,81 @@ try {
         "!document.querySelector('.conflict') && !document.querySelector('.location').textContent.includes('unsaved')",
       report: 'location.hash',
     },
+    // Prompt 14: a nested human form built without JSON, a crash with unsaved edits and a save
+    // from elsewhere, then the run answered through the request form.
+    {
+      name: 'r1-nested-form',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'Human input'), 200);
+        setTimeout(() => J.set('#human_input-title', 'Release notes'), 600);
+        setTimeout(() => J.click('.node-editor button', 'Add a field'), 800);
+        setTimeout(() => J.set('#human_input-form-0-name', 'release'), 1000);
+        setTimeout(() => J.set('#human_input-form-0-type', 'object'), 1200);
+        setTimeout(() => J.click('.node-editor button', 'Add a field'), 1400);
+        setTimeout(() => J.set('#human_input-form-0-fields-0-name', 'summary'), 1600);
+        setTimeout(() => J.click('.node-editor button', 'Add a field'), 1800);
+        setTimeout(() => J.set('#human_input-form-0-fields-1-name', 'risky'), 2000);
+        setTimeout(() => J.set('#human_input-form-0-fields-1-type', 'array'), 2200);
+        setTimeout(() => J.set('#human_input-port-success', 'end'), 2400);`,
+      wait: 2900,
+      expect:
+        "document.querySelector('#human_input-form-0-fields-1-items-type')?.value === 'text' && document.querySelector('#human_input-port-success').value === 'end'",
+    },
+    {
+      name: 'r2-routed',
+      script: `location.hash = location.hash.split('/n/')[0] + '/n/condition'; setTimeout(() => J.set('#condition-port-true', 'human_input'), 500);`,
+      wait: 900,
+      expect: "document.querySelector('#condition-port-true').value === 'human_input'",
+    },
+    {
+      name: 'r2b-nested-builder',
+      script: `location.hash = location.hash.split('/n/')[0] + '/n/human_input'; setTimeout(() => document.querySelector('#human_input-form-0-fields-1-name')?.scrollIntoView(), 400);`,
+      wait: 800,
+    },
+    // tools/capture.mjs saves this workflow from the CLI once r2 is captured.
+    { name: 'r3-saved-elsewhere', wait: 3500, expect: "document.querySelector('.conflict')" },
+    {
+      name: 'r4-crashed-and-back',
+      crash: true,
+      wait: 4000,
+      report:
+        "[!!document.querySelector('.conflict'), !!document.querySelector('.react-flow__node[data-id=human_input]'), document.querySelector('.notice')?.textContent ?? null, location.hash, document.querySelector('.location')?.textContent]",
+      expect:
+        "document.querySelector('.conflict') && document.querySelector('.react-flow__node[data-id=human_input]') && document.querySelector('.notice')?.textContent.includes('earlier session')",
+    },
+    {
+      name: 'r5-kept-and-published',
+      script: `${JOURNEY_HELPERS}
+        J.click('.conflict button', 'Keep mine');
+        setTimeout(() => J.click('.toolbar button', 'Save'), 400);
+        setTimeout(() => J.click('.toolbar button', 'Publish'), 1800);`,
+      wait: 3200,
+      expect:
+        "!document.querySelector('.conflict') && document.querySelector('.toolbar').textContent.includes('v2 published')",
+    },
+    {
+      name: 'r6-run-waits',
+      script: `J.click('.toolbar button', 'Run'); setTimeout(() => { J.set('.run-input input', '42'); J.click('.run-input button[type=submit]'); }, 500);`,
+      wait: 3000,
+      expect:
+        "location.hash.includes('/r/') && /Wait|Need/.test(document.querySelector('.run-status')?.textContent ?? '')",
+    },
+    {
+      name: 'r7-request-form',
+      script: `location.hash = location.hash.split('/n/')[0] + '/n/human_input';`,
+      wait: 1200,
+      expect:
+        "document.querySelector('.request form') && document.querySelector('.request').textContent.includes('Release')",
+    },
+    {
+      name: 'r8-answered',
+      script: `const inputs = () => [...document.querySelectorAll('.request form input, .request form textarea')];
+        J.set('.request form textarea', 'Billing refactor');
+        J.click('.request form button', 'Add');
+        setTimeout(() => { const last = inputs().at(-1); last.id = 'risky-0'; J.set('#risky-0', 'billing/ledger.ts'); }, 300);
+        setTimeout(() => J.click('.request-actions button'), 600);`,
+      wait: 3000,
+      expect: "document.querySelector('.run-status')?.textContent.includes('Completed')",
+    },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
     { name: '17-inbox', script: "document.querySelector('.attention-count').click()", wait: 800 },
@@ -702,6 +779,7 @@ try {
     if (text.includes('SHIFT_CAPTURE unload-held')) held = true;
     const reported = /SHIFT_REPORT j02-new-workflow "[^"]*\/w\/([0-9a-f-]{36})/.exec(text);
     if (reported) journeyWorkflow = reported[1];
+    if (text.includes('SHIFT_CAPTURE r2-routed')) void saveElsewhere(journeyWorkflow);
     if (text.includes('SHIFT_CAPTURE j14-still-open')) {
       if (!held) throw new Error('Closing with unsaved edits was not held');
       void saveElsewhere(journeyWorkflow);
@@ -715,7 +793,7 @@ try {
       void cli(['run', 'start', '--workflow', workflow.id, ...admin]);
     }
   });
-  const timer = setTimeout(() => app.kill('SIGKILL'), 120_000);
+  const timer = setTimeout(() => app.kill('SIGKILL'), 300_000);
   const code = await new Promise((done) => app.on('close', done));
   clearTimeout(timer);
   if (code !== 0) throw new Error(`Capture failed: ${code}`);

@@ -1,5 +1,9 @@
 import {
+  formProblem,
+  readRule,
   renameRuleBinding,
+  ruleDepth,
+  unknownConfig,
   renameTemplateBinding,
   renameKey,
   ruleBindings,
@@ -242,6 +246,14 @@ export function setConfig(draft: Draft, nodeId: string, key: string, value: unkn
   };
 }
 
+// Sets a node's own field, such as `retry` or `limits`, keeping the rest of the node.
+export function setNodeField(draft: Draft, nodeId: string, key: string, value: unknown): Draft {
+  return {
+    ...draft,
+    nodes: nodesOf(draft).map((node) => (node['id'] === nodeId ? { ...node, [key]: value } : node)),
+  };
+}
+
 // Sets or, with `undefined`, removes one binding. Bindings keep their order.
 export function setBinding(draft: Draft, nodeId: string, name: string, source?: unknown): Draft {
   return {
@@ -457,6 +469,25 @@ export function saved(local: LocalDraft, revision: number, sent: Draft): LocalDr
   return { ...local, revision, base: sent, theirs: null };
 }
 
+// Edits kept on this computer from an earlier session, read back against the server's draft. At
+// the same revision they are this computer's edits again; against a newer revision they meet it
+// as a conflict, so neither side is overwritten without a choice.
+export function recover(
+  revision: number,
+  draft: Draft,
+  kept: { revision: number; draft: Draft },
+): LocalDraft {
+  if (sameDraft(kept.draft, draft)) return startLocal(revision, draft);
+  if (kept.revision === revision)
+    return { revision, base: draft, history: startHistory(kept.draft), theirs: null };
+  return {
+    revision: kept.revision,
+    base: draft,
+    history: startHistory(kept.draft),
+    theirs: kept.revision < revision ? { revision, draft } : null,
+  };
+}
+
 // Conflict choices. Keeping mine aims the next save at their revision, so it replaces theirs only
 // because the owner said so; taking theirs discards local edits.
 export const keepMine = (local: LocalDraft): LocalDraft =>
@@ -529,6 +560,32 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
   for (const name of new Set(rules.flatMap(ruleBindings)))
     if (!(name in bindings))
       add(null, `A rule of ${node.id} reads ${name}, which it does not declare.`);
+  for (const key of Object.keys(unknownConfig(node.type, node.config)))
+    add(
+      null,
+      `${node.id} has a setting ${key} that its type does not know. The server will refuse it.`,
+    );
+  for (const key of ['form']) {
+    const form = node.config[key];
+    if (form === undefined) continue;
+    const found = formProblem(form);
+    if (found)
+      add('form', `${node.id}, form${found.at ? ` at ${found.at}` : ''}: ${found.message}`);
+  }
+  const retry = node.retry;
+  if (
+    typeof retry?.['maxDelayMs'] === 'number' &&
+    typeof retry['initialDelayMs'] === 'number' &&
+    retry['maxDelayMs'] < retry['initialDelayMs']
+  )
+    add('retry', `${node.id}: the longest wait is shorter than the first wait.`);
+  const deep = (rule: unknown, depth: number): boolean => {
+    const view = readRule(rule);
+    if (view.kind !== 'group') return false;
+    return depth >= ruleDepth || view.items.some((item) => deep(item, depth + 1));
+  };
+  if (rules.some((rule) => deep(rule, 0)))
+    add(null, `${node.id}: rules nest at most ${ruleDepth} groups deep.`);
   const templated = ['goal', 'data', 'until', 'title', 'instructions'].map(
     (field) => node.config[field],
   );
@@ -537,11 +594,32 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
   return problems;
 }
 
+function nesting(value: unknown, level = 0): number {
+  if (typeof value !== 'object' || value === null) return level;
+  return Math.max(level, ...Object.values(value).map((child) => nesting(child, level + 1)));
+}
+
 // Quick feedback while editing; the server's validation at publish is what counts. Backward edges
 // and convergence are valid, so neither appears here.
 export function diagnose(draft: Draft): DraftProblem[] {
   const document = readDocument(draft);
   const problems: DraftProblem[] = [];
+  // The server's limits on the whole document.
+  const size = new TextEncoder().encode(JSON.stringify(draft)).byteLength;
+  if (size > 1024 * 1024)
+    problems.push({
+      severity: 'error',
+      nodeId: null,
+      field: null,
+      message: 'The draft is larger than 1 MiB, the most the server keeps.',
+    });
+  if (nesting(draft) > 32)
+    problems.push({
+      severity: 'error',
+      nodeId: null,
+      field: null,
+      message: 'The draft nests deeper than 32 levels.',
+    });
   const triggers = document.nodes.filter((node) => node.type === 'manual_trigger');
   if (triggers.length !== 1)
     problems.push({

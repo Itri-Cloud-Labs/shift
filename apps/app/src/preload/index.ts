@@ -98,6 +98,12 @@ const bridge: DesktopBridge = {
     create: (projectId: string, name: string) =>
       invoke({ kind: 'workflow.create', projectId, name }),
   }),
+  recovery: Object.freeze({
+    list: () => invoke({ kind: 'recovery.list' }),
+    keep: (workflowId: string, revision: number, draft: Record<string, unknown>) =>
+      invoke({ kind: 'recovery.keep', workflowId, revision, draft }),
+    forget: (workflowId: string) => invoke({ kind: 'recovery.forget', workflowId }),
+  }),
   project: Object.freeze({
     create: (path: string) => invoke({ kind: 'project.create', path }),
   }),

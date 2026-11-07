@@ -9,6 +9,7 @@ import {
   SchemaBuilder,
   type BindingEditing,
 } from './Builders.js';
+import { unknownConfig } from './config.js';
 import { addableTypes, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
@@ -175,6 +176,113 @@ export function ConflictIsland({
 }
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
+const templated = new Set(['goal', 'title', 'instructions', 'until']);
+
+function TokenPicker({
+  id,
+  label,
+  bindings,
+  insert,
+}: {
+  id: string;
+  label: string;
+  bindings: string[];
+  insert: (token: string) => void;
+}) {
+  return (
+    <div className="field token-picker">
+      <label className="visually-hidden" htmlFor={`${id}-token`}>
+        Insert a value into {label}
+      </label>
+      <select
+        id={`${id}-token`}
+        value=""
+        onChange={(event) => event.target.value && insert(`{{${event.target.value}}}`)}
+      >
+        <option value="">Insert a value…</option>
+        {bindings.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// How often a node is tried, and how often one run may reach it (server specification 6.5).
+const retryDefaults = { maxAttempts: 1, initialDelayMs: 1000, maxDelayMs: 60000 };
+
+function RetryFields({
+  node,
+  problem,
+  setNode,
+}: {
+  node: DocumentNode;
+  problem?: string | undefined;
+  setNode: (key: 'retry' | 'limits', value: unknown) => void;
+}) {
+  const retry = { ...retryDefaults, ...(node.retry ?? {}) } as Record<string, unknown>;
+  const limits = { maxExecutionsPerRun: 50, ...(node.limits ?? {}) } as Record<string, unknown>;
+  const number = (value: unknown) => (typeof value === 'number' ? value : 0);
+  const whole = (value: string, scale = 1) => {
+    const parsed = Number(value);
+    return value.trim() !== '' && Number.isFinite(parsed) && parsed >= 0
+      ? Math.round(parsed * scale)
+      : undefined;
+  };
+  // The server requires all three retry fields, so a change writes them together.
+  const retryField = (key: string, label: string, scale: number) => (
+    <TextField
+      id={`${node.id}-retry-${key}`}
+      label={label}
+      numeric
+      value={String(number(retry[key]) / scale)}
+      commit={(value) => {
+        const next = whole(value, scale);
+        if (next !== undefined) setNode('retry', { ...retry, [key]: next });
+      }}
+    />
+  );
+  return (
+    <details className="field-group retry">
+      <summary>Retries and limits</summary>
+      {retryField('maxAttempts', 'Attempts before it fails (1 to 100)', 1)}
+      <div className="builder-pair">
+        {retryField('initialDelayMs', 'First wait (seconds)', 1000)}
+        {retryField('maxDelayMs', 'Longest wait (seconds)', 1000)}
+      </div>
+      {problem && <p className="field-error">{problem}</p>}
+      <TextField
+        id={`${node.id}-limits-executions`}
+        label="Times one run may reach it (1 to 10,000)"
+        numeric
+        value={String(number(limits['maxExecutionsPerRun']))}
+        note="Stops a loop that does not end."
+        commit={(value) => {
+          const next = whole(value);
+          if (next !== undefined) setNode('limits', { ...limits, maxExecutionsPerRun: next });
+        }}
+      />
+    </details>
+  );
+}
+
+// What this app has no form for: kept exactly, and shown so it does not seem to disappear.
+function Advanced({ node }: { node: DocumentNode }) {
+  const hidden = { ...unknownConfig(node.type, node.config), ...(node.extra ?? {}) };
+  if (Object.keys(hidden).length === 0) return null;
+  return (
+    <details className="field-group advanced">
+      <summary>Advanced: kept as it is</summary>
+      <p className="note">
+        This app has no form for these. They are saved as they are; the server checks them when you
+        publish.
+      </p>
+      <pre>{JSON.stringify(hidden, null, 2)}</pre>
+    </details>
+  );
+}
 const seconds = (value: unknown) => (typeof value === 'number' ? String(value / 1000) : '');
 
 // The form for each node type. Whatever a form does not show is kept as it came.
@@ -201,16 +309,35 @@ function ConfigFields({
         : Math.round(number * 1000),
     );
   };
+  const bindings = Object.keys(node.bindings);
+  // Templated text names a value as {{name}}; the picker inserts exactly that at the cursor.
   const field = (key: string, label: string, multiline = false, note?: string) => (
-    <TextField
-      id={`${id}-${key}`}
-      label={label}
-      value={text(config[key])}
-      multiline={multiline}
-      note={note}
-      problem={problem(key)}
-      commit={(value) => string(key, value)}
-    />
+    <>
+      <TextField
+        id={`${id}-${key}`}
+        label={label}
+        value={text(config[key])}
+        multiline={multiline}
+        note={note}
+        problem={problem(key)}
+        commit={(value) => string(key, value)}
+      />
+      {templated.has(key) && bindings.length > 0 && (
+        <TokenPicker
+          id={`${id}-${key}`}
+          label={label}
+          bindings={bindings}
+          insert={(token) => {
+            const element = window.document.getElementById(`${id}-${key}`) as
+              HTMLInputElement | HTMLTextAreaElement | null;
+            const current = element?.value ?? text(config[key]);
+            const start = element?.selectionStart ?? current.length;
+            const end = element?.selectionEnd ?? start;
+            string(key, current.slice(0, start) + token + current.slice(end));
+          }}
+        />
+      )}
+    </>
   );
   const timeout = (
     <TextField
@@ -273,6 +400,42 @@ function ConfigFields({
             schema={config['resultSchema']}
             set={(schema) => set('resultSchema', schema)}
           />
+          <fieldset className="field-group">
+            <legend>When its result is not accepted</legend>
+            {(
+              [
+                ['corrections', 'Corrections it may make (0 to 5)'],
+                ['rejectedSubmissions', 'Rejected results before it fails (1 to 10)'],
+                ['continuations', 'Continuations it may ask for (0 to 5)'],
+              ] as const
+            ).map(([key, label]) => (
+              <TextField
+                key={key}
+                id={`${id}-limits-${key}`}
+                label={label}
+                numeric
+                value={
+                  typeof (config['limits'] as Record<string, unknown> | undefined)?.[key] ===
+                  'number'
+                    ? String((config['limits'] as Record<string, number>)[key])
+                    : ''
+                }
+                commit={(value) => {
+                  const { [key]: _old, ...rest } = (config['limits'] ?? {}) as Record<
+                    string,
+                    unknown
+                  >;
+                  const number = Number(value);
+                  const next =
+                    value.trim() === '' || !Number.isInteger(number)
+                      ? rest
+                      : { ...rest, [key]: number };
+                  set('limits', Object.keys(next).length ? next : undefined);
+                }}
+              />
+            ))}
+            <p className="note">Empty uses the server’s default.</p>
+          </fieldset>
         </>
       );
     case 'wait':
@@ -301,7 +464,9 @@ function ConfigFields({
             legend="Form to fill in"
             empty="The form has no fields yet."
             schema={config['form']}
+            form
             keepEmpty
+            problem={problem('form')}
             set={(schema) => set('form', schema)}
           />
         </>
@@ -333,6 +498,8 @@ function ConfigFields({
             legend="Form beside the decision"
             empty="It asks for an optional comment."
             schema={config['form']}
+            form
+            problem={problem('form')}
             set={(schema) => set('form', schema)}
           />
         </>
@@ -375,11 +542,14 @@ const shownOnField = new Set([
   'reason',
   'when',
   'data',
+  'form',
+  'retry',
 ]);
 
 export interface NodeEditing {
   rename: (next: string) => string | null;
   set: (key: string, value: unknown) => void;
+  setNode: (key: 'retry' | 'limits', value: unknown) => void;
   bindings: BindingEditing;
   renameCase: (index: number, next: string) => string | null;
   connectPort: (port: string, target: string | null) => void;
@@ -429,6 +599,14 @@ export function NodeEditor({
           set={editing.set}
           renameCase={editing.renameCase}
         />
+        {node.type !== 'end' && node.type !== 'manual_trigger' && (
+          <RetryFields
+            node={node}
+            problem={own.find((item) => item.field === 'retry')?.message}
+            setNode={editing.setNode}
+          />
+        )}
+        <Advanced node={node} />
       </Typing.Provider>
       {ports.length > 0 && (
         <fieldset className="field-group">

@@ -10,18 +10,25 @@ export const validName = (name: string) => /^[A-Za-z][\w-]*$/.test(name);
 
 // ---------- Literal values ----------
 
-export type ValueKind = 'text' | 'number' | 'boolean' | 'list' | 'kept';
+export type ValueKind = 'text' | 'number' | 'boolean' | 'list' | 'null' | 'kept';
 
 export function valueKind(value: unknown): ValueKind {
   if (typeof value === 'string') return 'text';
   if (typeof value === 'number') return 'number';
   if (typeof value === 'boolean') return 'boolean';
+  if (value === null) return 'null';
   if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return 'list';
   return 'kept';
 }
 
 export const valueText = (value: unknown): string =>
-  Array.isArray(value) ? value.join(', ') : typeof value === 'string' ? value : String(value ?? '');
+  Array.isArray(value)
+    ? value.join(', ')
+    : typeof value === 'string'
+      ? value
+      : value === null
+        ? ''
+        : String(value ?? '');
 
 // `undefined` when the text is not a value of this kind.
 export function parseValue(kind: ValueKind, text: string): unknown {
@@ -32,6 +39,8 @@ export function parseValue(kind: ValueKind, text: string): unknown {
     }
     case 'boolean':
       return text === 'true';
+    case 'null':
+      return null;
     case 'list':
       return text
         .split(',')
@@ -44,6 +53,7 @@ export function parseValue(kind: ValueKind, text: string): unknown {
 
 // What a value becomes when its kind is changed: as much of it as still fits.
 export function convertValue(value: unknown, kind: ValueKind): unknown {
+  if (kind === 'null') return null;
   return parseValue(kind, valueText(value)) ?? (kind === 'number' ? 0 : kind === 'list' ? [] : '');
 }
 
@@ -70,11 +80,6 @@ export interface Comparison {
   left: Operand;
   right?: Operand;
 }
-export interface RuleShape {
-  group: 'all' | 'any';
-  items: Comparison[];
-}
-
 export const operators: [string, string][] = [
   ['eq', 'is'],
   ['ne', 'is not'],
@@ -96,20 +101,26 @@ const isComparison = (value: unknown): value is Comparison =>
   isOperand(value['left']) &&
   (value['right'] === undefined || isOperand(value['right']));
 
-// A rule the builder can show: one comparison, or one group of them. Deeper groups read as null.
-export function readRule(rule: unknown): RuleShape | null {
-  if (isComparison(rule)) return { group: 'all', items: [rule] };
-  if (!isRecord(rule)) return null;
-  const group = 'all' in rule ? 'all' : 'any' in rule ? 'any' : null;
-  if (!group) return null;
-  const items = rule[group];
-  return Array.isArray(items) && items.length > 0 && items.every(isComparison)
-    ? { group, items }
-    : null;
+export type Group = 'all' | 'any';
+
+// How the builder shows a rule: a test, a group of rules, or something it has no widget for.
+export type RuleView =
+  | { kind: 'test'; comparison: Comparison }
+  | { kind: 'group'; group: Group; items: unknown[] }
+  | { kind: 'kept' };
+
+export function readRule(rule: unknown): RuleView {
+  if (isComparison(rule)) return { kind: 'test', comparison: rule };
+  if (isRecord(rule) && Object.keys(rule).length === 1) {
+    const group = 'all' in rule ? 'all' : 'any' in rule ? 'any' : null;
+    const items = group ? rule[group] : undefined;
+    if (group && Array.isArray(items) && items.length > 0) return { kind: 'group', group, items };
+  }
+  return { kind: 'kept' };
 }
 
-export const writeRule = ({ group, items }: RuleShape): unknown =>
-  items.length === 1 ? items[0] : { [group]: items };
+// Groups nest at most this deep; the server refuses deeper rules.
+export const ruleDepth = 4;
 
 export const blankComparison = (bindings: string[]): Comparison => ({
   op: 'eq',
@@ -183,7 +194,9 @@ export function renameTemplateBinding(value: unknown, from: string, to: string):
 export type DataValue =
   | { kind: 'binding'; name: string }
   | { kind: 'value'; value: unknown }
-  // Nested, so it has no plain field. It stays as it came.
+  // A group of fields, which may hold bindings again.
+  | { kind: 'object' }
+  // Such as a list of objects. It stays as it came.
   | { kind: 'kept' };
 
 export function readDataValue(value: unknown): DataValue {
@@ -191,7 +204,7 @@ export function readDataValue(value: unknown): DataValue {
     const keys = Object.keys(value);
     if (keys.length === 1 && typeof value['$binding'] === 'string')
       return { kind: 'binding', name: value['$binding'] };
-    return { kind: 'kept' };
+    return keys.includes('$binding') ? { kind: 'kept' } : { kind: 'object' };
   }
   return valueKind(value) === 'kept' ? { kind: 'kept' } : { kind: 'value', value };
 }
@@ -211,13 +224,13 @@ export function freeName(base: string, used: Iterable<string>): string {
 
 // ---------- Form schemas ----------
 
-export type FieldKind = 'text' | 'number' | 'integer' | 'boolean' | 'choice';
+export type FieldKind = 'text' | 'number' | 'integer' | 'boolean' | 'choice' | 'object' | 'array';
 
 export interface SchemaField {
   name: string;
   schema: Raw;
   required: boolean;
-  // null for what has no plain widget: nested objects and arrays. It stays as it came.
+  // null for what has no widget, such as a oneOf. It stays as it came.
   kind: FieldKind | null;
 }
 
@@ -229,10 +242,17 @@ const fieldKind = (schema: Raw): FieldKind | null => {
     case 'integer':
     case 'boolean':
       return schema['type'];
+    case 'object':
+      return schema['properties'] === undefined || isRecord(schema['properties']) ? 'object' : null;
+    case 'array':
+      return isRecord(schema['items']) ? 'array' : null;
     default:
       return null;
   }
 };
+
+export const kindOf = (schema: unknown): FieldKind | null =>
+  isRecord(schema) ? fieldKind(schema) : null;
 
 // The fields of an object schema; null for a schema that is not one, like `true` or a `oneOf`.
 export function readFields(schema: unknown): SchemaField[] | null {
@@ -303,6 +323,8 @@ export function withKind(field: Raw, kind: FieldKind): Raw {
   );
   if (kind === 'text') return { ...shared, type: 'string' };
   if (kind === 'choice') return { ...shared, type: 'string', enum: [] };
+  if (kind === 'object') return { ...shared, type: 'object', properties: {} };
+  if (kind === 'array') return { ...shared, type: 'array', items: { type: 'string' } };
   return { ...shared, type: kind };
 }
 
@@ -314,12 +336,92 @@ export const emptyToUndefined = (schema: Raw): Raw | undefined =>
     ? undefined
     : schema;
 
-// A form the run input can render with widgets rather than asking for JSON.
+// A form the run input can render with widgets rather than asking for JSON: the human form
+// dialect, which the request form already renders.
 export function plainForm(schema: unknown): boolean {
-  if (!isRecord(schema) || schema['type'] !== 'object') return false;
-  const known = new Set(['type', 'properties', 'required', 'additionalProperties']);
-  if (Object.keys(schema).some((key) => !known.has(key))) return false;
-  return Object.values(propertiesOf(schema)).every(
-    (child) => isRecord(child) && fieldKind(child) !== null,
-  );
+  return isRecord(schema) && schema['type'] === 'object' && formProblem(schema) === null;
+}
+
+// ---------- Human forms ----------
+
+// The server's form dialect (server workflows/forms.ts): the same problems, with the same pointers.
+const formKeywords: Record<string, readonly string[]> = {
+  string: ['minLength', 'maxLength', 'pattern', 'format', 'enum'],
+  number: ['minimum', 'maximum', 'enum'],
+  integer: ['minimum', 'maximum', 'enum'],
+  boolean: [],
+  object: ['properties', 'required', 'additionalProperties'],
+  array: ['items', 'minItems', 'maxItems'],
+};
+const formCommon = ['type', 'title', 'description', 'default'];
+export const formFormats = ['date', 'date-time', 'email', 'uri'];
+// Objects and arrays nest at most this deep in a form.
+export const formDepth = 4;
+
+export function formProblem(form: unknown): { at: string; message: string } | null {
+  const visit = (
+    node: unknown,
+    at: string,
+    depth: number,
+  ): { at: string; message: string } | null => {
+    if (!isRecord(node)) return { at, message: 'A form field must be a schema object.' };
+    const type = node['type'];
+    if (typeof type !== 'string' || !(type in formKeywords))
+      return {
+        at: `${at}/type`,
+        message: 'Use string, number, integer, boolean, object or array.',
+      };
+    const allowed = new Set([...formCommon, ...formKeywords[type]!]);
+    const extra = Object.keys(node).find((key) => !allowed.has(key));
+    if (extra)
+      return { at: `${at}/${extra}`, message: `Forms do not support ${extra} on ${type}.` };
+    if (typeof node['format'] === 'string' && !formFormats.includes(node['format']))
+      return { at: `${at}/format`, message: 'Use date, date-time, email or uri.' };
+    if (type === 'object') {
+      if (depth >= formDepth) return { at, message: `Forms nest at most ${formDepth} levels.` };
+      if (node['additionalProperties'] !== undefined && node['additionalProperties'] !== false)
+        return {
+          at: `${at}/additionalProperties`,
+          message: 'Form objects accept only their fields.',
+        };
+      const properties = node['properties'] ?? {};
+      if (!isRecord(properties))
+        return { at: `${at}/properties`, message: 'properties must be an object.' };
+      for (const [name, child] of Object.entries(properties)) {
+        const found = visit(child, `${at}/properties/${name}`, depth + 1);
+        if (found) return found;
+      }
+    }
+    if (type === 'array') {
+      if (depth >= formDepth) return { at, message: `Forms nest at most ${formDepth} levels.` };
+      if (node['items'] === undefined) return { at, message: 'An array field needs items.' };
+      return visit(node['items'], `${at}/items`, depth + 1);
+    }
+    return null;
+  };
+  if (!isRecord(form) || form['type'] !== 'object')
+    return { at: '', message: 'A form is an object schema.' };
+  return visit(form, '', 0);
+}
+
+// ---------- What a node's form does not show ----------
+
+// Settings each node type has (server workflows/nodes.ts). Anything else in a config is shown as
+// advanced and kept; the server refuses it at publish.
+export const configKeys: Record<string, readonly string[]> = {
+  manual_trigger: ['inputSchema'],
+  transform: ['data'],
+  agent: ['goal', 'model', 'readOnly', 'resultSchema', 'limits'],
+  wait: ['durationMs', 'until'],
+  condition: ['when'],
+  switch: ['cases'],
+  human_input: ['title', 'instructions', 'timeoutMs', 'form'],
+  approval: ['title', 'instructions', 'timeoutMs', 'form', 'outcomes'],
+  end: ['outcome', 'reason'],
+};
+
+export function unknownConfig(type: string, config: Raw): Raw {
+  const known = configKeys[type];
+  if (!known) return {};
+  return Object.fromEntries(Object.entries(config).filter(([key]) => !known.includes(key)));
 }
