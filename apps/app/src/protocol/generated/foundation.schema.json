@@ -94,6 +94,9 @@
       "$ref": "#/$defs/ExecutionPage"
     },
     {
+      "$ref": "#/$defs/RunVariables"
+    },
+    {
       "$ref": "#/$defs/Event"
     },
     {
@@ -1676,6 +1679,73 @@
             "$ref": "#/$defs/Interaction"
           },
           "maxItems": 10000
+        }
+      }
+    },
+    "RunVariables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "variables", "revisions"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "variables": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "value", "revision", "executionId", "updatedAt"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "value": {},
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "executionId": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "updatedAt": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "revisions": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "revision", "value", "executionId", "createdAt"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "value": {},
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "executionId": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
         }
       }
     }

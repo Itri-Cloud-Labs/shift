@@ -450,6 +450,27 @@ export class RunEngine {
           output: envelope(data, context.input),
           port: 'success',
         });
+      } else if (context.node.type === 'set_variable') {
+        // The value and the revision it replaces were frozen when the execution was prepared, so
+        // a retry writes the same value and a newer write in between is a conflict.
+        const { key, value, expectedRevision } = context.config as {
+          key: string;
+          value: Json;
+          expectedRevision: number;
+        };
+        this.repository.completeExecution(claim, {
+          kind: 'completed',
+          output: context.input,
+          port: 'success',
+          variableWrites: [{ key, value, expectedRevision }],
+        });
+      } else if (context.node.type === 'get_variable') {
+        const { value } = context.config as { value: Json };
+        this.repository.completeExecution(claim, {
+          kind: 'completed',
+          output: envelope(value, context.input),
+          port: 'success',
+        });
       } else if (context.node.type === 'condition' || context.node.type === 'switch') {
         // Control nodes pass their input through and only choose the port.
         const config = context.config as {
@@ -503,6 +524,7 @@ export class RunEngine {
     const context = this.repository.execution(claim.executionId);
     if (context.config !== null && context.bindings !== null) return context;
     const { node, snapshot } = context;
+    const variables = this.repository.variables(claim.runId);
     const { values: bindings, sources } = resolveBindings(node.bindings, {
       input: context.input,
       inputExecutionId: context.predecessorId,
@@ -517,8 +539,34 @@ export class RunEngine {
         baseRef: snapshot.project.baseRef,
       },
       chain: context.chain,
+      variables,
     });
     let config: Json = node.config;
+    if (node.type === 'set_variable') {
+      const authored = node.config as { key: string; value: Json };
+      config = {
+        key: authored.key,
+        value: renderTemplate(authored.value, bindings),
+        expectedRevision: variables.get(authored.key)?.revision ?? 0,
+      };
+    }
+    if (node.type === 'get_variable') {
+      const authored = node.config as { key: string; optional?: boolean; fallback?: Json };
+      const current = variables.get(authored.key);
+      if (!current && !authored.optional)
+        throw new ShiftError(
+          'VARIABLE_MISSING',
+          `Run variable ${authored.key} has not been written.`,
+          422,
+        );
+      config = {
+        key: authored.key,
+        value: current ? current.value : (authored.fallback ?? null),
+        revision: current?.revision ?? null,
+        executionId: current?.executionId ?? null,
+        ...(current ? {} : { fallback: true }),
+      };
+    }
     if (node.type === 'wait') {
       // The deadline is fixed now, in UTC, so recovery and restarts wait for the same instant.
       const authored = node.config as { durationMs?: number; until?: string };

@@ -120,9 +120,9 @@ test('validation rejects graphs the executor cannot run', () => {
       /explicit fallback/,
     ],
     [
-      'run variables',
-      (d) => (d.nodes[1].bindings.name = { kind: 'variable', key: 'x', path: [] }),
-      /Run variables arrive with M04a/,
+      'a variable source without a key',
+      (d) => (d.nodes[1].bindings.name = { kind: 'variable', path: [] }),
+      /Invalid value source/,
     ],
     [
       'retry delays out of order',
@@ -534,4 +534,49 @@ test('projects are registered by their canonical repository top level', async ()
   } finally {
     await env.close();
   }
+});
+
+test('variable sources and transform operations are checked at publish', () => {
+  const document = (nodes: unknown[]) =>
+    normalizeDocument({
+      nodes: [{ id: 'start', type: 'manual_trigger' }, ...nodes],
+      connections: [],
+    });
+  const paths = (nodes: unknown[]) => diagnose(document(nodes)).map((item) => item.path);
+  assert.deepEqual(
+    paths([
+      {
+        id: 't',
+        type: 'transform',
+        config: { data: { a: { $add: [1, 2] }, b: { $length: { $binding: 'v' } } } },
+        bindings: { v: { kind: 'variable', key: 'items', path: [] } },
+      },
+      { id: 's', type: 'set_variable', config: { key: 'items', value: [] } },
+      { id: 'g', type: 'get_variable', config: { key: 'items', optional: true, fallback: null } },
+    ]),
+    [],
+  );
+  assert.deepEqual(
+    paths([
+      { id: 't', type: 'transform', config: { data: { a: { $divide: [1, 2] } } } },
+      { id: 'u', type: 'transform', config: { data: { a: { $add: [1] } } } },
+      {
+        id: 'v',
+        type: 'transform',
+        config: { data: 1 },
+        bindings: { x: { kind: 'variable', key: 'x', path: [], optional: true } },
+      },
+      { id: 'g', type: 'get_variable', config: { key: 'x', optional: true } },
+      { id: 's', type: 'set_variable', config: { key: '1bad', value: 1 } },
+      { id: 'w', type: 'set_variable', config: { key: 'x', value: { $binding: 'nope' } } },
+    ]),
+    [
+      '/nodes/1/config/data/a',
+      '/nodes/2/config/data/a/$add',
+      '/nodes/3/bindings/x/fallback',
+      '/nodes/4/config/fallback',
+      '/nodes/5/config/key',
+      '/nodes/6/config',
+    ],
+  );
 });

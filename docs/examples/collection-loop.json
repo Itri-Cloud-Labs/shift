@@ -1,0 +1,107 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "manual_trigger",
+      "config": {
+        "inputSchema": {
+          "type": "object",
+          "required": ["items"],
+          "properties": { "items": { "type": "array", "maxItems": 40 } }
+        }
+      }
+    },
+    { "id": "init", "type": "set_variable", "config": { "key": "index", "value": 0 } },
+    {
+      "id": "look",
+      "type": "transform",
+      "config": {
+        "data": {
+          "index": { "$binding": "index" },
+          "count": { "$length": { "$binding": "items" } }
+        }
+      },
+      "bindings": {
+        "index": { "kind": "variable", "key": "index", "path": [] },
+        "items": { "kind": "trigger", "path": ["items"] }
+      }
+    },
+    {
+      "id": "more",
+      "type": "condition",
+      "config": {
+        "when": { "op": "lt", "left": { "binding": "index" }, "right": { "binding": "count" } }
+      },
+      "bindings": {
+        "index": { "kind": "input", "path": ["data", "index"] },
+        "count": { "kind": "input", "path": ["data", "count"] }
+      }
+    },
+    {
+      "id": "visit",
+      "type": "transform",
+      "config": {
+        "data": {
+          "index": { "$binding": "index" },
+          "item": { "$at": [{ "$binding": "items" }, { "$binding": "index" }] }
+        }
+      },
+      "bindings": {
+        "index": { "kind": "variable", "key": "index", "path": [] },
+        "items": { "kind": "trigger", "path": ["items"] }
+      }
+    },
+    {
+      "id": "next",
+      "type": "set_variable",
+      "config": { "key": "index", "value": { "$add": [{ "$binding": "index" }, 1] } },
+      "bindings": { "index": { "kind": "variable", "key": "index", "path": [] } }
+    },
+    { "id": "done", "type": "end" }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "fromNodeId": "start",
+      "fromPort": "success",
+      "toNodeId": "init",
+      "toPort": "input"
+    },
+    {
+      "id": "c2",
+      "fromNodeId": "init",
+      "fromPort": "success",
+      "toNodeId": "look",
+      "toPort": "input"
+    },
+    {
+      "id": "c3",
+      "fromNodeId": "look",
+      "fromPort": "success",
+      "toNodeId": "more",
+      "toPort": "input"
+    },
+    {
+      "id": "c4",
+      "fromNodeId": "more",
+      "fromPort": "true",
+      "toNodeId": "visit",
+      "toPort": "input"
+    },
+    {
+      "id": "c5",
+      "fromNodeId": "visit",
+      "fromPort": "success",
+      "toNodeId": "next",
+      "toPort": "input"
+    },
+    {
+      "id": "c6",
+      "fromNodeId": "next",
+      "fromPort": "success",
+      "toNodeId": "look",
+      "toPort": "input"
+    },
+    { "id": "c7", "fromNodeId": "more", "fromPort": "false", "toNodeId": "done", "toPort": "input" }
+  ]
+}

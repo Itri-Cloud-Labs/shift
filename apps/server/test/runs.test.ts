@@ -2793,3 +2793,334 @@ test('a selector naming a failed, later or foreign execution fails the node, eve
     await harnessed.close();
   }
 });
+
+// ---------- Run variables (prompt 07) ----------
+
+const variables = (harnessed: Harnessed, runId: string) =>
+  harnessed.engine.repository.variableHistory(runId) as unknown as {
+    variables: Array<{ key: string; value: unknown; revision: number; executionId: string }>;
+    revisions: Array<{ key: string; revision: number; value: unknown; executionId: string }>;
+  };
+
+test('a finite collection loop visits each element once and ends', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const example = JSON.parse(
+      await readFile(
+        new URL('../../../docs/examples/collection-loop.json', import.meta.url),
+        'utf8',
+      ),
+    ) as Json;
+    const workflowId = await publish(harnessed, example);
+    const run = await startNow(harnessed, workflowId, { input: { items: ['a', 'b', 'c'] } });
+    assert.equal(run.state, 'COMPLETED');
+    const visits = run.executions.filter((execution) => execution.node === 'visit');
+    assert.deepEqual(
+      visits.map((execution) => (execution.output as { data: unknown }).data),
+      [
+        { index: 0, item: 'a' },
+        { index: 1, item: 'b' },
+        { index: 2, item: 'c' },
+      ],
+    );
+    const history = variables(harnessed, run.id);
+    assert.deepEqual(
+      history.revisions.map((item) => [item.revision, item.value]),
+      [
+        [1, 0],
+        [2, 1],
+        [3, 2],
+        [4, 3],
+      ],
+    );
+    assert.deepEqual(
+      history.variables.map((item) => [item.key, item.value, item.revision]),
+      [['index', 3, 4]],
+    );
+    // Each write names the execution that made it, and each read names the revision it froze.
+    const writers = run.executions.filter((execution) => ['init', 'next'].includes(execution.node));
+    assert.deepEqual(
+      history.revisions.map((item) => item.executionId),
+      writers.map((execution) => execution.id),
+    );
+    const sources = (
+      harnessed.engine.repository.run(run.id) as unknown as {
+        executions: Array<{ node: string; sources: Record<string, unknown> | null }>;
+      }
+    ).executions.filter((execution) => execution.node === 'visit');
+    assert.deepEqual(
+      sources.map((execution) => (execution.sources?.['index'] as { revision: number }).revision),
+      [1, 2, 3],
+    );
+    // A second run starts from nothing: variables belong to one run.
+    const empty = await startNow(harnessed, workflowId, { input: { items: [] } });
+    assert.equal(empty.state, 'COMPLETED');
+    assert.equal(empty.executions.filter((execution) => execution.node === 'visit').length, 0);
+    assert.deepEqual(
+      variables(harnessed, empty.id).revisions.map((item) => item.value),
+      [0],
+    );
+    assert.equal(variables(harnessed, run.id).revisions.length, 4);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// start -> set x = 1 -> ask (reads x) -> bump (x = x + 1) -> end
+const bumpWorkflow: Json = {
+  nodes: [
+    { id: 'start', type: 'manual_trigger' },
+    { id: 'set', type: 'set_variable', config: { key: 'x', value: 1 } },
+    {
+      id: 'ask',
+      type: 'human_input',
+      config: { title: 'x is {{x}}', form: { type: 'object', properties: {} } },
+      bindings: { x: { kind: 'variable', key: 'x', path: [] } },
+    },
+    {
+      id: 'bump',
+      type: 'set_variable',
+      config: { key: 'x', value: { $add: [{ $binding: 'x' }, 1] } },
+      bindings: { x: { kind: 'variable', key: 'x', path: [] } },
+    },
+    { id: 'end', type: 'end' },
+  ],
+  connections: [
+    connect('c1', 'start', 'set'),
+    connect('c2', 'set', 'ask'),
+    connect('c3', 'ask', 'bump'),
+    connect('c4', 'bump', 'end'),
+  ],
+} as Json;
+
+// Writes a revision as another execution of the same run would, outside the engine.
+function writeElsewhere(harnessed: Harnessed, runId: string, key: string, value: Json): void {
+  const { db } = harnessed.store;
+  const current = db
+    .prepare('SELECT revision, execution_id FROM run_variables WHERE run_id = ? AND key = ?')
+    .get(runId, key) as { revision: number; execution_id: string };
+  const revision = current.revision + 1;
+  db.prepare(
+    'UPDATE run_variables SET value_json = ?, revision = ? WHERE run_id = ? AND key = ?',
+  ).run(JSON.stringify(value), revision, runId, key);
+  db.prepare(
+    'INSERT INTO run_variable_revisions (run_id, key, revision, value_json, execution_id, created_at) VALUES (?, ?, ?, ?, ?, 0)',
+  ).run(runId, key, revision, JSON.stringify(value), current.execution_id);
+}
+
+// Answers the run's request with the engine stopped, then claims the step it schedules, so the
+// test controls what happens between preparing that step and completing it.
+async function answerAndClaim(harnessed: Harnessed, runId: string) {
+  await harnessed.engine.stop(5_000);
+  const { repository } = harnessed.engine;
+  const interaction = (
+    repository.interactions() as unknown as Array<{ id: string; runId: string; revision: number }>
+  ).find((item) => item.runId === runId)!;
+  repository.respond(interaction.id, { kind: 'cli', id: 'local' }, undefined, {
+    revision: interaction.revision,
+    response: {},
+  });
+  const pending = repository.pendingExecutions()[0]!;
+  return repository.claimAttempt(pending.id, harnessed.store.workerGeneration)!;
+}
+
+test('a waiting execution keeps the variable value it froze after a later write', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, bumpWorkflow);
+    const run = await startNow(harnessed, workflowId);
+    assert.equal(run.state, 'WAITING');
+    writeElsewhere(harnessed, run.id, 'x', 50);
+    const interaction = (
+      harnessed.engine.repository.interactions() as unknown as Array<{
+        runId: string;
+        title: string;
+      }>
+    ).find((item) => item.runId === run.id)!;
+    assert.equal(interaction.title, 'x is 1');
+    const ask = (
+      harnessed.engine.repository.run(run.id) as unknown as {
+        executions: Array<{ node: string; sources: Record<string, unknown> | null }>;
+      }
+    ).executions.find((execution) => execution.node === 'ask')!;
+    assert.deepEqual(ask.sources?.['x'], {
+      kind: 'variable',
+      key: 'x',
+      revision: 1,
+      executionId: run.executions.find((execution) => execution.node === 'set')!.id,
+      path: [],
+    });
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a write commits with its completion, and a stale expected revision commits nothing', async () => {
+  const first = await engineFor(() => {});
+  let state = first.state;
+  let runId: string;
+  try {
+    const workflowId = await publish(first, bumpWorkflow);
+    runId = (await startNow(first, workflowId)).id;
+    const claim = await answerAndClaim(first, runId);
+    const { repository } = first.engine;
+    repository.prepareExecution(claim, {
+      config: { key: 'x', value: 2, expectedRevision: 1 },
+      bindings: { x: 1 },
+      sources: {},
+    });
+    writeElsewhere(first, runId, 'x', 7);
+    assert.throws(
+      () =>
+        repository.completeExecution(claim, {
+          kind: 'completed',
+          output: { data: {}, references: { artifacts: [] }, context: { handoffs: [] } },
+          port: 'success',
+          variableWrites: [{ key: 'x', value: 2, expectedRevision: 1 }],
+        }),
+      (error: unknown) => error instanceof ShiftError && error.code === 'VARIABLE_CONFLICT',
+    );
+    // Neither the output nor the write landed.
+    const bump = view(first, runId).executions.find((execution) => execution.node === 'bump')!;
+    assert.equal(bump.state, 'RUNNING');
+    assert.equal(bump.output, null);
+    assert.deepEqual(
+      variables(first, runId).revisions.map((item) => item.value),
+      [1, 7],
+    );
+    state = first.state;
+    first.store.close();
+  } catch (error) {
+    await first.close();
+    throw error;
+  }
+  // After a restart the attempt is taken up again with the configuration it froze, so the stale
+  // revision fails the node instead of overwriting the newer value.
+  const second = await engineFor(() => {}, { state });
+  try {
+    const run = await settled(second, runId);
+    assert.equal(run.state, 'FAILED');
+    const bump = run.executions.find((execution) => execution.node === 'bump')!;
+    assert.equal(bump.error?.code, 'VARIABLE_CONFLICT');
+    assert.deepEqual(
+      variables(second, runId).revisions.map((item) => item.value),
+      [1, 7],
+    );
+  } finally {
+    await second.close();
+  }
+});
+
+test('a crash before completion leaves no write, and the restarted attempt writes once', async () => {
+  const first = await engineFor(() => {});
+  const state = first.state;
+  let runId: string;
+  try {
+    const workflowId = await publish(first, bumpWorkflow);
+    runId = (await startNow(first, workflowId)).id;
+    const claim = await answerAndClaim(first, runId);
+    first.engine.repository.prepareExecution(claim, {
+      config: { key: 'x', value: 2, expectedRevision: 1 },
+      bindings: { x: 1 },
+      sources: {},
+    });
+    assert.equal(variables(first, runId).revisions.length, 1, 'nothing written before the crash');
+    // The process ends here, between preparing the write and committing it.
+    first.store.close();
+  } catch (error) {
+    await first.close();
+    throw error;
+  }
+  const second = await engineFor(() => {}, { state });
+  try {
+    const run = await settled(second, runId);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(
+      variables(second, runId).revisions.map((item) => [item.revision, item.value]),
+      [
+        [1, 1],
+        [2, 2],
+      ],
+    );
+  } finally {
+    await second.close();
+  }
+});
+
+test('transform operations compute bounded values, and wrong types fail the node', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflow = (data: Json) =>
+      ({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          {
+            id: 'calc',
+            type: 'transform',
+            config: { data },
+            bindings: { list: { kind: 'trigger', path: ['list'] } },
+          },
+        ],
+        connections: [connect('c1', 'start', 'calc')],
+      }) as Json;
+    const ok = await startNow(
+      harnessed,
+      await publish(
+        harnessed,
+        workflow({
+          sum: { $add: [2, { $multiply: [3, 4] }] },
+          less: { $subtract: [1, 3] },
+          size: { $length: { $binding: 'list' } },
+          last: { $at: [{ $binding: 'list' }, 1] },
+          text: { $length: 'four' },
+        }),
+      ),
+      { input: { list: ['x', 'y'] } },
+    );
+    assert.deepEqual(ok.outcome, { data: { sum: 14, less: -2, size: 2, last: 'y', text: 4 } });
+    const outside = await startNow(
+      harnessed,
+      await publish(harnessed, workflow({ item: { $at: [{ $binding: 'list' }, 5] } })),
+      { input: { list: [] } },
+    );
+    assert.equal(outside.executions.at(-1)!.error?.code, 'TRANSFORM_INDEX');
+    const typed = await startNow(
+      harnessed,
+      await publish(harnessed, workflow({ sum: { $add: ['1', 2] } })),
+      { input: { list: [] } },
+    );
+    assert.equal(typed.executions.at(-1)!.error?.code, 'TRANSFORM_TYPE');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('get variable reads the current value, or its fallback, and fails without one', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflow = (get: Record<string, unknown>, set: boolean) =>
+      ({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          ...(set
+            ? [{ id: 'set', type: 'set_variable', config: { key: 'x', value: { a: [1] } } }]
+            : []),
+          { id: 'get', type: 'get_variable', config: { key: 'x', ...get } },
+        ],
+        connections: set
+          ? [connect('c1', 'start', 'set'), connect('c2', 'set', 'get')]
+          : [connect('c1', 'start', 'get')],
+      }) as Json;
+    const read = await startNow(harnessed, await publish(harnessed, workflow({}, true)));
+    assert.deepEqual(read.outcome, { data: { a: [1] } });
+    const fallback = await startNow(
+      harnessed,
+      await publish(harnessed, workflow({ optional: true, fallback: 'none' }, false)),
+    );
+    assert.deepEqual(fallback.outcome, { data: 'none' });
+    const missing = await startNow(harnessed, await publish(harnessed, workflow({}, false)));
+    assert.equal(missing.executions.at(-1)!.error?.code, 'VARIABLE_MISSING');
+  } finally {
+    await harnessed.close();
+  }
+});

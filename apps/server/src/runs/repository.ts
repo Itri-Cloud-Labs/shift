@@ -5,7 +5,13 @@ import { ShiftError } from '../domain/errors.js';
 import type { HarnessSessionHandle, Json, ModelRef, ToolPolicy } from '../harness/types.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { NodeDefinition, WorkflowDocument } from '../workflows/document.js';
-import { envelope, type BindingSource, type ChainEntry, type OutputEnvelope } from './bindings.js';
+import {
+  envelope,
+  type BindingSource,
+  type ChainEntry,
+  type OutputEnvelope,
+  type VariableValue,
+} from './bindings.js';
 import { checkValue, type ResultEnvelope } from './envelope.js';
 
 // A run freezes its published document, the project it runs in and the defaults it resolved
@@ -136,8 +142,19 @@ interface InteractionRow {
 const interactionSelect =
   'SELECT i.*, e.node_id, r.state AS run_state, h.decision, h.response_json, h.actor_kind, h.actor_id, h.created_at AS responded_at FROM human_interactions i JOIN node_executions e ON e.id = i.execution_id JOIN runs r ON r.id = i.run_id LEFT JOIN human_responses h ON h.id = i.accepted_response_id';
 
+// A run variable write, checked against the revision the execution read when it was prepared.
+export interface VariableWrite {
+  key: string;
+  value: Json;
+  expectedRevision?: number;
+}
+
+const variableKey = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+// A run variable holds at most this much JSON.
+export const variableBytes = 256 * 1024;
+
 export type ExecutionOutcome =
-  | { kind: 'completed'; output: OutputEnvelope; port: string }
+  | { kind: 'completed'; output: OutputEnvelope; port: string; variableWrites?: VariableWrite[] }
   | { kind: 'failed'; error: ExecutionError };
 
 export interface ExecutionContext {
@@ -571,6 +588,112 @@ export class RunRepository {
     };
   }
 
+  // The run's variables now, for an execution being prepared.
+  variables(runId: string): Map<string, VariableValue> {
+    const rows = this.db
+      .prepare('SELECT key, value_json, revision, execution_id FROM run_variables WHERE run_id = ?')
+      .all(runId) as Array<{
+      key: string;
+      value_json: string;
+      revision: number;
+      execution_id: string;
+    }>;
+    return new Map(
+      rows.map((row) => [
+        row.key,
+        {
+          value: JSON.parse(row.value_json) as Json,
+          revision: row.revision,
+          executionId: row.execution_id,
+        },
+      ]),
+    );
+  }
+
+  // Current values and every revision, oldest first, with the execution that wrote each.
+  variableHistory(runId: string): Json {
+    if (!this.db.prepare('SELECT 1 FROM runs WHERE id = ?').get(runId))
+      throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
+    const current = this.db
+      .prepare(
+        'SELECT key, value_json, revision, execution_id, updated_at FROM run_variables WHERE run_id = ? ORDER BY key',
+      )
+      .all(runId) as Array<Record<string, string | number>>;
+    const revisions = this.db
+      .prepare(
+        'SELECT key, revision, value_json, execution_id, created_at FROM run_variable_revisions WHERE run_id = ? ORDER BY key, revision',
+      )
+      .all(runId) as Array<Record<string, string | number>>;
+    return {
+      variables: current.map((row) => ({
+        key: row['key']!,
+        value: JSON.parse(row['value_json'] as string) as Json,
+        revision: row['revision']!,
+        executionId: row['execution_id']!,
+        updatedAt: row['updated_at']!,
+      })),
+      revisions: revisions.map((row) => ({
+        key: row['key']!,
+        revision: row['revision']!,
+        value: JSON.parse(row['value_json'] as string) as Json,
+        executionId: row['execution_id']!,
+        createdAt: row['created_at']!,
+      })),
+    } as Json;
+  }
+
+  // Writes commit with the execution's completion, so a failed attempt leaves none. A write from a
+  // node type without the capability, a malformed key, an oversized value or a stale expected
+  // revision refuses the whole completion. Called inside the completing transaction.
+  #writeVariables(
+    claim: { runId: string; executionId: string },
+    node: NodeDefinition,
+    writes: VariableWrite[],
+    now: number,
+  ): void {
+    if (!nodeType(node.type, node.typeVersion)?.writesVariables)
+      throw new ShiftError('INTERNAL_ERROR', `${node.type} cannot write run variables.`);
+    for (const write of writes) {
+      if (!variableKey.test(write.key))
+        throw new ShiftError('INVALID_VARIABLE', `Invalid variable key ${write.key}.`, 422);
+      const json = JSON.stringify(write.value);
+      if (json === undefined || Buffer.byteLength(json) > variableBytes)
+        throw new ShiftError(
+          'VARIABLE_TOO_LARGE',
+          `Variable ${write.key} exceeds ${variableBytes / 1024} KiB.`,
+          422,
+        );
+      const current =
+        (
+          this.db
+            .prepare('SELECT revision FROM run_variables WHERE run_id = ? AND key = ?')
+            .get(claim.runId, write.key) as { revision: number } | undefined
+        )?.revision ?? 0;
+      if (write.expectedRevision !== undefined && write.expectedRevision !== current)
+        throw new ShiftError(
+          'VARIABLE_CONFLICT',
+          `Variable ${write.key} is at revision ${current}, not ${write.expectedRevision}.`,
+          409,
+        );
+      const revision = current + 1;
+      this.db
+        .prepare(
+          'INSERT INTO run_variables (run_id, key, value_json, revision, execution_id, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (run_id, key) DO UPDATE SET value_json = excluded.value_json, revision = excluded.revision, execution_id = excluded.execution_id, updated_at = excluded.updated_at',
+        )
+        .run(claim.runId, write.key, json, revision, claim.executionId, now);
+      this.db
+        .prepare(
+          'INSERT INTO run_variable_revisions (run_id, key, revision, value_json, execution_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        )
+        .run(claim.runId, write.key, revision, json, claim.executionId, now);
+      this.#event(
+        'variable.written',
+        { runId: claim.runId, executionId: claim.executionId },
+        { key: write.key, revision },
+      );
+    }
+  }
+
   // Bindings and resolved configuration are frozen once; recovery reuses them instead of resolving
   // newer data again (specification 6.3).
   prepareExecution(
@@ -934,6 +1057,8 @@ export class RunRepository {
       return;
     }
     const completed = outcome.kind === 'completed';
+    if (completed && outcome.variableWrites?.length)
+      this.#writeVariables(claim, node, outcome.variableWrites, now);
     const output = completed ? outcome.output : null;
     const error = completed ? null : outcome.error;
     if (claim.attemptId !== null) {

@@ -31,6 +31,7 @@ export type FoundationPayload =
   | InteractionList
   | WorkspaceList
   | ExecutionPage
+  | RunVariables
   | Event
   | EventPage
   | Snapshot;
@@ -478,6 +479,30 @@ export interface ExecutionPage {
    */
   executions: Execution[];
   next: number | null;
+}
+export interface RunVariables {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  variables: {
+    key: string;
+    value: unknown;
+    revision: number;
+    executionId: Uuid;
+    updatedAt: number;
+  }[];
+  /**
+   * @maxItems 100000
+   */
+  revisions: {
+    key: string;
+    value: unknown;
+    revision: number;
+    executionId: Uuid;
+    createdAt: number;
+  }[];
 }
 export interface Event {
   cursor: EventCursor;
