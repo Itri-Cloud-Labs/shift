@@ -1,4 +1,4 @@
-import { CircleAlert, Copy, GitCompareArrows, Trash2, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Copy, GitCompareArrows, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useEscape } from './Attention.js';
 import {
@@ -526,13 +526,18 @@ function ConfigFields({
           />
           <fieldset className="field-group">
             <legend>Value it writes</legend>
-            {config['value'] !== undefined && (
+            {config['value'] !== undefined ? (
               <TemplateValue
                 id={`${id}-value`}
                 value={config['value']}
                 bindings={bindings}
                 set={(value) => set('value', value)}
               />
+            ) : (
+              <button type="button" className="button quiet" onClick={() => set('value', 0)}>
+                <Plus aria-hidden="true" />
+                Add a value
+              </button>
             )}
             {problem('value') && <p className="field-error">{problem('value')}</p>}
             <p className="note">

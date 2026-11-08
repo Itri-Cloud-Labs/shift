@@ -470,6 +470,18 @@ test('variables are diagnosed as the server does, and a read nobody writes is a 
     'error null: Binding n of look needs the name of a run variable.',
   ]);
   assert.deepEqual(writtenKeys([{ type: 'set_variable', config: { key: 'n' } }]), ['n']);
+  // A Set variable that came without a value gets one from the form's Add a value.
+  const valueless: Draft = {
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'set', type: 'set_variable', config: { key: 'count' } },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'set', toPort: 'input' },
+    ],
+  };
+  assert.match(diagnose(valueless)[0]!.message, /needs a value to write/);
+  assert.deepEqual(diagnose(setConfig(valueless, 'set', 'value', 0)), []);
 });
 
 test('the collection loop example has no problems and keeps every field', () => {
