@@ -15,6 +15,7 @@ export type ValueSource =
   | { kind: 'input'; path: string[] }
   | { kind: 'trigger'; path: string[] }
   | { kind: 'project'; path: string[] }
+  | { kind: 'variable'; key: string; path: string[]; optional?: boolean; fallback?: Json }
   | {
       kind: 'node';
       nodeId: string;
@@ -222,6 +223,18 @@ const validateSource = ajv.compile({
     {
       type: 'object',
       additionalProperties: false,
+      required: ['kind', 'key', 'path'],
+      properties: {
+        kind: { const: 'variable' },
+        key: { type: 'string', pattern: identifier },
+        path,
+        optional: { type: 'boolean' },
+        fallback: {},
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
       required: ['kind', 'nodeId', 'execution', 'path'],
       properties: {
         kind: { const: 'node' },
@@ -289,6 +302,43 @@ export function templateBindings(value: unknown): string[] {
     return entries.flatMap(([, child]) => templateBindings(child));
   }
   return [];
+}
+
+// Transform operations (specification 8): bounded arithmetic, a length and an index. Any other
+// object whose only key starts with `$` is a mistake, not data.
+export const operations: Record<string, number> = {
+  $add: 2,
+  $subtract: 2,
+  $multiply: 2,
+  $length: 1,
+  $at: 2,
+};
+
+function operationProblems(template: unknown, path: string): Diagnostic[] {
+  if (Array.isArray(template))
+    return template.flatMap((item, index) => operationProblems(item, `${path}/${index}`));
+  if (typeof template !== 'object' || template === null) return [];
+  const entries = Object.entries(template);
+  const [key, argument] = entries[0] ?? [];
+  if (entries.length === 1 && key!.startsWith('$') && key !== '$binding') {
+    const arity = operations[key!];
+    if (arity === undefined)
+      return [
+        { path, message: `Unknown operation ${key}. Use ${Object.keys(operations).join(', ')}.` },
+      ];
+    const operands = arity === 1 ? [argument] : argument;
+    if (!Array.isArray(operands) || operands.length !== arity)
+      return [
+        {
+          path: `${path}/${key}`,
+          message: `${key} takes ${arity === 1 ? 'one operand' : `a list of ${arity} operands`}.`,
+        },
+      ];
+    return operands.flatMap((item, index) =>
+      operationProblems(item, arity === 1 ? `${path}/${key}` : `${path}/${key}/${index}`),
+    );
+  }
+  return entries.flatMap(([name, child]) => operationProblems(child, `${path}/${name}`));
 }
 
 export interface Diagnostic {
@@ -373,15 +423,14 @@ export function diagnose(document: unknown): Diagnostic[] {
     }
     for (const [name, source] of Object.entries(node.bindings)) {
       if (!validateSource(source as unknown)) {
-        add(
-          `${at}/bindings/${name}`,
-          (source as { kind: string }).kind === 'variable'
-            ? 'Run variables arrive with M04a.'
-            : 'Invalid value source.',
-        );
+        add(`${at}/bindings/${name}`, 'Invalid value source.');
       } else if (source.kind === 'node' && !doc.nodes.some((other) => other.id === source.nodeId)) {
         add(`${at}/bindings/${name}/nodeId`, `No node ${source.nodeId}.`);
-      } else if (source.kind === 'node' && source.optional && source.fallback === undefined) {
+      } else if (
+        (source.kind === 'node' || source.kind === 'variable') &&
+        source.optional &&
+        source.fallback === undefined
+      ) {
         add(`${at}/bindings/${name}/fallback`, 'An optional binding needs an explicit fallback.');
       }
     }
@@ -413,7 +462,16 @@ export function diagnose(document: unknown): Diagnostic[] {
         }
       }
     }
-    const templated = ['goal', 'data', 'until', 'title', 'instructions']
+    if (node.type === 'get_variable' && config['optional'] === true && !('fallback' in config)) {
+      add(`${at}/config/fallback`, 'An optional variable needs an explicit fallback.');
+    }
+    for (const field of ['data', 'value'] as const) {
+      if (config[field] === undefined) continue;
+      for (const problem of operationProblems(config[field], `${at}/config/${field}`)) {
+        add(problem.path, problem.message);
+      }
+    }
+    const templated = ['goal', 'data', 'value', 'until', 'title', 'instructions']
       .map((field) => config[field])
       .filter((value) => value !== undefined);
     for (const name of templateBindings(templated)) {

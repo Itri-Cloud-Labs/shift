@@ -616,3 +616,59 @@ test(
     }
   },
 );
+
+test(
+  'the collection loop example runs from the CLI, and its variables can be read back',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    const server = await env.serve();
+    try {
+      const project = (await env.shift('project', 'add', '--path', env.repo)) as { id: string };
+      const workflow = (await env.shift(
+        'workflow',
+        'create',
+        '--project',
+        project.id,
+        '--name',
+        'loop',
+        '--file',
+        join(workspace, '../../docs/examples/collection-loop.json'),
+      )) as { id: string };
+      await env.shift('workflow', 'publish', workflow.id);
+      const started = (await env.shift(
+        'run',
+        'start',
+        '--workflow',
+        workflow.id,
+        '--input',
+        '{"items": ["a", "b"]}',
+      )) as Run;
+      const run = await env.until(started.id, (item) => item.state === 'COMPLETED');
+      assert.equal(run.state, 'COMPLETED');
+      const read = (await env.shift('run', 'variables', run.id)) as {
+        variables: Array<{ key: string; value: unknown; revision: number }>;
+        revisions: Array<{ revision: number; value: unknown; executionId: string }>;
+      };
+      assert.deepEqual(
+        read.variables.map((item) => [item.key, item.value, item.revision]),
+        [['index', 2, 3]],
+      );
+      assert.deepEqual(
+        read.revisions.map((item) => item.value),
+        [0, 1, 2],
+      );
+      const missing = await runCli([
+        'run',
+        'variables',
+        '00000000-0000-4000-8000-000000000000',
+        '--state-dir',
+        env.state.path,
+      ]);
+      assert.notEqual(missing.code, 0);
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);

@@ -593,3 +593,16 @@ Status: the first of two parts of prompt 14 (M07a). Run variables are prompt 07 
   - Unit tests: rule views, the form dialect against the server's pointers and messages, unknown settings, value kinds including empty, schema kinds, recovery against the same and newer revisions, kept edits bounded by count and size and written in order, and node fields set in place.
   - Electron smoke with the recovery bridge.
 - **Not verified:** the file store survives a real process restart only through the renderer crash in capture, since main kept running; reading it back in a new process is the same code path but is not tested. Optional fallbacks and numbered executions were not run against the server.
+
+## Run variables (07)
+
+Status: prompt 07 (M04a) is complete. The desktop app does not author Set and Get Variable yet; that is prompt 14's second part. Date: 2026-11-07.
+
+- **Changed:** migration `0010_run_variables` with `run_variables` and `run_variable_revisions`; `set_variable` and `get_variable` nodes, with variable writes allowed only for node types that declare them; a `variable` binding source, frozen with its revision and writing execution in `sources`; writes stored in the transaction that completes their execution, checked against the revision frozen when it was prepared; Transform operations `$add`, `$subtract`, `$multiply`, `$length` and `$at`, checked at publish; `GET /runs/{id}/variables` on the socket and for devices, with the `RunVariables` protocol schema and fixture; `shift run variables`; `docs/examples/collection-loop.json`.
+- **Verified:**
+  - A finite collection loop: `docs/examples/collection-loop.json` visits `a`, `b` and `c` in order through a backward edge and a Condition, then ends; an empty list visits nothing. Index revisions 1 to 4 name the executions that wrote them, and each visit's `sources` name the revision it read. The same example runs from the CLI against a real `shift serve`, and `shift run variables` reads it back.
+  - Commit and failure: a completion with a stale expected revision is refused whole, leaving the execution running with no output and no write. After a restart the attempt is taken up with its frozen configuration and fails with `VARIABLE_CONFLICT` instead of overwriting the newer value.
+  - Crash before commit: a write prepared and not completed is absent; reopening the store takes up the attempt and writes it once. The store is closed and reopened in one process; no subprocess is killed.
+  - Two runs of one workflow keep separate variables.
+  - A waiting execution keeps the value and revision it froze after another write.
+  - Transform operations compute; a wrong type fails with `TRANSFORM_TYPE` and an index outside the list with `TRANSFORM_INDEX`. Get Variable reads, falls back, or fails with `VARIABLE_MISSING`. Publishing refuses unknown operations, wrong operand counts, optional reads without a fallback and bad keys.

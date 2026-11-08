@@ -391,5 +391,41 @@
       }
     ],
     "interactions": []
+  },
+  "runVariables": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000050",
+    "variables": [
+      {
+        "key": "index",
+        "value": 2,
+        "revision": 3,
+        "executionId": "00000000-0000-4000-8000-000000000051",
+        "updatedAt": 1792972800000
+      }
+    ],
+    "revisions": [
+      {
+        "key": "index",
+        "revision": 1,
+        "value": 0,
+        "executionId": "00000000-0000-4000-8000-000000000051",
+        "createdAt": 1792972800000
+      },
+      {
+        "key": "index",
+        "revision": 2,
+        "value": 1,
+        "executionId": "00000000-0000-4000-8000-000000000052",
+        "createdAt": 1792972800000
+      },
+      {
+        "key": "index",
+        "revision": 3,
+        "value": 2,
+        "executionId": "00000000-0000-4000-8000-000000000053",
+        "createdAt": 1792972800000
+      }
+    ]
   }
 }

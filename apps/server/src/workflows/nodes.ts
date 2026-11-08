@@ -13,6 +13,8 @@ export interface NodeTypeDefinition {
   portsFor?: (config: Json) => readonly string[];
   // Entry nodes start runs and cannot be connection targets.
   entry?: boolean;
+  // Only these may return variable writes (specification 6.5).
+  writesVariables?: boolean;
 }
 
 const limits = {
@@ -25,6 +27,7 @@ const limits = {
   },
 };
 const schema = { anyOf: [{ type: 'object' }, { type: 'boolean' }] };
+const variableKey = { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' };
 const interaction = {
   title: { type: 'string', minLength: 1, maxLength: 200 },
   instructions: { type: 'string', maxLength: 20000 },
@@ -182,6 +185,33 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
           },
         },
       },
+    },
+  },
+  {
+    // Writes `value`, a Transform template, to the run variable `key`. The write commits with the
+    // node's completion; the node passes its input through.
+    type: 'set_variable',
+    version: 1,
+    ports: ['success', 'error'],
+    writesVariables: true,
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['key', 'value'],
+      properties: { key: variableKey, value: {} },
+    },
+  },
+  {
+    // Publishes the current value of the run variable `key` as its data, read once when the
+    // execution is prepared. An optional variable that was never written uses `fallback`.
+    type: 'get_variable',
+    version: 1,
+    ports: ['success', 'error'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['key'],
+      properties: { key: variableKey, optional: { type: 'boolean' }, fallback: {} },
     },
   },
   {

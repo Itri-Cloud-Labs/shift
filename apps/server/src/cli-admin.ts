@@ -226,6 +226,12 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       );
       return print({ executions, next });
     }
+    case 'run variables': {
+      const { variables, revisions } = await get(
+        `/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/variables`,
+      );
+      return print({ variables, revisions });
+    }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);
     case 'run cancel':

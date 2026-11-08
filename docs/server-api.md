@@ -88,6 +88,7 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `GET /api/v0/admin/runs`                                | `shift run list`            | List runs                                         |
 | `GET /api/v0/admin/runs/{id}`                           | `shift run show`            | Run with executions and invocations               |
 | `GET /api/v0/admin/runs/{id}/executions`                | `shift run executions`      | A page of a run's execution history               |
+| `GET /api/v0/admin/runs/{id}/variables`                 | `shift run variables`       | A run's variables and every revision              |
 | `POST /api/v0/admin/runs/{id}/cancel`                   | `shift run cancel`          | Cancel a run                                      |
 | `POST /api/v0/admin/runs/{id}/retry`                    | `shift run retry`           | Retry a stuck step                                |
 | `POST /api/v0/admin/runs/{id}/fail`                     | `shift run fail`            | Abandon a stuck step                              |
@@ -294,6 +295,8 @@ A `Run`, abridged from a completed run:
 
 `GET /api/v0/admin/runs/{id}/executions[?after=SEQ&limit=N]` pages through a run's executions in sequence order, in the same form as the run view: `{"executions": […], "next": SEQ | null}`. `after` is a sequence number (default 0) and `limit` is 1 to 500 (default 100). Pass `next` as `after` to read the following page; `null` means there is none. The CLI form is `shift run executions <run-id> [--after SEQ] [--limit N]`.
 
+`GET /api/v0/admin/runs/{id}/variables` returns a run's [variables](workflows.md#run-variables): `{"variables": [{"key", "value", "revision", "executionId", "updatedAt"}], "revisions": [{"key", "revision", "value", "executionId", "createdAt"}]}`, ordered by key and revision. `executionId` is the execution whose completion wrote that revision. An unknown run is `404 RUN_NOT_FOUND`. The CLI form is `shift run variables <run-id>`.
+
 `GET /api/v0/admin/runs` lists the 100 newest runs, newest first, each as `{id, state, workflowId, createdAt, finishedAt}`.
 
 ### Run controls
@@ -459,7 +462,7 @@ Every state change commits a durable event in the same transaction, numbered by 
 }
 ```
 
-Payloads are small and name the resources that changed; read the resource for its current state. Event types include `run.created`, `execution.started`, `execution.completed`, `execution.failed`, `run.completed`, `run.cancelled`, `interaction.requested`, `interaction.responded`, `workflow.published` and `device.revoked`. All events are kept.
+Payloads are small and name the resources that changed; read the resource for its current state. Event types include `run.created`, `execution.started`, `execution.completed`, `execution.failed`, `run.completed`, `run.cancelled`, `interaction.requested`, `interaction.responded`, `variable.written` (with `{"key", "revision"}`), `workflow.published` and `device.revoked`. All events are kept.
 
 | Request                                     | Answer                                                                                                                                                                                                   |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

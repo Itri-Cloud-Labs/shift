@@ -1,6 +1,6 @@
 import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
-import type { ValueSource } from '../workflows/document.js';
+import { operations, type ValueSource } from '../workflows/document.js';
 
 // Every edge carries one output envelope (specification 5). Shift constructs references and
 // context; executors only produce `data`.
@@ -28,6 +28,12 @@ export interface ChainEntry {
   output: OutputEnvelope;
 }
 
+export interface VariableValue {
+  value: Json;
+  revision: number;
+  executionId: string;
+}
+
 export interface BindingScope {
   input: OutputEnvelope;
   // The execution that produced `input`, which can be a failed one routed through `error`.
@@ -38,6 +44,8 @@ export interface BindingScope {
   projectId: string | null;
   // Successful executions on the current predecessor chain, nearest first.
   chain: ChainEntry[];
+  // The run's variables as they are now, read when the execution is prepared.
+  variables: ReadonlyMap<string, VariableValue>;
 }
 
 const missing = Symbol('missing');
@@ -65,6 +73,14 @@ export type BindingSource =
   | { kind: 'literal' }
   | { kind: 'input' | 'trigger'; executionId: string | null; path: string[] }
   | { kind: 'project'; projectId: string | null; path: string[] }
+  | {
+      kind: 'variable';
+      key: string;
+      revision: number | null;
+      executionId: string | null;
+      path: string[];
+      fallback?: true;
+    }
   | {
       kind: 'node';
       nodeId: string;
@@ -107,6 +123,22 @@ export function resolveBindings(
         value = lookup(scope.project, source.path);
         sources[name] = { kind: 'project', projectId: scope.projectId, path: source.path };
         break;
+      case 'variable': {
+        const current = scope.variables.get(source.key);
+        value = current ? lookup(current.value, source.path) : missing;
+        sources[name] = {
+          kind: 'variable',
+          key: source.key,
+          revision: current?.revision ?? null,
+          executionId: current?.executionId ?? null,
+          path: source.path,
+        };
+        if (value === missing && source.optional) {
+          value = source.fallback;
+          sources[name] = { ...(sources[name] as object), fallback: true } as BindingSource;
+        }
+        break;
+      }
       case 'node': {
         const matches = scope.chain.filter((entry) => entry.nodeId === source.nodeId);
         const selector = source.execution;
@@ -145,7 +177,9 @@ export function resolveBindings(
     if (value === missing) {
       throw bindingError(
         name,
-        `no value at ${source.kind} ${JSON.stringify('path' in source ? source.path : [])}.`,
+        source.kind === 'variable'
+          ? `run variable ${source.key} has no value at ${JSON.stringify(source.path)}.`
+          : `no value at ${source.kind} ${JSON.stringify('path' in source ? source.path : [])}.`,
       );
     }
     values[name] = value as Json;
@@ -153,7 +187,44 @@ export function resolveBindings(
   return { values, sources };
 }
 
-// `{"$binding": "<name>"}` objects are replaced by the binding's value.
+const operationError = (message: string) => new ShiftError('TRANSFORM_TYPE', message, 422);
+
+const describe = (value: Json) =>
+  value === null ? 'null' : Array.isArray(value) ? 'a list' : `a ${typeof value}`;
+
+// The bounded operations a template may use. Operands are rendered first; a wrong type fails the
+// node rather than guessing, like a rule's comparison.
+function operate(operation: string, operands: Json[]): Json {
+  if (operation === '$length') {
+    const [value] = operands;
+    if (Array.isArray(value)) return value.length;
+    if (typeof value === 'string') return value.length;
+    throw operationError(`$length needs a list or text, not ${describe(value!)}.`);
+  }
+  if (operation === '$at') {
+    const [list, index] = operands;
+    if (!Array.isArray(list)) throw operationError(`$at needs a list, not ${describe(list!)}.`);
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= list.length)
+      throw new ShiftError(
+        'TRANSFORM_INDEX',
+        `$at index ${JSON.stringify(index)} is outside a list of ${list.length}.`,
+        422,
+      );
+    return list[index]!;
+  }
+  const [left, right] = operands;
+  if (typeof left !== 'number' || typeof right !== 'number')
+    throw operationError(
+      `${operation} needs two numbers, not ${describe(left!)} and ${describe(right!)}.`,
+    );
+  const result =
+    operation === '$add' ? left + right : operation === '$subtract' ? left - right : left * right;
+  if (!Number.isFinite(result)) throw operationError(`${operation} is out of range.`);
+  return result;
+}
+
+// `{"$binding": "<name>"}` objects are replaced by the binding's value, and operation objects such
+// as `{"$add": [a, b]}` by their result (workflows/document.ts lists them).
 export function renderTemplate(template: Json, bindings: Record<string, Json>): Json {
   if (Array.isArray(template)) return template.map((item) => renderTemplate(item, bindings));
   if (typeof template === 'object' && template !== null) {
@@ -164,6 +235,14 @@ export function renderTemplate(template: Json, bindings: Record<string, Json>): 
       typeof entries[0]![1] === 'string'
     ) {
       return bindings[entries[0]![1]] ?? null;
+    }
+    if (entries.length === 1 && Object.hasOwn(operations, entries[0]![0])) {
+      const [operation, argument] = entries[0]!;
+      const operands = operations[operation] === 1 ? [argument] : (argument as Json[]);
+      return operate(
+        operation,
+        operands.map((item) => renderTemplate(item, bindings)),
+      );
     }
     return Object.fromEntries(
       entries.map(([key, value]) => [key, renderTemplate(value, bindings)]),
