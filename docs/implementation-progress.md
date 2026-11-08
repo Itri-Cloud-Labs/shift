@@ -596,7 +596,7 @@ Status: the first of two parts of prompt 14 (M07a). Run variables are prompt 07 
 
 ## Run variables (07)
 
-Status: prompt 07 (M04a) is complete. The desktop app does not author Set and Get Variable yet; that is prompt 14's second part. Date: 2026-11-07.
+Status: prompt 07 (M04a) is complete. The desktop app authors Set and Get Variable since 14b. Date: 2026-11-07.
 
 - **Changed:** migration `0010_run_variables` with `run_variables` and `run_variable_revisions`; `set_variable` and `get_variable` nodes, with variable writes allowed only for node types that declare them; a `variable` binding source, frozen with its revision and writing execution in `sources`; writes stored in the transaction that completes their execution, checked against the revision frozen when it was prepared; Transform operations `$add`, `$subtract`, `$multiply`, `$length` and `$at`, checked at publish; `GET /runs/{id}/variables` on the socket and for devices, with the `RunVariables` protocol schema and fixture; `shift run variables`; `docs/examples/collection-loop.json`.
 - **Verified:**
@@ -606,3 +606,13 @@ Status: prompt 07 (M04a) is complete. The desktop app does not author Set and Ge
   - Two runs of one workflow keep separate variables.
   - A waiting execution keeps the value and revision it froze after another write.
   - Transform operations compute; a wrong type fails with `TRANSFORM_TYPE` and an index outside the list with `TRANSFORM_INDEX`. Get Variable reads, falls back, or fails with `VARIABLE_MISSING`. Publishing refuses unknown operations, wrong operand counts, optional reads without a fallback and bad keys.
+
+## Run variables in the editor (14b)
+
+Status: the second part of prompt 14 (M07a). Its acceptance is met. Agent profiles, harness, session strategy, handoff and report controls, and session and artifact reference sources, wait for their server capabilities (prompts 16 to 18). Date: 2026-11-08.
+
+- **Changed:** Set variable and Get variable in the node picker, each with its own form. A variable is chosen from the names Set variable nodes write, or another name is typed. Get variable takes an optional fallback, which changes with the checkbox in one edit. A run variable is a binding source with an optional fallback. Transform data and the value Set variable writes take calculations (`$add`, `$subtract`, `$multiply`, `$length`, `$at`) whose operands are values, bindings or calculations again; a malformed calculation is kept as it came. Diagnostics follow the server: variable names, a missing value, optional reads without a fallback, and calculation problems with the server's pointer and message; a read of a variable no Set variable node writes is a warning.
+- **Verified:**
+  - `tools/capture.mjs` against a real server, asserted: a new workflow that counts to three built only through the forms (Set variable to 0; a Condition reading the variable, less than 3; Set variable to the variable plus 1, back to the Condition; End), connected through the port pickers, saved, published and run. The Condition ran 4 times, the write 3 times, and the run completed; `shift run variables` then read `count` as 3 with 4 revisions.
+  - Unit tests: calculations read and rebuilt with their operands, calculation problems against the server's pointers and messages, variable diagnostics, and `docs/examples/collection-loop.json` read with no problems, no setting left unknown, and a renamed binding followed into a calculation.
+- **Not verified:** the collection loop's `$length` and `$at` were not authored through the app, only read back; they use the same form as `$add`.

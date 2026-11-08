@@ -7,9 +7,11 @@ import {
   CircleDashed,
   CircleX,
   Clock,
+  DatabaseZap,
   Flag,
   GitBranch,
   LoaderCircle,
+  PackageOpen,
   Play,
   ShieldCheck,
   Split,
@@ -29,6 +31,8 @@ export const typeIcons: Record<string, LucideIcon> = {
   wait: Timer,
   human_input: TextCursorInput,
   approval: ShieldCheck,
+  set_variable: DatabaseZap,
+  get_variable: PackageOpen,
   end: Flag,
 };
 
