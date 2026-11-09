@@ -467,5 +467,66 @@
       "agentSessionId": "00000000-0000-4000-8000-000000000066",
       "createdAt": 1793059200000
     }
+  },
+  "sessionList": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000074",
+    "sessions": [
+      {
+        "id": "00000000-0000-4000-8000-000000000070",
+        "projectId": "00000000-0000-4000-8000-000000000071",
+        "workspaceId": "00000000-0000-4000-8000-000000000072",
+        "nodeId": "review",
+        "createdByRunId": "00000000-0000-4000-8000-000000000073",
+        "harness": "opencode",
+        "harnessSessionId": "ses_0000000000000000000000000000",
+        "mapping": "READY",
+        "cwd": "/srv/shift/workspaces/run",
+        "lifetime": "persistent",
+        "state": "IDLE",
+        "heldBy": null,
+        "createdAt": 1793145600000,
+        "archivedAt": null
+      }
+    ]
+  },
+  "sessionResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000077",
+    "session": {
+      "id": "00000000-0000-4000-8000-000000000070",
+      "projectId": "00000000-0000-4000-8000-000000000071",
+      "workspaceId": "00000000-0000-4000-8000-000000000072",
+      "nodeId": "review",
+      "createdByRunId": "00000000-0000-4000-8000-000000000073",
+      "harness": "opencode",
+      "harnessSessionId": "ses_0000000000000000000000000000",
+      "mapping": "READY",
+      "cwd": "/srv/shift/workspaces/run",
+      "lifetime": "persistent",
+      "state": "IDLE",
+      "heldBy": null,
+      "createdAt": 1793145600000,
+      "archivedAt": null,
+      "executions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000075",
+          "runId": "00000000-0000-4000-8000-000000000073",
+          "nodeId": "review",
+          "sequence": 2,
+          "state": "COMPLETED"
+        }
+      ],
+      "invocations": [
+        {
+          "id": "00000000-0000-4000-8000-000000000076",
+          "executionId": "00000000-0000-4000-8000-000000000075",
+          "kind": "goal",
+          "state": "COMPLETED",
+          "createdAt": 1793145600000,
+          "finishedAt": 1793145660000
+        }
+      ]
+    }
   }
 }

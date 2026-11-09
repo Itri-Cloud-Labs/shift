@@ -61,6 +61,8 @@ export {
   validateRunVariables,
   validateArtifactList,
   validateArtifactResponse,
+  validateSessionList,
+  validateSessionResponse,
   validateEvent,
   validateEventPage,
   validateSnapshot,

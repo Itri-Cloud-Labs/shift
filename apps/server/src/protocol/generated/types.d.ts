@@ -34,6 +34,8 @@ export type FoundationPayload =
   | RunVariables
   | ArtifactList
   | ArtifactResponse
+  | SessionList
+  | SessionResponse
   | Event
   | EventPage
   | Snapshot;
@@ -533,6 +535,72 @@ export interface ArtifactResponse {
   schemaVersion: 1;
   requestId: Uuid;
   artifact: Artifact;
+}
+export interface SessionList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 500
+   */
+  sessions: AgentSession[];
+}
+export interface AgentSession {
+  id: Uuid;
+  projectId: Uuid | null;
+  workspaceId: Uuid | null;
+  nodeId: string | null;
+  createdByRunId: Uuid | null;
+  harness: string;
+  harnessSessionId: string | null;
+  mapping: 'CREATING' | 'READY' | 'MISSING';
+  cwd: string;
+  lifetime: 'persistent' | 'ephemeral';
+  state: 'CREATING' | 'IDLE' | 'BUSY' | 'BLOCKED' | 'UNAVAILABLE' | 'ARCHIVED';
+  heldBy: Uuid | null;
+  createdAt: number;
+  archivedAt: number | null;
+}
+export interface SessionResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  session: AgentSessionDetail;
+}
+export interface AgentSessionDetail {
+  id: Uuid;
+  projectId: Uuid | null;
+  workspaceId: Uuid | null;
+  nodeId: string | null;
+  createdByRunId: Uuid | null;
+  harness: string;
+  harnessSessionId: string | null;
+  mapping: 'CREATING' | 'READY' | 'MISSING';
+  cwd: string;
+  lifetime: 'persistent' | 'ephemeral';
+  state: 'CREATING' | 'IDLE' | 'BUSY' | 'BLOCKED' | 'UNAVAILABLE' | 'ARCHIVED';
+  heldBy: Uuid | null;
+  createdAt: number;
+  archivedAt: number | null;
+  /**
+   * @maxItems 100000
+   */
+  executions: {
+    id: Uuid;
+    runId: Uuid;
+    nodeId: string;
+    sequence: number;
+    state: string;
+  }[];
+  /**
+   * @maxItems 100000
+   */
+  invocations: {
+    id: Uuid;
+    executionId: Uuid | null;
+    kind: 'goal' | 'correction' | 'continuation';
+    state: string;
+    createdAt: number;
+    finishedAt: number | null;
+  }[];
 }
 export interface Event {
   cursor: EventCursor;

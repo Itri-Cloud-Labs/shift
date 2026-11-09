@@ -920,6 +920,268 @@ test('a small handoff is given inline to the next agent', async () => {
   }
 });
 
+// start -> init (count = 0) -> work (agent) -> next (count + 1) -> more (count < 2) -> work | end
+const loopWorkflow = (session: Record<string, unknown>): Json =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'init', type: 'set_variable', config: { key: 'count', value: 0 } },
+      { id: 'work', type: 'agent', config: { goal: 'Work. [work]', session } },
+      {
+        id: 'next',
+        type: 'set_variable',
+        config: { key: 'count', value: { $add: [{ $binding: 'count' }, 1] } },
+        bindings: { count: { kind: 'variable', key: 'count', path: [] } },
+      },
+      {
+        id: 'more',
+        type: 'condition',
+        config: { when: { op: 'lt', left: { binding: 'count' }, right: { value: 2 } } },
+        bindings: { count: { kind: 'variable', key: 'count', path: [] } },
+      },
+      { id: 'end', type: 'end' },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'init', toPort: 'input' },
+      { id: 'c2', fromNodeId: 'init', fromPort: 'success', toNodeId: 'work', toPort: 'input' },
+      { id: 'c3', fromNodeId: 'work', fromPort: 'success', toNodeId: 'next', toPort: 'input' },
+      { id: 'c4', fromNodeId: 'next', fromPort: 'success', toNodeId: 'more', toPort: 'input' },
+      { id: 'c5', fromNodeId: 'more', fromPort: 'true', toNodeId: 'work', toPort: 'input' },
+      { id: 'c6', fromNodeId: 'more', fromPort: 'false', toNodeId: 'end', toPort: 'input' },
+    ],
+  }) as Json;
+
+const startDocument = async (harnessed: Harnessed, document: Json) => {
+  const response = await harnessed.engine.startRun({
+    workflowId: await publish(harnessed, document),
+  });
+  return (response.body as { run: { id: string } }).run.id;
+};
+
+const sessionsOf = (harnessed: Harnessed, runId: string) =>
+  harnessed.store.db
+    .prepare(
+      "SELECT agent_session_id FROM node_executions WHERE run_id = ? AND node_id IN ('work', 'agent') ORDER BY sequence",
+    )
+    .all(runId)
+    .map((row) => (row as { agent_session_id: string }).agent_session_id);
+
+type SessionDetail = {
+  lifetime: string;
+  state: string;
+  cwd: string;
+  heldBy: string | null;
+  executions: Array<{ runId: string }>;
+};
+
+test('a per-run loop reuses its session on every visit, and fresh creates one each time', async () => {
+  const harnessed = await engineFor(complete({}));
+  try {
+    const perRun = await startDocument(harnessed, loopWorkflow({ strategy: 'per_run' }));
+    assert.equal((await settled(harnessed, perRun)).state, 'COMPLETED');
+    const reused = sessionsOf(harnessed, perRun);
+    assert.equal(reused.length, 2);
+    assert.equal(new Set(reused).size, 1, 'one session for both visits');
+    assert.equal(harnessed.fake.creates, 1);
+    // A reused conversation still gets the full goal.
+    assert.ok(
+      [...harnessed.fake.turns.values()].every((turn) => turn.prompt.includes('Task: Work.')),
+    );
+    const session = harnessed.engine.repository.sessionDetail(
+      reused[0]!,
+    ) as unknown as SessionDetail;
+    assert.deepEqual(
+      [session.lifetime, session.state, session.executions.length],
+      ['persistent', 'IDLE', 2],
+    );
+    const fresh = await startDocument(harnessed, loopWorkflow({ strategy: 'fresh' }));
+    assert.equal((await settled(harnessed, fresh)).state, 'COMPLETED');
+    assert.equal(new Set(sessionsOf(harnessed, fresh)).size, 2);
+    assert.equal(harnessed.fake.creates, 3);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a later run reuses a retained session in that session’s own workspace', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const first = await start(harnessed);
+    const done = await settled(harnessed, first);
+    assert.equal(done.state, 'COMPLETED');
+    const [sessionId] = sessionsOf(harnessed, first);
+    const firstCwd = [...harnessed.fake.turns.values()][0]!.handle.cwd;
+    const second = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    const run = (await settled(harnessed, second)) as RunView & {
+      workspace: { path: string } | null;
+    };
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(sessionsOf(harnessed, second), [sessionId]);
+    assert.equal(harnessed.fake.creates, 1, 'no new conversation');
+    const turns = [...harnessed.fake.turns.values()];
+    assert.equal(turns[1]!.handle.cwd, firstCwd, 'the session never moves');
+    const session = harnessed.engine.repository.sessionDetail(
+      sessionId!,
+    ) as unknown as SessionDetail;
+    assert.deepEqual(
+      session.executions.map((execution) => execution.runId),
+      [first, second],
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an ephemeral session is archived when its execution ends and cannot be referenced', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const first = await start(harnessed, { session: { strategy: 'fresh', lifetime: 'ephemeral' } });
+    assert.equal((await settled(harnessed, first)).state, 'COMPLETED');
+    const [sessionId] = sessionsOf(harnessed, first);
+    const session = harnessed.engine.repository.sessionDetail(
+      sessionId!,
+    ) as unknown as SessionDetail;
+    assert.deepEqual([session.lifetime, session.state], ['ephemeral', 'ARCHIVED']);
+    const second = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    const run = await settled(harnessed, second);
+    assert.equal(run.state, 'FAILED');
+    assert.equal(run.executions[1]!.error?.code, 'SESSION_UNAVAILABLE');
+    const unknown = await start(harnessed, {
+      session: { strategy: 'reference', reference: '00000000-0000-4000-8000-000000000000' },
+    });
+    assert.equal(
+      (await settled(harnessed, unknown)).executions[1]!.error?.code,
+      'SESSION_UNAVAILABLE',
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('two runs referencing one session take turns, in the order they asked', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let calls = 0;
+  const order: string[] = [];
+  const harnessed = await engineFor(async (turn, fake) => {
+    calls++;
+    if (calls === 2) await held;
+    // The report directory is <artifacts>/<run>/<invocation>.
+    order.push(turn.artifactDirectory.split('/').at(-2)!);
+    await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const origin = await start(harnessed);
+    assert.equal((await settled(harnessed, origin)).state, 'COMPLETED');
+    const [sessionId] = sessionsOf(harnessed, origin);
+    const reference = { session: { strategy: 'reference', reference: sessionId } };
+    const first = await start(harnessed, reference);
+    await eventually(() => (calls === 2 ? true : undefined));
+    const second = await start(harnessed, reference);
+    const waiting = await eventually(() => {
+      const run = view(harnessed, second);
+      return run.wait?.kind === 'resource' ? run : undefined;
+    });
+    const wait = waiting.wait as unknown as {
+      resourceType: string;
+      resourceId: string;
+      heldBy: string;
+    };
+    // The workspace comes first in the acquisition order, and the first run holds both.
+    const workspaceId = (
+      harnessed.engine.repository.sessionDetail(sessionId!) as unknown as { workspaceId: string }
+    ).workspaceId;
+    assert.deepEqual([wait.resourceType, wait.resourceId], ['workspace', workspaceId]);
+    assert.equal(wait.heldBy, view(harnessed, first).executions[1]!.id);
+    assert.equal(
+      (harnessed.engine.repository.sessionDetail(sessionId!) as unknown as SessionDetail).heldBy,
+      wait.heldBy,
+    );
+    const third = await start(harnessed, reference);
+    await eventually(() => (view(harnessed, third).wait?.kind === 'resource' ? true : undefined));
+    release();
+    for (const run of [first, second, third])
+      assert.equal((await settled(harnessed, run)).state, 'COMPLETED');
+    assert.deepEqual(order, [origin, first, second, third]);
+    assert.equal(harnessed.fake.creates, 1);
+  } finally {
+    release();
+    await harnessed.close();
+  }
+});
+
+test('a reference waits while the run that owns the workspace is still active', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    // The first run's agent finishes, then the run waits for an approval in the same workspace.
+    const origin = await startDocument(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'agent', type: 'agent', config: { goal: 'Write.' } },
+        { id: 'check', type: 'approval', config: { title: 'Ship it?' } },
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'agent', toPort: 'input' },
+        { id: 'c2', fromNodeId: 'agent', fromPort: 'success', toNodeId: 'check', toPort: 'input' },
+      ],
+    } as Json);
+    const waitingForApproval = await settled(harnessed, origin);
+    assert.equal(waitingForApproval.state, 'WAITING');
+    const [sessionId] = sessionsOf(harnessed, origin);
+    const later = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    const queued = await eventually(() => {
+      const run = view(harnessed, later);
+      return run.wait?.kind === 'resource' ? run : undefined;
+    });
+    assert.equal((queued.wait as unknown as { resourceType: string }).resourceType, 'workspace');
+    assert.equal(harnessed.fake.turns.size, 1, 'nothing ran in the shared workspace');
+    const [request] = pendingInteractions(harnessed);
+    respond(harnessed, request!.id, {
+      revision: 0,
+      decision: 'approved',
+      response: { comment: 'ok' },
+      commandId: 'approve-origin',
+    });
+    assert.equal((await settled(harnessed, origin)).state, 'COMPLETED');
+    const finished = await settled(harnessed, later);
+    assert.equal(
+      finished.state,
+      'COMPLETED',
+      JSON.stringify(finished.executions.map((e) => e.error)),
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a reused session the harness lost needs the owner, and no new one is created', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const first = await start(harnessed);
+    assert.equal((await settled(harnessed, first)).state, 'COMPLETED');
+    const [sessionId] = sessionsOf(harnessed, first);
+    harnessed.fake.inspectSession = (async () => ({
+      kind: 'missing',
+    })) as unknown as FakeHarness['inspectSession'];
+    const second = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    const run = await settled(harnessed, second);
+    assert.equal(run.state, 'NEEDS_HUMAN');
+    assert.equal(run.attention?.code, 'SESSION_MISSING');
+    assert.equal(harnessed.fake.creates, 1);
+    assert.equal(harnessed.fake.turns.size, 1, 'no goal was sent');
+  } finally {
+    await harnessed.close();
+  }
+});
+
 test('the same tool call delivered twice is recorded once', async () => {
   const verdicts: unknown[] = [];
   const harnessed = await engineFor(async (turn, fake) => {

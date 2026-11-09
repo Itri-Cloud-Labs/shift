@@ -203,6 +203,7 @@ export class AgentService {
       await this.#options.workspaces.ensureReady(config.workspaceId);
     }
     const handle = await this.#session(claim, config);
+    if (!handle) return;
     for (;;) {
       if (signal.aborted) return;
       const invocations = repository.invocations(claim.attemptId);
@@ -250,23 +251,47 @@ export class AgentService {
     }
   }
 
-  async #session(claim: Claim, config: AgentConfig): Promise<HarnessSessionHandle> {
+  // The execution's session, fixed across its attempts (specification 6.4): a new one for a fresh
+  // strategy or a first per-run visit, otherwise the per-run or referenced one. A reused
+  // conversation the harness no longer has is never replaced by a new one; the owner decides.
+  async #session(claim: Claim, config: AgentConfig): Promise<HarnessSessionHandle | null> {
     const { repository, adapter } = this.#options;
+    const policy = config.session ?? { strategy: 'fresh', lifetime: 'persistent' };
+    const { node } = repository.execution(claim.executionId);
+    const existing =
+      policy.strategy === 'reference'
+        ? policy.sessionId
+        : policy.strategy === 'per_run'
+          ? repository.perRunSession(claim.runId, node.id)
+          : null;
     const session =
       repository.session(claim.executionId) ??
-      repository.bindSession(claim, {
-        harnessId: adapter.id,
-        cwd: config.cwd,
-        config: { model: { ...config.model } },
-        storageNamespace: adapter.storageNamespace,
-      });
+      (existing
+        ? repository.useSession(claim, existing)
+        : repository.bindSession(claim, {
+            harnessId: adapter.id,
+            cwd: config.cwd,
+            config: { model: { ...config.model } },
+            storageNamespace: adapter.storageNamespace,
+            lifetime: policy.strategy === 'reference' ? 'persistent' : policy.lifetime,
+            workspaceId: config.workspaceId ?? null,
+            perRun: policy.strategy === 'per_run',
+          }));
     if (session.state === 'READY' && session.harnessSessionId) {
-      return {
+      const handle = {
         shiftSessionId: session.agentSessionId,
         harnessSessionId: session.harnessSessionId,
         storageNamespace: session.storageNamespace,
         cwd: session.cwd,
       };
+      if ((await adapter.inspectSession(handle)).kind === 'missing') {
+        repository.needsHuman(claim, {
+          code: 'SESSION_MISSING',
+          explanation: `The harness no longer has the conversation of session ${session.agentSessionId}. Shift does not start a new one in its place.`,
+        });
+        return null;
+      }
+      return handle;
     }
     // Repeating an interrupted creation addresses the same harness session.
     const handle = await adapter.createSession({

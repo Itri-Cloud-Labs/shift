@@ -74,6 +74,20 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
         readOnly: { type: 'boolean' },
         resultSchema: schema,
         limits,
+        // Which conversation the agent works in (specification 6.4): a new one per execution, one
+        // per run and node reused on later visits, or an explicitly chosen project session.
+        session: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            strategy: { enum: ['fresh', 'per_run', 'reference'] },
+            lifetime: { enum: ['persistent', 'ephemeral'] },
+            reference: {
+              type: 'string',
+              pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            },
+          },
+        },
         // Which reports a completed result needs (specification 6.5). Both are required by default.
         reports: {
           type: 'object',

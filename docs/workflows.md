@@ -190,6 +190,7 @@ Every node publishes the same envelope, and the next node receives it as its inp
       "properties": { "words": { "type": "integer" } }
     },
     "limits": { "rejectedSubmissions": 3, "corrections": 2, "continuations": 2 },
+    "session": { "strategy": "fresh", "lifetime": "persistent" },
     "reports": { "handoff": "required", "humanReport": "required" },
     "handoffs": { "incoming": true, "nodes": [] }
   },
@@ -200,6 +201,7 @@ Every node publishes the same envelope, and the next node receives it as its inp
 - `model` is `<provider>/<model>` as named in OpenCode. It defaults to the server's `--opencode-model`. Without either, the node fails with `MODEL_REQUIRED`.
 - `readOnly` agents can't edit files or run shell commands. They can still write their artifact directory.
 - `resultSchema` is the JSON Schema for the result's `data`. It defaults to any object.
+- `session` says which [session](#sessions) the agent works in.
 - `reports` says which [reports](#reports-and-handoffs) a completed result needs: `required` (the default), `optional` or `off`.
 - `handoffs` says which earlier [handoffs](#reports-and-handoffs) the agent reads: the incoming one unless `incoming` is `false`, and those of the agent nodes listed in `nodes`.
 
@@ -237,6 +239,22 @@ Shift stores each as an immutable [artifact](server-api.md#artifacts) of that pr
 The successful prompt's reports become the node's `references.artifacts`, and its handoff becomes `context.handoffs`. Without a handoff the list is empty; an older handoff is never passed on as the agent's. Transforms, conditions, waits and other nodes pass `context.handoffs` along, so an agent two steps later still receives it.
 
 An agent reads the incoming handoff, inline in its prompt, or as a file in its report directory when it is over 64 KiB. Set `handoffs.incoming` to `false` for an independent reviewer that should judge the work without the author's notes. List agent nodes in `handoffs.nodes` to add their latest handoffs on the run's path; each must name another agent node. The handoffs are fixed when the node starts, and every goal prompt repeats them, also when a session is reused.
+
+### Sessions
+
+An agent works in a session: a Shift identity for one OpenCode conversation, in one project and one workspace. `session.strategy` chooses it:
+
+| Strategy    | Session                                                                                                                                                         |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fresh`     | The default. A new session for each execution of the node.                                                                                                      |
+| `per_run`   | One session per run and node: the first visit creates it, and later visits in a loop reuse it.                                                                  |
+| `reference` | The existing session named by `session.reference`, from any earlier run of the project. The agent works in that session's workspace, since sessions never move. |
+
+`session.lifetime` is `persistent` (the default) or `ephemeral`. A persistent session outlives its execution and run, and waits `IDLE` for its next goal. An ephemeral one is archived when its execution ends, and only the `fresh` strategy can be ephemeral. A `reference` keeps the referenced session's own lifetime, so it takes no `lifetime`.
+
+A session stays the same across an execution's attempts: retries and continuations reuse it. Every goal prompt still states the task, input and handoffs in full, so a reused conversation is never the only source of what to do now.
+
+One execution at a time owns a session. A `reference` also needs the session's workspace: it waits while the run that created the workspace is still active, and while another execution uses the session or workspace. A waiting execution takes no agent slot; the run shows `wait: {"kind": "resource", "resourceType", "resourceId", "heldBy"}`, and waiters go in the order they asked. Referencing a session of another project, an archived one, or one whose workspace was removed fails the node with `SESSION_UNAVAILABLE`. If OpenCode no longer has a reused session's conversation, the run waits in `NEEDS_HUMAN` with `SESSION_MISSING`; Shift never starts a new conversation in its place.
 
 ## Workspaces
 

@@ -32,6 +32,8 @@ shift run show RUN_ID [--wait]
 shift run list
 shift run executions RUN_ID [--after SEQUENCE] [--limit N]
 shift run variables RUN_ID
+shift session list [--project PROJECT_ID]
+shift session show SESSION_ID
 shift artifact list RUN_ID
 shift artifact show ARTIFACT_ID
 shift artifact get ARTIFACT_ID
@@ -107,6 +109,7 @@ async function main(): Promise<void> {
       'device',
       'event',
       'artifact',
+      'session',
     ].includes(command)
   ) {
     const { adminCommand } = await import('./cli-admin.js');

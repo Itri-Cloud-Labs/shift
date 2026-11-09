@@ -89,6 +89,8 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `GET /api/v0/admin/runs/{id}`                           | `shift run show`            | Run with executions and invocations               |
 | `GET /api/v0/admin/runs/{id}/executions`                | `shift run executions`      | A page of a run's execution history               |
 | `GET /api/v0/admin/runs/{id}/variables`                 | `shift run variables`       | A run's variables and every revision              |
+| `GET /api/v0/admin/sessions[?projectId=]`               | `shift session list`        | Agent sessions, newest first                      |
+| `GET /api/v0/admin/sessions/{id}`                       | `shift session show`        | A session with its executions and invocations     |
 | `GET /api/v0/admin/runs/{id}/artifacts`                 | `shift artifact list`       | A run's reports, oldest first                     |
 | `GET /api/v0/admin/artifacts/{id}`                      | `shift artifact show`       | One artifact's metadata                           |
 | `GET /api/v0/admin/artifacts/{id}/content`              | `shift artifact get`        | An artifact's bytes                               |
@@ -299,6 +301,10 @@ A `Run`, abridged from a completed run:
 `GET /api/v0/admin/runs/{id}/executions[?after=SEQ&limit=N]` pages through a run's executions in sequence order, in the same form as the run view: `{"executions": […], "next": SEQ | null}`. `after` is a sequence number (default 0) and `limit` is 1 to 500 (default 100). Pass `next` as `after` to read the following page; `null` means there is none. The CLI form is `shift run executions <run-id> [--after SEQ] [--limit N]`.
 
 `GET /api/v0/admin/runs/{id}/variables` returns a run's [variables](workflows.md#run-variables): `{"variables": [{"key", "value", "revision", "executionId", "updatedAt"}], "revisions": [{"key", "revision", "value", "executionId", "createdAt"}]}`, ordered by key and revision. `executionId` is the execution whose completion wrote that revision. An unknown run is `404 RUN_NOT_FOUND`. The CLI form is `shift run variables <run-id>`.
+
+### Sessions
+
+`GET /api/v0/admin/sessions[?projectId=]` returns `{"sessions": [Session]}`, at most 500, newest first. A Session is `{"id", "projectId", "workspaceId", "nodeId", "createdByRunId", "harness", "harnessSessionId", "mapping", "cwd", "lifetime", "state", "heldBy", "createdAt", "archivedAt"}`. `mapping` is the OpenCode conversation's state: `CREATING` until OpenCode confirmed it, then `READY`. `state` is `CREATING`, `BUSY`, `IDLE` or `ARCHIVED`. `heldBy` is the execution that owns the session now, if any. `GET /api/v0/admin/sessions/{id}` adds `executions` (`{"id", "runId", "nodeId", "sequence", "state"}`) and `invocations` (`{"id", "executionId", "kind", "state", "createdAt", "finishedAt"}`), oldest first, or answers `404 SESSION_NOT_FOUND`. Use a session's `id` as an agent's `session.reference` ([sessions](workflows.md#sessions)). The CLI forms are `shift session list [--project <id>]` and `shift session show <id>`.
 
 ### Artifacts
 

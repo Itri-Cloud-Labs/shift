@@ -8,6 +8,7 @@ import {
   validateCommandReceiptResponse,
   validateInteractionList,
   validateProtocolError,
+  validateSessionList,
   validateRunResponse,
   validateWorkflowVersionResponse,
 } from '../src/protocol/index.js';
@@ -133,6 +134,14 @@ test('a paired device drives runs and answers approvals with its own command rec
     `${server.url}/api/v0/artifacts/00000000-0000-4000-8000-000000000000/content`,
   );
   assert.equal(unauthenticated.status, 401);
+  // An approval workflow has no agent sessions yet.
+  const sessions = await call(desktop, 'GET', `/sessions?projectId=${project.body['project'].id}`);
+  assert.equal(sessions.status, 200);
+  assert(validateSessionList(sessions.body));
+  assert.deepEqual(sessions.body.sessions, []);
+  const noSession = await call(desktop, 'GET', '/sessions/00000000-0000-4000-8000-000000000000');
+  assert.equal(noSession.status, 404);
+  assert.equal(noSession.body['code'], 'SESSION_NOT_FOUND');
 
   // A stream opened and dropped by the client leaves the waiting run as it was.
   const snapshot = await call(desktop, 'GET', '/snapshot');

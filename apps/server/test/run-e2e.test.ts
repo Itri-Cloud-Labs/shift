@@ -183,6 +183,18 @@ test('reports are listed and downloaded from the CLI', { skip, timeout: 120_000 
         ['human_report', 'toahumanreader.md', 20],
       ],
     );
+    // The run's session, listed and shown with the invocation that produced the reports.
+    const sessions = (await env.shift('session', 'list')) as Array<{ id: string; state: string }>;
+    assert.equal(sessions.length, 1);
+    const session = (await env.shift('session', 'show', sessions[0]!.id)) as {
+      lifetime: string;
+      invocations: Array<{ kind: string; state: string }>;
+    };
+    assert.equal(session.lifetime, 'persistent');
+    assert.deepEqual(
+      session.invocations.map((invocation) => [invocation.kind, invocation.state]),
+      [['goal', 'COMPLETED']],
+    );
     const report = listed[1]!;
     const shown = (await env.shift('artifact', 'show', report.id)) as { id: string };
     assert.equal(shown.id, report.id);
