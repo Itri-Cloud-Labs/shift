@@ -7,6 +7,7 @@ import {
   emptyToUndefined,
   formDepth,
   formFormats,
+  operations,
   freeName,
   kindOf,
   operators,
@@ -26,8 +27,11 @@ import {
   validName,
   valueKind,
   valueText,
+  variableKey,
   withKind,
+  withOperation,
   withOperator,
+  writtenKeys,
   type Comparison,
   type FieldKind,
   type Operand,
@@ -172,15 +176,15 @@ function ValueField({
 
 // ---------- Values a node reads ----------
 
-// Run variables, session and artifact metadata are not on the server yet: offered, never
-// selectable, so nothing claims they run.
+// Session and artifact metadata are not on the server yet: offered, never selectable, so nothing
+// claims they run.
 const sourceKinds: Option[] = [
   ['input', 'What came in'],
   ['trigger', 'The run’s input'],
   ['node', 'An earlier node'],
+  ['variable', 'A run variable'],
   ['project', 'Project settings'],
   ['literal', 'A fixed value'],
-  ['variable', 'A run variable (not on this server yet)', true],
   ['session', 'Agent session details (not on this server yet)', true],
   ['artifact', 'An artifact (not on this server yet)', true],
 ];
@@ -194,6 +198,7 @@ const startingSource = (kind: string, document: GraphDocument, nodeId: string): 
       execution: 'latest',
       path: [],
     };
+  if (kind === 'variable') return { kind, key: writtenKeys(document.nodes)[0] ?? '', path: [] };
   return { kind, path: [] };
 };
 
@@ -240,7 +245,6 @@ function NodeSource({
       : typeof (execution as Raw | null)?.['sequence'] === 'number'
         ? 'sequence'
         : 'kept';
-  const optional = source['optional'] === true;
   return (
     <>
       <Choice
@@ -289,6 +293,24 @@ function NodeSource({
           )}
         </div>
       )}
+      <Fallback id={id} source={source} set={set} />
+    </>
+  );
+}
+
+// An optional read uses its fallback only when there is no value; the server needs one stated.
+export function Fallback({
+  id,
+  source,
+  set,
+}: {
+  id: string;
+  source: Raw;
+  set: (source: Raw) => void;
+}) {
+  const optional = source['optional'] === true;
+  return (
+    <>
       <Check
         label="Optional: use a fallback when it has no value"
         checked={optional}
@@ -297,14 +319,97 @@ function NodeSource({
           set(checked ? { ...rest, optional: true, fallback: source['fallback'] ?? null } : rest);
         }}
       />
-      {optional && (
-        <ValueField
-          id={`${id}-fallback`}
-          label="Fallback"
-          value={source['fallback']}
-          change={(fallback) => set({ ...source, fallback })}
+      {optional &&
+        (valueKind(source['fallback']) === 'kept' ? (
+          <p className="note">Its fallback is kept as it is.</p>
+        ) : (
+          <ValueField
+            id={`${id}-fallback`}
+            label="Fallback"
+            value={source['fallback']}
+            change={(fallback) => set({ ...source, fallback })}
+          />
+        ))}
+    </>
+  );
+}
+
+// A run variable by name. Names Set variable nodes write are offered; another can be typed.
+export function VariableKey({
+  id,
+  value,
+  document,
+  problem,
+  set,
+}: {
+  id: string;
+  value: string;
+  document: GraphDocument;
+  problem?: string | undefined;
+  set: (key: string) => void;
+}) {
+  const keys = writtenKeys(document.nodes);
+  const [typing, setTyping] = useState(false);
+  if (!typing && keys.length > 0 && (value === '' || keys.includes(value)))
+    return (
+      <>
+        <Choice
+          id={id}
+          label="Variable"
+          value={value}
+          options={[
+            ...(value === '' ? ([['', 'Choose a variable', true]] as Option[]) : []),
+            ...keys.map((key): Option => [key, key]),
+            [' another', 'Another name…'],
+          ]}
+          change={(next) => (next === ' another' ? setTyping(true) : set(next))}
         />
-      )}
+        {problem && <p className="field-error">{problem}</p>}
+      </>
+    );
+  return (
+    <TextField
+      id={id}
+      label="Variable"
+      value={value}
+      placeholder="index"
+      problem={
+        problem ??
+        (value !== '' && !variableKey(value)
+          ? 'Start with a letter; then letters, digits, _ or -, at most 64.'
+          : undefined)
+      }
+      note={
+        keys.length && !keys.includes(value)
+          ? `Set variable nodes write ${keys.join(', ')}.`
+          : 'Set variable nodes write it during the run.'
+      }
+      commit={(next) => set(next.trim())}
+    />
+  );
+}
+
+function VariableSource({
+  id,
+  source,
+  document,
+  set,
+}: {
+  id: string;
+  source: Raw;
+  document: GraphDocument;
+  set: (source: Raw) => void;
+}) {
+  return (
+    <>
+      <VariableKey
+        id={`${id}-variable`}
+        value={typeof source['key'] === 'string' ? source['key'] : ''}
+        document={document}
+        set={(key) => set({ ...source, key })}
+      />
+      <p className="note">Read when this node starts, as the run last wrote it.</p>
+      <Fallback id={id} source={source} set={set} />
     </>
   );
 }
@@ -370,6 +475,14 @@ export function BindingsBuilder({
                 source={source}
                 document={document}
                 nodeId={node.id}
+                set={(next) => editing.set(name, next)}
+              />
+            )}
+            {source['kind'] === 'variable' && (
+              <VariableSource
+                id={id}
+                source={source}
+                document={document}
                 set={(next) => editing.set(name, next)}
               />
             )}
@@ -703,7 +816,6 @@ function DataFields({
       {Object.keys(data).length === 0 && <p className="note">No fields yet.</p>}
       {Object.entries(data).map(([key, value], index) => {
         const at = `${id}-${index}`;
-        const read = readDataValue(value);
         const put = (next: unknown) => set({ ...data, [key]: next });
         return (
           <div className="builder-row" key={index}>
@@ -730,43 +842,140 @@ function DataFields({
                 }}
               />
             </div>
-            {read.kind === 'kept' ? (
-              <p className="note">This field has no form here. It is kept as it is.</p>
-            ) : read.kind === 'object' ? (
-              <div className="builder-group">
-                <DataFields id={at} data={value as Raw} bindings={bindings} set={put} />
-                <div className="actions builder-actions">
-                  <Add
-                    label="Add a field inside"
-                    add={() =>
-                      put({ ...(value as Raw), [freeName('field', Object.keys(value as Raw))]: '' })
-                    }
-                  />
-                  <button type="button" className="button quiet" onClick={() => put('')}>
-                    Make it a single value
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <OperandField
-                  id={`${at}-value`}
-                  label="Value"
-                  operand={read.kind === 'binding' ? { binding: read.name } : { value: read.value }}
-                  bindings={bindings}
-                  list={false}
-                  change={(operand) =>
-                    put('binding' in operand ? { $binding: operand.binding } : operand.value)
-                  }
-                />
-                <button type="button" className="button quiet" onClick={() => put({ field: '' })}>
-                  Make it a group of fields
-                </button>
-              </>
-            )}
+            <TemplateValue id={at} value={value} bindings={bindings} set={put} />
           </div>
         );
       })}
+    </>
+  );
+}
+
+// What a calculation's operands are called, in order.
+const operandLabels: Record<string, string[]> = {
+  $add: ['Add', 'And'],
+  $subtract: ['From', 'Subtract'],
+  $multiply: ['Multiply', 'By'],
+  $length: ['List or text'],
+  $at: ['List', 'Position, from 0'],
+};
+
+// One value of a template: fixed, a binding, a calculation or, where `group` allows, a group of
+// fields. A calculation's operands are templates again.
+export function TemplateValue({
+  id,
+  value,
+  bindings,
+  label = 'Value',
+  group = true,
+  set,
+}: {
+  id: string;
+  value: unknown;
+  bindings: string[];
+  label?: string;
+  group?: boolean;
+  set: (value: unknown) => void;
+}) {
+  const read = readDataValue(value);
+  const calculate = (
+    <button
+      type="button"
+      className="button quiet"
+      onClick={() =>
+        set(
+          withOperation('$add', [
+            read.kind === 'binding' ? value : bindings[0] ? { $binding: bindings[0] } : 0,
+          ]),
+        )
+      }
+    >
+      Calculate it
+    </button>
+  );
+  if (read.kind === 'kept')
+    return <p className="note">This value has no form here. It is kept as it is.</p>;
+  if (read.kind === 'object')
+    return group ? (
+      <div className="builder-group">
+        <DataFields id={id} data={value as Raw} bindings={bindings} set={set} />
+        <div className="actions builder-actions">
+          <Add
+            label="Add a field inside"
+            add={() =>
+              set({ ...(value as Raw), [freeName('field', Object.keys(value as Raw))]: '' })
+            }
+          />
+          <button type="button" className="button quiet" onClick={() => set('')}>
+            Make it a single value
+          </button>
+        </div>
+      </div>
+    ) : (
+      <p className="note">This value has no form here. It is kept as it is.</p>
+    );
+  if (read.kind === 'operation') {
+    const labels = operandLabels[read.operation]!;
+    return (
+      <div className="builder-group">
+        <Choice
+          id={`${id}-operation`}
+          label="Calculation"
+          value={read.operation}
+          options={Object.entries(operations).map(([key, { label }]): Option => [key, label])}
+          change={(next) => set(withOperation(next, read.operands))}
+        />
+        {read.operands.map((operand, index) => (
+          <div className="builder-operand" key={index}>
+            {readDataValue(operand).kind === 'operation' && (
+              <span className="builder-operand-label">{labels[index]}</span>
+            )}
+            <TemplateValue
+              id={`${id}-${index}`}
+              value={operand}
+              bindings={bindings}
+              label={labels[index]!}
+              group={false}
+              set={(next) => {
+                const operands = read.operands.map((item, at) => (at === index ? next : item));
+                set({ [read.operation]: labels.length === 1 ? operands[0] : operands });
+              }}
+            />
+          </div>
+        ))}
+        <div className="actions builder-actions">
+          <button
+            type="button"
+            className="button quiet"
+            onClick={() =>
+              set(readDataValue(read.operands[0]).kind === 'binding' ? read.operands[0] : '')
+            }
+          >
+            Make it a single value
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      <OperandField
+        id={`${id}-value`}
+        label={label}
+        operand={read.kind === 'binding' ? { binding: read.name } : { value: read.value }}
+        bindings={bindings}
+        list={false}
+        change={(operand) =>
+          set('binding' in operand ? { $binding: operand.binding } : operand.value)
+        }
+      />
+      <div className="actions builder-actions">
+        {calculate}
+        {group && (
+          <button type="button" className="button quiet" onClick={() => set({ field: '' })}>
+            Make it a group of fields
+          </button>
+        )}
+      </div>
     </>
   );
 }

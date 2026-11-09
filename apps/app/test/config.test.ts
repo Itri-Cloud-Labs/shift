@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -14,13 +15,16 @@ import {
   formProblem,
   unknownConfig,
   kindOf,
+  operationProblems,
   removeField,
   renameField,
   ruleBindings,
   setRequired,
   valueKind,
   withKind,
+  withOperation,
   withOperator,
+  writtenKeys,
 } from '../src/client-ui/config.js';
 import {
   addNode,
@@ -181,6 +185,45 @@ test('a transform field reads as a binding, a value or nested', () => {
   assert.deepEqual(readDataValue({ a: 1 }), { kind: 'object' });
   assert.deepEqual(readDataValue({ $binding: 1 }), { kind: 'kept' });
   assert.deepEqual(readDataValue([{ a: 1 }]), { kind: 'kept' });
+});
+
+test('a calculation reads with its operands, and a malformed one is kept', () => {
+  const index = { $binding: 'index' };
+  assert.deepEqual(readDataValue({ $add: [index, 1] }), {
+    kind: 'operation',
+    operation: '$add',
+    operands: [index, 1],
+  });
+  assert.deepEqual(readDataValue({ $length: index }), {
+    kind: 'operation',
+    operation: '$length',
+    operands: [index],
+  });
+  assert.deepEqual(readDataValue({ $add: [1] }), { kind: 'kept' });
+  assert.deepEqual(readDataValue({ $power: [1, 2] }), { kind: 'kept' });
+  // Inherited names are not calculations.
+  assert.deepEqual(readDataValue({ toString: 1 }), { kind: 'object' });
+  assert.deepEqual(withOperation('$at', [{ $binding: 'items' }]), {
+    $at: [{ $binding: 'items' }, 0],
+  });
+  assert.deepEqual(withOperation('$length', [index, 1]), { $length: index });
+  assert.deepEqual(withOperation('$multiply', [index]), { $multiply: [index, 1] });
+});
+
+test('calculation problems match the server, pointer and message', () => {
+  assert.deepEqual(operationProblems({ a: { $add: [1, { $length: [1, 2] }] } }), []);
+  assert.deepEqual(operationProblems({ a: [{ $pow: [1, 2] }] }), [
+    {
+      at: '/a/0',
+      message: 'Unknown operation $pow. Use $add, $subtract, $multiply, $length, $at.',
+    },
+  ]);
+  assert.deepEqual(operationProblems({ $at: [[], 1, 2] }), [
+    { at: '/$at', message: '$at takes a list of 2 operands.' },
+  ]);
+  assert.deepEqual(operationProblems({ $add: [1, { $subtract: 3 }] }), [
+    { at: '/$add/1/$subtract', message: '$subtract takes a list of 2 operands.' },
+  ]);
 });
 
 const draft: Draft = {
@@ -377,6 +420,83 @@ test('diagnostics follow the server on forms, retries, unknown settings and size
   let deep: unknown = comparison;
   for (let level = 0; level < 5; level++) deep = { all: [deep] };
   assert.match(messages(one({ type: 'condition', config: { when: deep } })), /4 groups deep/);
+});
+
+test('variables are diagnosed as the server does, and a read nobody writes is a warning', () => {
+  const problems = (nodes: Record<string, unknown>[]) =>
+    diagnose({
+      nodes: [{ id: 'start', type: 'manual_trigger' }, ...nodes],
+      connections: nodes.map((item, index) => ({
+        id: `c${index}`,
+        fromNodeId: index === 0 ? 'start' : (nodes[index - 1]!['id'] as string),
+        fromPort: 'success',
+        toNodeId: item['id'],
+        toPort: 'input',
+      })),
+    }).map(({ severity, field, message }) => `${severity} ${field}: ${message}`);
+  assert.deepEqual(problems([{ id: 'set', type: 'set_variable', config: { key: '', value: 1 } }]), [
+    'error key: set needs a variable name.',
+  ]);
+  assert.deepEqual(problems([{ id: 'set', type: 'set_variable', config: { key: '9' } }]), [
+    'error key: set: a variable name starts with a letter and has at most 64 letters, digits, _ or -.',
+    'error value: set needs a value to write.',
+  ]);
+  assert.deepEqual(
+    problems([{ id: 'set', type: 'set_variable', config: { key: 'n', value: { $add: [1] } } }]),
+    ['error value: set, value/$add: $add takes a list of 2 operands.'],
+  );
+  assert.deepEqual(
+    problems([{ id: 'get', type: 'get_variable', config: { key: 'n', optional: true } }]),
+    ['error fallback: get: an optional variable needs a fallback.'],
+  );
+  assert.deepEqual(problems([{ id: 'get', type: 'get_variable', config: { key: 'n' } }]), [
+    'warning null: get reads the variable n, which no Set variable node writes.',
+  ]);
+  assert.deepEqual(
+    problems([
+      { id: 'get', type: 'get_variable', config: { key: 'n', optional: true, fallback: 0 } },
+    ]),
+    [],
+  );
+  const reads = (source: Record<string, unknown>) =>
+    problems([{ id: 'look', type: 'transform', config: { data: {} }, bindings: { n: source } }]);
+  assert.deepEqual(reads({ kind: 'variable', key: 'n', path: [] }), [
+    'warning null: Binding n of look reads the variable n, which no Set variable node writes.',
+  ]);
+  assert.deepEqual(reads({ kind: 'variable', key: 'n', path: [], optional: true }), [
+    'error null: Binding n of look is optional and needs a fallback.',
+  ]);
+  assert.deepEqual(reads({ kind: 'variable', key: '', path: [] }), [
+    'error null: Binding n of look needs the name of a run variable.',
+  ]);
+  assert.deepEqual(writtenKeys([{ type: 'set_variable', config: { key: 'n' } }]), ['n']);
+  // A Set variable that came without a value gets one from the form's Add a value.
+  const valueless: Draft = {
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'set', type: 'set_variable', config: { key: 'count' } },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'set', toPort: 'input' },
+    ],
+  };
+  assert.match(diagnose(valueless)[0]!.message, /needs a value to write/);
+  assert.deepEqual(diagnose(setConfig(valueless, 'set', 'value', 0)), []);
+});
+
+test('the collection loop example has no problems and keeps every field', () => {
+  const example = JSON.parse(
+    readFileSync(new URL('../../../docs/examples/collection-loop.json', import.meta.url), 'utf8'),
+  ) as Draft;
+  assert.deepEqual(diagnose(example), []);
+  const document = readDocument(example);
+  for (const item of document.nodes) {
+    assert.deepEqual(unknownConfig(item.type, item.config), {}, item.id);
+    assert.equal(item.extra, undefined, item.id);
+  }
+  // Renaming a value follows it into calculations.
+  const renamed = must(renameBinding(example, 'next', 'index', 'at'));
+  assert.deepEqual(node(renamed, 'next').config['value'], { $add: [{ $binding: 'at' }, 1] });
 });
 
 test('a node field is set without touching the rest', () => {

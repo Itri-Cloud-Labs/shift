@@ -129,6 +129,8 @@ export const typeLabels: Record<string, string> = {
   wait: 'Wait',
   human_input: 'Human input',
   approval: 'Approval',
+  set_variable: 'Set variable',
+  get_variable: 'Get variable',
   end: 'End',
 };
 
@@ -150,6 +152,10 @@ export function summary(node: DocumentNode): string {
       const cases = Array.isArray(node.config['cases']) ? node.config['cases'].length : 0;
       return `${cases} ${cases === 1 ? 'case' : 'cases'}`;
     }
+    case 'set_variable':
+      return text(node.config['key']) ? `Writes ${text(node.config['key'])}` : '';
+    case 'get_variable':
+      return text(node.config['key']) ? `Reads ${text(node.config['key'])}` : '';
     case 'end':
       return node.config['outcome'] === 'FAILED' ? 'Ends as failed' : 'Ends as completed';
     case 'manual_trigger':

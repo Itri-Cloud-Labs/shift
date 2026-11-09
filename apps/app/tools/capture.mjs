@@ -657,6 +657,80 @@ try {
       wait: 3000,
       expect: "document.querySelector('.run-status')?.textContent.includes('Completed')",
     },
+    // Prompt 14b: a loop that counts to three, authored through the forms and run.
+    {
+      name: 'v1-new-workflow',
+      script: `J.click('.location .crumb'); setTimeout(() => J.click('.switcher-create', 'New workflow'), 300);
+        setTimeout(() => { J.set('#create-value', 'Count to three'); J.click('.create-dialog button[type=submit]'); }, 700);`,
+      wait: 2000,
+      expect:
+        "document.querySelector('.location').textContent.includes('Count to three') && document.querySelector('.react-flow__node[data-id=start]')",
+    },
+    {
+      name: 'v2-set-variable',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'Set variable'), 200);
+        setTimeout(() => J.set('#set_variable-key', 'count'), 700);`,
+      wait: 1100,
+      expect:
+        "document.querySelector('#set_variable-key').value === 'count' && document.querySelector('#set_variable-value-value-value').value === '0'",
+    },
+    {
+      name: 'v3-condition-reads-variable',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'Condition'), 200);
+        setTimeout(() => J.click('.node-editor button', 'Add a value'), 600);
+        setTimeout(() => J.set('#condition-binding-0-name', 'count'), 900);
+        setTimeout(() => J.set('#condition-binding-0-kind', 'variable'), 1100);
+        setTimeout(() => J.click('.node-editor button', 'Add a test'), 1300);
+        setTimeout(() => J.set('#condition-when-op', 'lt'), 1500);
+        setTimeout(() => J.set('#condition-when-right-value-kind', 'number'), 1700);
+        setTimeout(() => J.set('#condition-when-right-value', '3'), 1900);`,
+      wait: 2400,
+      expect:
+        "document.querySelector('#condition-binding-0-variable').value === 'count' && document.querySelector('#condition-when-left-source').value === '=count' && document.querySelector('#condition-when-right-value').value === '3'",
+    },
+    {
+      name: 'v4-calculated-write',
+      script: `J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'Set variable'), 200);
+        setTimeout(() => J.set('#set_variable_2-key', 'count'), 600);
+        setTimeout(() => J.click('.node-editor button', 'Add a value'), 800);
+        setTimeout(() => J.set('#set_variable_2-binding-0-name', 'count'), 1000);
+        setTimeout(() => J.set('#set_variable_2-binding-0-kind', 'variable'), 1200);
+        setTimeout(() => J.click('.node-editor button', 'Calculate it'), 1400);`,
+      wait: 1900,
+      expect:
+        "document.querySelector('#set_variable_2-value-operation').value === '$add' && document.querySelector('#set_variable_2-value-0-value-source').value === '=count' && document.querySelector('#set_variable_2-value-1-value-value').value === '1'",
+    },
+    {
+      name: 'v4b-calculation',
+      script: `document.querySelector('#set_variable_2-value-operation').scrollIntoView({ block: 'center' });`,
+      wait: 500,
+    },
+    {
+      name: 'v5-connected',
+      script: `const at = (node) => { location.hash = location.hash.split('/n/')[0] + '/n/' + node; };
+        J.click('[aria-label="Add a node"]'); setTimeout(() => J.click('.node-picker button', 'End'), 200);
+        setTimeout(() => at('start'), 500); setTimeout(() => J.set('#start-port-success', 'set_variable'), 800);
+        setTimeout(() => at('set_variable'), 1000); setTimeout(() => J.set('#set_variable-port-success', 'condition'), 1300);
+        setTimeout(() => at('condition'), 1500); setTimeout(() => { J.set('#condition-port-true', 'set_variable_2'); J.set('#condition-port-false', 'end'); }, 1800);
+        setTimeout(() => at('set_variable_2'), 2000); setTimeout(() => J.set('#set_variable_2-port-success', 'condition'), 2300);
+        setTimeout(() => J.click('[aria-label="Fit the graph"], [aria-label="Fit"]'), 2500);`,
+      wait: 3000,
+      expect: "document.querySelectorAll('.react-flow__edge').length === 5",
+    },
+    {
+      name: 'v6-published',
+      script: `J.click('.toolbar button', 'Save'); setTimeout(() => J.click('.toolbar button', 'Publish'), 1300);`,
+      wait: 2800,
+      expect: "document.querySelector('.toolbar').textContent.includes('v1 published')",
+    },
+    {
+      name: 'v7-loop-ran',
+      script: `J.click('.toolbar button', 'Run');`,
+      wait: 4000,
+      expect:
+        "document.querySelector('.run-status')?.textContent.includes('Completed') && document.querySelector('.react-flow__node[data-id=condition] .node-loop')?.textContent === '×4' && document.querySelector('.react-flow__node[data-id=set_variable_2] .node-loop')?.textContent === '×3'",
+      report: 'location.hash',
+    },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },
     { name: '17-inbox', script: "document.querySelector('.attention-count').click()", wait: 800 },
@@ -773,6 +847,7 @@ try {
   let started = false;
   let held = false;
   let journeyWorkflow;
+  let loopVariables;
   app.stdout.on('data', (chunk) => {
     process.stdout.write(chunk);
     const text = String(chunk);
@@ -780,6 +855,8 @@ try {
     const reported = /SHIFT_REPORT j02-new-workflow "[^"]*\/w\/([0-9a-f-]{36})/.exec(text);
     if (reported) journeyWorkflow = reported[1];
     if (text.includes('SHIFT_CAPTURE r2-routed')) void saveElsewhere(journeyWorkflow);
+    const looped = /SHIFT_REPORT v7-loop-ran "[^"]*\/r\/([0-9a-f-]{36})/.exec(text);
+    if (looped) loopVariables = cli(['run', 'variables', looped[1], ...admin]);
     if (text.includes('SHIFT_CAPTURE j14-still-open')) {
       if (!held) throw new Error('Closing with unsaved edits was not held');
       void saveElsewhere(journeyWorkflow);
@@ -797,6 +874,10 @@ try {
   const code = await new Promise((done) => app.on('close', done));
   clearTimeout(timer);
   if (code !== 0) throw new Error(`Capture failed: ${code}`);
+  // The loop's variable, as the server kept it: three writes after the first.
+  const { variables, revisions } = await loopVariables;
+  if (variables[0]?.key !== 'count' || variables[0].value !== 3 || revisions.length !== 4)
+    throw new Error(`The authored loop left ${JSON.stringify(variables)}`);
   console.log(`Screenshots in ${output}`);
 } finally {
   server?.kill('SIGTERM');

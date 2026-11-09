@@ -191,11 +191,23 @@ export function renameTemplateBinding(value: unknown, from: string, to: string):
 
 // ---------- A Transform's data ----------
 
+// The bounded calculations a template may hold (server workflows/document.ts), with how many
+// operands each takes and what the builder calls it.
+export const operations: Record<string, { arity: 1 | 2; label: string }> = {
+  $add: { arity: 2, label: 'Add' },
+  $subtract: { arity: 2, label: 'Subtract' },
+  $multiply: { arity: 2, label: 'Multiply' },
+  $length: { arity: 1, label: 'Count the items of' },
+  $at: { arity: 2, label: 'The item of a list at' },
+};
+
 export type DataValue =
   | { kind: 'binding'; name: string }
   | { kind: 'value'; value: unknown }
   // A group of fields, which may hold bindings again.
   | { kind: 'object' }
+  // A calculation from operands, each of which is a template again.
+  | { kind: 'operation'; operation: string; operands: unknown[] }
   // Such as a list of objects. It stays as it came.
   | { kind: 'kept' };
 
@@ -204,9 +216,66 @@ export function readDataValue(value: unknown): DataValue {
     const keys = Object.keys(value);
     if (keys.length === 1 && typeof value['$binding'] === 'string')
       return { kind: 'binding', name: value['$binding'] };
-    return keys.includes('$binding') ? { kind: 'kept' } : { kind: 'object' };
+    if (keys.length === 1 && Object.hasOwn(operations, keys[0]!)) {
+      const operation = keys[0]!;
+      const argument = value[operation];
+      const operands = operations[operation]!.arity === 1 ? [argument] : argument;
+      if (Array.isArray(operands) && operands.length === operations[operation]!.arity)
+        return { kind: 'operation', operation, operands };
+      return { kind: 'kept' };
+    }
+    return keys.some((key) => key.startsWith('$')) ? { kind: 'kept' } : { kind: 'object' };
   }
   return valueKind(value) === 'kept' ? { kind: 'kept' } : { kind: 'value', value };
+}
+
+// The calculation `operation` with these operands, keeping what still fits of the old ones.
+export function withOperation(operation: string, operands: unknown[]): Raw {
+  const arity = operations[operation]!.arity;
+  const kept = [...operands, operation === '$at' ? 0 : 1].slice(0, arity);
+  return { [operation]: arity === 1 ? kept[0] : kept };
+}
+
+// Where a template's calculations are malformed, as the server reports it at publish.
+export function operationProblems(template: unknown, at = ''): { at: string; message: string }[] {
+  if (Array.isArray(template))
+    return template.flatMap((item, index) => operationProblems(item, `${at}/${index}`));
+  if (!isRecord(template)) return [];
+  const entries = Object.entries(template);
+  const [key, argument] = entries[0] ?? [];
+  if (entries.length === 1 && key!.startsWith('$') && key !== '$binding') {
+    const known = Object.hasOwn(operations, key!) ? operations[key!]! : undefined;
+    if (!known)
+      return [
+        { at, message: `Unknown operation ${key}. Use ${Object.keys(operations).join(', ')}.` },
+      ];
+    const operands = known.arity === 1 ? [argument] : argument;
+    if (!Array.isArray(operands) || operands.length !== known.arity)
+      return [
+        {
+          at: `${at}/${key}`,
+          message: `${key} takes ${known.arity === 1 ? 'one operand' : `a list of ${known.arity} operands`}.`,
+        },
+      ];
+    return operands.flatMap((item, index) =>
+      operationProblems(item, known.arity === 1 ? `${at}/${key}` : `${at}/${key}/${index}`),
+    );
+  }
+  return entries.flatMap(([name, child]) => operationProblems(child, `${at}/${name}`));
+}
+
+// ---------- Run variables ----------
+
+// A variable's key, as the server accepts it.
+export const variableKey = (key: string) => /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key);
+
+// The keys Set variable nodes write, in the order they appear.
+export function writtenKeys(nodes: { type: string; config: Raw }[]): string[] {
+  const keys = nodes
+    .filter((node) => node.type === 'set_variable' && typeof node.config['key'] === 'string')
+    .map((node) => node.config['key'] as string)
+    .filter(Boolean);
+  return [...new Set(keys)];
 }
 
 // Rewrites one key where it stands, so the fields keep their order.
@@ -417,6 +486,8 @@ export const configKeys: Record<string, readonly string[]> = {
   switch: ['cases'],
   human_input: ['title', 'instructions', 'timeoutMs', 'form'],
   approval: ['title', 'instructions', 'timeoutMs', 'form', 'outcomes'],
+  set_variable: ['key', 'value'],
+  get_variable: ['key', 'optional', 'fallback'],
   end: ['outcome', 'reason'],
 };
 

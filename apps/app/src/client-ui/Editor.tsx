@@ -1,4 +1,4 @@
-import { CircleAlert, Copy, GitCompareArrows, Trash2, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Copy, GitCompareArrows, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useEscape } from './Attention.js';
 import {
@@ -7,6 +7,9 @@ import {
   DataBuilder,
   RuleBuilder,
   SchemaBuilder,
+  Fallback,
+  TemplateValue,
+  VariableKey,
   type BindingEditing,
 } from './Builders.js';
 import { unknownConfig } from './config.js';
@@ -27,6 +30,8 @@ const typeHints: Record<string, string> = {
   wait: 'Pauses for a while',
   human_input: 'Asks you to fill in a form',
   approval: 'Asks you to decide',
+  set_variable: 'Remembers a value for this run',
+  get_variable: 'Reads a value this run remembered',
   end: 'Finishes the run',
 };
 
@@ -288,13 +293,18 @@ const seconds = (value: unknown) => (typeof value === 'number' ? String(value / 
 // The form for each node type. Whatever a form does not show is kept as it came.
 function ConfigFields({
   node,
+  document,
   problems,
   set,
+  replace,
   renameCase,
 }: {
   node: DocumentNode;
+  document: GraphDocument;
   problems: DraftProblem[];
   set: (key: string, value: unknown) => void;
+  // Replaces the whole config in one edit, for settings that change together.
+  replace: (config: Record<string, unknown>) => void;
   renameCase: (index: number, next: string) => string | null;
 }) {
   const { config, id } = node;
@@ -504,6 +514,52 @@ function ConfigFields({
           />
         </>
       );
+    case 'set_variable':
+      return (
+        <>
+          <VariableKey
+            id={`${id}-key`}
+            value={text(config['key'])}
+            document={document}
+            problem={problem('key')}
+            set={(key) => set('key', key)}
+          />
+          <fieldset className="field-group">
+            <legend>Value it writes</legend>
+            {config['value'] !== undefined ? (
+              <TemplateValue
+                id={`${id}-value`}
+                value={config['value']}
+                bindings={bindings}
+                set={(value) => set('value', value)}
+              />
+            ) : (
+              <button type="button" className="button quiet" onClick={() => set('value', 0)}>
+                <Plus aria-hidden="true" />
+                Add a value
+              </button>
+            )}
+            {problem('value') && <p className="field-error">{problem('value')}</p>}
+            <p className="note">
+              Nodes that run after it read the new value. It passes on what came in unchanged.
+            </p>
+          </fieldset>
+        </>
+      );
+    case 'get_variable':
+      return (
+        <>
+          <VariableKey
+            id={`${id}-key`}
+            value={text(config['key'])}
+            document={document}
+            problem={problem('key')}
+            set={(key) => set('key', key)}
+          />
+          <Fallback id={id} source={config} set={replace} />
+          <p className="note">Its result is the variable’s value when it starts.</p>
+        </>
+      );
     case 'end':
       return (
         <>
@@ -544,12 +600,14 @@ const shownOnField = new Set([
   'data',
   'form',
   'retry',
+  'key',
+  'value',
 ]);
 
 export interface NodeEditing {
   rename: (next: string) => string | null;
   set: (key: string, value: unknown) => void;
-  setNode: (key: 'retry' | 'limits', value: unknown) => void;
+  setNode: (key: 'retry' | 'limits' | 'config', value: unknown) => void;
   bindings: BindingEditing;
   renameCase: (index: number, next: string) => string | null;
   connectPort: (port: string, target: string | null) => void;
@@ -594,9 +652,11 @@ export function NodeEditor({
           <BindingsBuilder document={document} node={node} editing={editing.bindings} />
         )}
         <ConfigFields
+          document={document}
           node={node}
           problems={own}
           set={editing.set}
+          replace={(config) => editing.setNode('config', config)}
           renameCase={editing.renameCase}
         />
         {node.type !== 'end' && node.type !== 'manual_trigger' && (

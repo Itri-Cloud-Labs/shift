@@ -1,5 +1,6 @@
 import {
   formProblem,
+  operationProblems,
   readRule,
   renameRuleBinding,
   ruleDepth,
@@ -8,6 +9,8 @@ import {
   renameKey,
   ruleBindings,
   validName,
+  variableKey,
+  writtenKeys,
 } from './config.js';
 import {
   hasInput,
@@ -72,6 +75,8 @@ export const addableTypes = [
   'wait',
   'human_input',
   'approval',
+  'set_variable',
+  'get_variable',
   'end',
   'manual_trigger',
 ] as const;
@@ -80,6 +85,8 @@ const startingConfig: Record<string, Raw> = {
   transform: { data: {} },
   wait: { durationMs: 60_000 },
   human_input: { form: { type: 'object', properties: {} } },
+  set_variable: { key: '', value: 0 },
+  get_variable: { key: '' },
 };
 
 function freeId(base: string, used: Set<string>): string {
@@ -293,7 +300,7 @@ export function renameBinding(draft: Draft, nodeId: string, from: string, to: st
         const config = ruleFields((item['config'] ?? {}) as Raw, (rule) =>
           renameRuleBinding(rule, from, to),
         );
-        for (const field of ['goal', 'data', 'until', 'title', 'instructions'])
+        for (const field of templatedFields)
           if (field in config) config[field] = renameTemplateBinding(config[field], from, to);
         return { ...item, config, bindings: renameKey(bindings, from, to) };
       }),
@@ -515,7 +522,12 @@ const required: Record<string, { key: string; label: string }[]> = {
   switch: [{ key: 'cases', label: 'at least one case' }],
   human_input: [{ key: 'title', label: 'a title' }],
   approval: [{ key: 'title', label: 'a title' }],
+  set_variable: [{ key: 'key', label: 'a variable name' }],
+  get_variable: [{ key: 'key', label: 'a variable name' }],
 };
+
+// Config fields that may name bindings (server workflows/document.ts).
+const templatedFields = ['goal', 'data', 'value', 'until', 'title', 'instructions'];
 
 const blank = (value: unknown) =>
   value === undefined || value === '' || (Array.isArray(value) && value.length === 0);
@@ -544,6 +556,25 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
     (node.config['durationMs'] === undefined) === (node.config['until'] === undefined)
   )
     add('durationMs', `${node.id} needs either a duration or a time to wait until.`);
+  if (node.type === 'set_variable' || node.type === 'get_variable') {
+    const key = node.config['key'];
+    if (typeof key === 'string' && key !== '' && !variableKey(key))
+      add(
+        'key',
+        `${node.id}: a variable name starts with a letter and has at most 64 letters, digits, _ or -.`,
+      );
+  }
+  if (node.type === 'set_variable' && node.config['value'] === undefined)
+    add('value', `${node.id} needs a value to write.`);
+  if (
+    node.type === 'get_variable' &&
+    node.config['optional'] === true &&
+    !('fallback' in node.config)
+  )
+    add('fallback', `${node.id}: an optional variable needs a fallback.`);
+  for (const field of ['data', 'value'])
+    for (const found of operationProblems(node.config[field]))
+      add(field, `${node.id}, ${field}${found.at}: ${found.message}`);
   if (node.type === 'switch' && Array.isArray(node.config['cases'])) {
     const ports = (node.config['cases'] as Raw[]).map((item) => String(item['port']));
     ports.forEach((port, index) => {
@@ -586,9 +617,7 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
   };
   if (rules.some((rule) => deep(rule, 0)))
     add(null, `${node.id}: rules nest at most ${ruleDepth} groups deep.`);
-  const templated = ['goal', 'data', 'until', 'title', 'instructions'].map(
-    (field) => node.config[field],
-  );
+  const templated = templatedFields.map((field) => node.config[field]);
   for (const name of new Set(templateNames(templated)))
     if (!(name in bindings)) add(null, `${node.id} uses ${name}, which it does not declare.`);
   return problems;
@@ -632,6 +661,17 @@ export function diagnose(draft: Draft): DraftProblem[] {
           : 'A workflow has exactly one manual trigger for now. Remove the others.',
     });
   const raw = new Map(nodesOf(draft).map((node) => [node['id'], node]));
+  // A variable nothing writes can only be read with a fallback.
+  const written = new Set(writtenKeys(document.nodes));
+  const unwritten = (nodeId: string, key: unknown, what: string) => {
+    if (typeof key === 'string' && variableKey(key) && !written.has(key))
+      problems.push({
+        severity: 'warning',
+        nodeId,
+        field: null,
+        message: `${what} reads the variable ${key}, which no Set variable node writes.`,
+      });
+  };
   for (const node of document.nodes) {
     if (!(node.type in typeLabels))
       problems.push({
@@ -642,7 +682,30 @@ export function diagnose(draft: Draft): DraftProblem[] {
       });
     const bindings = (raw.get(node.id)?.['bindings'] ?? {}) as Raw;
     problems.push(...nodeProblems(node, bindings));
+    if (node.type === 'get_variable' && node.config['optional'] !== true)
+      unwritten(node.id, node.config['key'], node.id);
     for (const [name, source] of Object.entries(bindings)) {
+      const read = source as Raw | null;
+      if (
+        (read?.['kind'] === 'node' || read?.['kind'] === 'variable') &&
+        read['optional'] === true &&
+        read['fallback'] === undefined
+      )
+        problems.push({
+          severity: 'error',
+          nodeId: node.id,
+          field: null,
+          message: `Binding ${name} of ${node.id} is optional and needs a fallback.`,
+        });
+      if (read?.['kind'] === 'variable' && read['optional'] !== true)
+        unwritten(node.id, read['key'], `Binding ${name} of ${node.id}`);
+      if (read?.['kind'] === 'variable' && !variableKey(String(read['key'] ?? '')))
+        problems.push({
+          severity: 'error',
+          nodeId: node.id,
+          field: null,
+          message: `Binding ${name} of ${node.id} needs the name of a run variable.`,
+        });
       const target = (source as Raw)?.['nodeId'];
       if (
         (source as Raw)?.['kind'] === 'node' &&
