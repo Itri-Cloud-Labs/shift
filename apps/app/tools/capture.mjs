@@ -251,7 +251,8 @@ try {
     'Moved invoice rounding into `ledger.ts` and **kept** the old API as a shim.',
     '- 42 files touched under billing/',
     '- Risky: ledger.ts, rounding.ts',
-    'Details: [the design note](https://example.com/notes)',
+    // The stand-in's directive ends at the first closing bracket, so no Markdown link here.
+    'Next: run the rounding tests against the old fixtures.',
   ].join('\n');
   await writeFile(
     agentFile,
