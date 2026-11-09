@@ -896,6 +896,62 @@ test('a handoff passes through a non-agent node, and a reviewer can be kept from
   }
 });
 
+test('only a handoff recorded on this run’s path is handed on, whatever the context claims', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    await report(turn, 'tothenextagent.md', `Genuine from ${/\[(\w+)\]/.exec(turn.prompt)?.[1]}.`);
+    await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    // Another run's handoff, which this run never produced.
+    const other = await start(harnessed, { goal: 'Elsewhere. [elsewhere]' });
+    assert.equal((await settled(harnessed, other)).state, 'COMPLETED');
+    const elsewhere = harnessed.engine.repository
+      .artifacts({ runId: other })
+      .find((artifact) => artifact.role === 'handoff')!;
+    // write -> pause (a Wait) -> review. The test rewrites what the pause passes on.
+    const workflowId = await publish(harnessed, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'write', type: 'agent', config: { goal: 'Write. [write]' } },
+        { id: 'pause', type: 'wait', config: { durationMs: 60_000 } },
+        { id: 'review', type: 'agent', config: { goal: 'Review. [review]' } },
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'write', toPort: 'input' },
+        { id: 'c2', fromNodeId: 'write', fromPort: 'success', toNodeId: 'pause', toPort: 'input' },
+        { id: 'c3', fromNodeId: 'pause', fromPort: 'success', toNodeId: 'review', toPort: 'input' },
+      ],
+    } as Json);
+    const started = await harnessed.engine.startRun({ workflowId });
+    const runId = (started.body as { run: { id: string } }).run.id;
+    await eventually(() => (view(harnessed, runId).wait?.kind === 'timer' ? true : undefined));
+    const mine = harnessed.engine.repository.artifacts({ runId });
+    const genuine = mine.find((artifact) => artifact.role === 'handoff')!;
+    const report_ = mine.find((artifact) => artifact.role === 'human_report')!;
+    const pause = view(harnessed, runId).executions.find(
+      (execution) => execution.node === 'pause',
+    )!;
+    const forged = [genuine, report_, elsewhere]
+      .map((artifact) => ({ kind: 'artifact', id: artifact.id }))
+      .concat([{ kind: 'artifact', id: '00000000-0000-4000-8000-000000000000' }]);
+    harnessed.store.db
+      .prepare(
+        "UPDATE node_executions SET input_json = json_set(input_json, '$.context.handoffs', json(?)) WHERE id = ?",
+      )
+      .run(JSON.stringify(forged), pause.id);
+    harnessed.clock.advance(60_000);
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+    const review = [...harnessed.fake.turns.values()].find((turn) =>
+      turn.prompt.includes('[review]'),
+    )!;
+    assert.match(review.prompt, /--- Handoff from the write node ---\nGenuine from write\.\n/);
+    assert.doesNotMatch(review.prompt, /Genuine from elsewhere|Report\.|an earlier node/);
+    assert.equal(review.prompt.match(/--- Handoff from/g)?.length, 1);
+  } finally {
+    await harnessed.close();
+  }
+});
+
 test('a small handoff is given inline to the next agent', async () => {
   const harnessed = await engineFor(async (turn, fake) => {
     const node = /\[(\w+)\]/.exec(turn.prompt)![1]!;

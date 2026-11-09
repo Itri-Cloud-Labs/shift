@@ -99,21 +99,24 @@ type HandoffRef = { kind?: string; id?: string };
 // The handoffs an agent reads: those that came in with its input, unless it is to start without
 // them, then those of the named agents' latest successful executions on this run's path. Each is
 // listed once, with the node whose execution wrote it, which may lie before nodes it passed through.
+// A reference is only ever a hint: it is handed on only when Shift itself recorded a handoff by
+// that ID from a successful execution on this path. A human report, another run's artifact or an
+// unknown ID in the context is ignored, so a forged reference can never become trusted context.
 function receivedHandoffs(
   context: ExecutionContext,
   selection: { incoming?: boolean; nodes?: string[] },
-  // The execution that wrote an artifact, or undefined for an ID that names no artifact.
-  producerOf: (artifactId: string) => string | null | undefined,
+  artifactOf: (artifactId: string) => { role: string; executionId: string | null } | null,
 ): NonNullable<AgentConfig['handoffs']> {
   const found: NonNullable<AgentConfig['handoffs']> = [];
   const add = (refs: unknown) => {
     for (const ref of (Array.isArray(refs) ? refs : []) as HandoffRef[])
       if (ref?.kind === 'artifact' && typeof ref.id === 'string')
         if (!found.some((item) => item.artifactId === ref.id)) {
-          const executionId = producerOf(ref.id);
-          if (executionId === undefined) continue;
-          const nodeId = context.chain.find((entry) => entry.id === executionId)?.nodeId ?? '';
-          found.push({ artifactId: ref.id, nodeId });
+          const artifact = artifactOf(ref.id);
+          if (artifact?.role !== 'handoff') continue;
+          const producer = context.chain.find((entry) => entry.id === artifact.executionId);
+          if (!producer) continue;
+          found.push({ artifactId: ref.id, nodeId: producer.nodeId });
         }
   };
   if (selection.incoming !== false) add(context.input.context?.handoffs);
@@ -682,11 +685,10 @@ export class RunEngine {
         limits: { ...defaultLimits, ...authored.limits },
         reports: { handoff: 'required', humanReport: 'required', ...authored.reports },
         handoffs: receivedHandoffs(context, authored.handoffs ?? {}, (artifactId) => {
-          // A reference that names no artifact of this Shift is not handed to the agent.
           try {
-            return this.repository.artifact(artifactId).executionId;
+            return this.repository.artifact(artifactId);
           } catch {
-            return undefined;
+            return null;
           }
         }),
       };
