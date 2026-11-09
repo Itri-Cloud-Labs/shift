@@ -365,6 +365,16 @@ export function renameNode(draft: Draft, nodeId: string, next: string): EditResu
           : source,
       ]),
     );
+  // Agents name the agents whose handoffs they read.
+  const renamed = (config: unknown) => {
+    const handoffs = (config as Raw | undefined)?.['handoffs'] as Raw | undefined;
+    const nodes = handoffs?.['nodes'];
+    if (!Array.isArray(nodes) || !nodes.includes(nodeId)) return config;
+    return {
+      ...(config as Raw),
+      handoffs: { ...handoffs, nodes: nodes.map((item) => (item === nodeId ? next : item)) },
+    };
+  };
   return {
     draft: {
       ...draft,
@@ -372,6 +382,7 @@ export function renameNode(draft: Draft, nodeId: string, next: string): EditResu
         ...node,
         ...(node['id'] === nodeId ? { id: next } : {}),
         ...(node['bindings'] ? { bindings: rebind(node['bindings']) } : {}),
+        ...(node['config'] ? { config: renamed(node['config']) } : {}),
       })),
       connections: connectionsOf(draft).map((item) => ({
         ...item,
@@ -556,6 +567,15 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
     (node.config['durationMs'] === undefined) === (node.config['until'] === undefined)
   )
     add('durationMs', `${node.id} needs either a duration or a time to wait until.`);
+  if (node.type === 'agent') {
+    // As the server checks at publish (workflows/document.ts).
+    const session = (node.config['session'] ?? {}) as Raw;
+    const strategy = session['strategy'] ?? 'fresh';
+    if (session['lifetime'] === 'ephemeral' && strategy !== 'fresh')
+      add('session', `${node.id}: only a new session for each run of the step can be archived.`);
+    if (strategy === 'reference' && typeof session['reference'] !== 'string')
+      add('session', `${node.id} continues an existing session but names none.`);
+  }
   if (node.type === 'set_variable' || node.type === 'get_variable') {
     const key = node.config['key'];
     if (typeof key === 'string' && key !== '' && !variableKey(key))
@@ -682,6 +702,20 @@ export function diagnose(draft: Draft): DraftProblem[] {
       });
     const bindings = (raw.get(node.id)?.['bindings'] ?? {}) as Raw;
     problems.push(...nodeProblems(node, bindings));
+    if (node.type === 'agent') {
+      const named = ((node.config['handoffs'] as Raw | undefined)?.['nodes'] ?? []) as unknown[];
+      for (const other of named)
+        if (
+          other === node.id ||
+          !document.nodes.some((item) => item.id === other && item.type === 'agent')
+        )
+          problems.push({
+            severity: 'error',
+            nodeId: node.id,
+            field: 'handoffs',
+            message: `${node.id} reads the handoff of ${String(other)}, which is not another agent.`,
+          });
+    }
     if (node.type === 'get_variable' && node.config['optional'] !== true)
       unwritten(node.id, node.config['key'], node.id);
     for (const [name, source] of Object.entries(bindings)) {

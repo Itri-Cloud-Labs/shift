@@ -1,7 +1,12 @@
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
+  validateArtifactList,
+  validateArtifactResponse,
   validateDeviceList,
   validateRunResponse,
+  validateSessionList,
+  validateSessionResponse,
+  validateTranscriptPage,
   validateWorkflowResponse,
   validateWorkflowVersionResponse,
 } from '../protocol/generated/validators.js';
@@ -10,6 +15,7 @@ import {
   parseResponse,
   type ConnectionView,
   type DesktopResponse,
+  type ResourceKind,
   type SyncView,
 } from '../shared/contracts.js';
 import { validInteractions } from '../shared/interactions.js';
@@ -63,10 +69,23 @@ const created = (resource: unknown): { createdId?: string } => {
   return typeof id === 'string' ? { createdId: id } : {};
 };
 
-export function validResource(kind: 'workflow' | 'version' | 'run', value: unknown): boolean {
-  if (kind === 'workflow') return validateWorkflowResponse(value);
-  if (kind === 'version') return validateWorkflowVersionResponse(value);
-  return validateRunResponse(value);
+export function validResource(kind: ResourceKind, value: unknown): boolean {
+  switch (kind) {
+    case 'workflow':
+      return validateWorkflowResponse(value);
+    case 'version':
+      return validateWorkflowVersionResponse(value);
+    case 'run':
+      return validateRunResponse(value);
+    case 'sessions':
+      return validateSessionList(value);
+    case 'session':
+      return validateSessionResponse(value);
+    case 'transcript':
+      return validateTranscriptPage(value);
+    case 'artifacts':
+      return validateArtifactList(value);
+  }
 }
 
 export async function dispatch(
@@ -143,6 +162,37 @@ export async function dispatch(
               : `/api/v0/runs/${request.runId}`;
         const read = await core.resource(kind, path);
         response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'data.sessions':
+      case 'data.session':
+      case 'data.transcript':
+      case 'data.artifacts': {
+        const [kind, path] =
+          request.kind === 'data.sessions'
+            ? (['sessions', `/api/v0/sessions?projectId=${request.projectId}`] as const)
+            : request.kind === 'data.session'
+              ? (['session', `/api/v0/sessions/${request.sessionId}`] as const)
+              : request.kind === 'data.transcript'
+                ? ([
+                    'transcript',
+                    `/api/v0/sessions/${request.sessionId}/transcript?after=${request.after ?? 0}&limit=500`,
+                  ] as const)
+                : (['artifacts', `/api/v0/runs/${request.runId}/artifacts`] as const);
+        const read = await core.resource(kind, path);
+        response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'data.report':
+        response = { kind: 'report', ...(await core.report(request.artifactId)) };
+        break;
+      case 'session.goal': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/sessions/${request.sessionId}/goals`,
+          { goal: request.goal },
+        );
+        response = { kind: 'command', command, runId: null };
         break;
       }
       case 'run.start':
@@ -288,7 +338,13 @@ export async function dispatch(
         !validFoundationResponse(response.operation, response.value)) ||
       (response.kind === 'resource' && !validResource(response.resource, response.value)) ||
       (response.kind === 'interactions' && !validInteractions(response.value)) ||
-      (response.kind === 'devices' && !validateDeviceList(response.value))
+      (response.kind === 'devices' && !validateDeviceList(response.value)) ||
+      (response.kind === 'report' &&
+        !validateArtifactResponse({
+          schemaVersion: 1,
+          requestId: '00000000-0000-4000-8000-000000000000',
+          artifact: response.artifact,
+        }))
     ) {
       return {
         kind: 'error',

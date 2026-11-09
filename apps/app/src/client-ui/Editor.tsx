@@ -17,6 +17,7 @@ import { addableTypes, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
 import { TypeIcon } from './icons.js';
+import { AgentSessionFields } from './Sessions.js';
 
 // The draft editor's islands: choosing a node type, the problems list, a save conflict, and the
 // form for the selected node.
@@ -294,6 +295,7 @@ const seconds = (value: unknown) => (typeof value === 'number' ? String(value / 
 function ConfigFields({
   node,
   document,
+  projectId,
   problems,
   set,
   replace,
@@ -301,6 +303,7 @@ function ConfigFields({
 }: {
   node: DocumentNode;
   document: GraphDocument;
+  projectId: string | null;
   problems: DraftProblem[];
   set: (key: string, value: unknown) => void;
   // Replaces the whole config in one edit, for settings that change together.
@@ -393,6 +396,18 @@ function ConfigFields({
         <>
           {field('goal', 'Goal', true, 'What the agent should do. Use {{name}} for a binding.')}
           {field('model', 'Model (optional)', false, 'As OpenCode names it: provider/model.')}
+          <AgentSessionFields
+            id={id}
+            config={config}
+            projectId={projectId}
+            agents={document.nodes
+              .filter((item) => item.type === 'agent' && item.id !== id)
+              .map((item) => item.id)}
+            set={set}
+          />
+          {(problem('session') || problem('handoffs')) && (
+            <p className="field-error">{problem('session') ?? problem('handoffs')}</p>
+          )}
           <div className="field">
             <label className="field-check">
               <input
@@ -602,6 +617,8 @@ const shownOnField = new Set([
   'retry',
   'key',
   'value',
+  'session',
+  'handoffs',
 ]);
 
 export interface NodeEditing {
@@ -620,12 +637,15 @@ export interface NodeEditing {
 // next node, which is how the keyboard reaches everything the canvas does.
 export function NodeEditor({
   document,
+  projectId = null,
   node,
   problems,
   focus,
   editing,
 }: {
   document: GraphDocument;
+  // The workflow's project, whose sessions an agent can continue.
+  projectId?: string | null;
   node: DocumentNode;
   problems: DraftProblem[];
   focus: boolean;
@@ -653,6 +673,7 @@ export function NodeEditor({
         )}
         <ConfigFields
           document={document}
+          projectId={projectId}
           node={node}
           problems={own}
           set={editing.set}

@@ -41,6 +41,22 @@ export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('data.workflow'), workflowId: profileId }),
   v.strictObject({ kind: v.literal('data.version'), workflowId: profileId, versionId: profileId }),
   v.strictObject({ kind: v.literal('data.run'), runId: profileId }),
+  // Agent sessions, their conversation and the reports runs produced.
+  v.strictObject({ kind: v.literal('data.sessions'), projectId: profileId }),
+  v.strictObject({ kind: v.literal('data.session'), sessionId: profileId }),
+  v.strictObject({
+    kind: v.literal('data.transcript'),
+    sessionId: profileId,
+    after: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0))),
+  }),
+  v.strictObject({ kind: v.literal('data.artifacts'), runId: profileId }),
+  v.strictObject({ kind: v.literal('data.report'), artifactId: profileId }),
+  // The owner's own goal for a session, outside any run.
+  v.strictObject({
+    kind: v.literal('session.goal'),
+    sessionId: profileId,
+    goal: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
+  }),
   // The trigger input is any JSON value; the request size limit bounds it.
   v.strictObject({ kind: v.literal('run.start'), workflowId: profileId, input: v.unknown() }),
   v.strictObject({ kind: v.literal('run.cancel'), runId: profileId }),
@@ -208,7 +224,15 @@ export const overviewSchema = v.strictObject({
   attention: count,
 });
 export type Overview = v.InferOutput<typeof overviewSchema>;
-export const resourceKindSchema = v.picklist(['workflow', 'version', 'run']);
+export const resourceKindSchema = v.picklist([
+  'workflow',
+  'version',
+  'run',
+  'sessions',
+  'session',
+  'transcript',
+  'artifacts',
+]);
 export type ResourceKind = v.InferOutput<typeof resourceKindSchema>;
 export const commandViewSchema = v.strictObject({
   commandId: v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{8,100}$/)),
@@ -295,6 +319,12 @@ export const responseSchema = v.variant('kind', [
   }),
   // Checked by the generated protocol validator before this crosses IPC.
   v.strictObject({ kind: v.literal('devices'), value: v.unknown() }),
+  // A report's metadata, checked by the protocol validator, and its text, at most 1 MiB.
+  v.strictObject({
+    kind: v.literal('report'),
+    artifact: v.unknown(),
+    text: v.pipe(v.string(), v.maxLength(1024 * 1024)),
+  }),
   v.strictObject({ kind: v.literal('preferences'), preferences: preferencesSchema }),
   v.strictObject({
     kind: v.literal('recovery'),
@@ -336,6 +366,15 @@ export interface DesktopBridge {
     version(workflowId: string, versionId: string): Promise<DesktopResponse>;
     run(runId: string): Promise<DesktopResponse>;
     devices(): Promise<DesktopResponse>;
+    sessions(projectId: string): Promise<DesktopResponse>;
+    session(sessionId: string): Promise<DesktopResponse>;
+    transcript(sessionId: string, after?: number): Promise<DesktopResponse>;
+    artifacts(runId: string): Promise<DesktopResponse>;
+    report(artifactId: string): Promise<DesktopResponse>;
+  };
+  session: {
+    // Sends the owner's own goal to a session outside any run.
+    goal(sessionId: string, goal: string): Promise<DesktopResponse>;
   };
   run: {
     start(workflowId: string, input: unknown): Promise<DesktopResponse>;
@@ -416,7 +455,7 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
   const limit =
     kind === 'workflow.save' || kind === 'recovery.keep'
       ? SAVE_LIMIT
-      : kind === 'interaction.respond' || kind === 'run.control'
+      : kind === 'interaction.respond' || kind === 'run.control' || kind === 'session.goal'
         ? ANSWER_LIMIT
         : REQUEST_LIMIT;
   // A draft may nest 32 levels below its envelope.
@@ -430,7 +469,8 @@ export function parseResponse(value: unknown): DesktopResponse | undefined {
   // requests carry their frozen forms.
   const kind =
     typeof value === 'object' && value !== null ? (value as { kind?: unknown }).kind : undefined;
-  const resource = kind === 'resource' || kind === 'interactions' || kind === 'recovery';
+  const resource =
+    kind === 'resource' || kind === 'interactions' || kind === 'recovery' || kind === 'report';
   if (!withinLimit(value, resource ? RESOURCE_LIMIT : RESPONSE_LIMIT, resource ? 48 : 16))
     return undefined;
   const result = v.safeParse(responseSchema, value);

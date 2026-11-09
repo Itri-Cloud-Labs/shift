@@ -12,6 +12,7 @@ import {
   type NodeRun,
 } from './graph.js';
 import { StatusLabel, TypeIcon } from './icons.js';
+import { AgentReports } from './Sessions.js';
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -27,6 +28,8 @@ export function Inspector({
   deviceId = null,
   commands = [],
   editor = null,
+  runId = null,
+  openSession,
 }: {
   document: GraphDocument;
   nodeId: string;
@@ -41,6 +44,9 @@ export function Inspector({
   commands?: SyncView['commands'];
   // The form for this node, on an editable draft.
   editor?: React.ReactNode;
+  // The run shown, for an agent step's reports and session.
+  runId?: string | null;
+  openSession?: (sessionId: string) => void;
 }) {
   const node = document.nodes.find((item) => item.id === nodeId);
   const inRun = run !== undefined;
@@ -114,7 +120,20 @@ export function Inspector({
           />
         )}
         {tab === 'output' && (
-          <RunOutput passes={passes} pass={pass} setPass={setPass} execution={execution} />
+          <RunOutput
+            passes={passes}
+            pass={pass}
+            setPass={setPass}
+            execution={execution}
+            // An agent step leads with what people read; its envelope folds away.
+            {...(node.type === 'agent' && execution && runId && openSession
+              ? {
+                  readable: (
+                    <AgentReports runId={runId} execution={execution} openSession={openSession} />
+                  ),
+                }
+              : {})}
+          />
         )}
         {tab === 'overview' && (
           <>
@@ -187,11 +206,14 @@ function RunOutput({
   pass,
   setPass,
   execution,
+  readable,
 }: {
   passes: Execution[];
   pass: number;
   setPass: (index: number) => void;
   execution: Execution | undefined;
+  // Shown before the raw output, which then folds away.
+  readable?: React.ReactNode;
 }) {
   if (!execution) return <p className="note">The run has not reached this node.</p>;
   return (
@@ -234,12 +256,20 @@ function RunOutput({
           <pre className="code">{json(execution.error)}</pre>
         </>
       )}
-      {execution.output !== null && execution.output !== undefined && (
-        <>
-          <h3 className="section-title">Output</h3>
-          <pre className="code">{json(execution.output)}</pre>
-        </>
-      )}
+      {readable}
+      {execution.output !== null &&
+        execution.output !== undefined &&
+        (readable ? (
+          <details className="raw-output">
+            <summary>Raw output</summary>
+            <pre className="code">{json(execution.output)}</pre>
+          </details>
+        ) : (
+          <>
+            <h3 className="section-title">Output</h3>
+            <pre className="code">{json(execution.output)}</pre>
+          </>
+        ))}
       {execution.attempts.length > 0 && (
         <>
           <h3 className="section-title">Attempts</h3>
