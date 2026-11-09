@@ -64,6 +64,7 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
       'run_variables',
       'runs',
       'server_metadata',
+      'session_entries',
       'sqlite_sequence',
       'wakeups',
       'workflow_versions',

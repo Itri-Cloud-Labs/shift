@@ -141,7 +141,8 @@ function deliver(session, item) {
 }
 
 const routes = [
-  ['GET', /^\/api\/info$/, () => ({ data: { version: 'fake' } })],
+  // As OpenCode 2.x reports itself; the tests pin this version.
+  ['GET', /^\/api\/info$/, () => ({ version: '2.2.6', pid: process.pid })],
   ['GET', /^\/api\/credential$/, () => ({ data: [] })],
   ['POST', /^\/api\/credential$/, () => ({ data: {} })],
   [

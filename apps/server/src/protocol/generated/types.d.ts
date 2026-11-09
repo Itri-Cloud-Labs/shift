@@ -36,6 +36,8 @@ export type FoundationPayload =
   | ArtifactResponse
   | SessionList
   | SessionResponse
+  | InvocationResponse
+  | TranscriptPage
   | Event
   | EventPage
   | Snapshot;
@@ -601,6 +603,53 @@ export interface AgentSessionDetail {
     createdAt: number;
     finishedAt: number | null;
   }[];
+}
+export interface InvocationResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  invocation: Invocation;
+}
+export interface Invocation {
+  id: Uuid;
+  sessionId: Uuid;
+  executionId: Uuid | null;
+  runId: Uuid | null;
+  kind: 'goal' | 'correction' | 'continuation';
+  manual: boolean;
+  state: string;
+  correlationId: string;
+  prompt: string;
+  result: unknown;
+  error: unknown;
+  createdAt: number;
+  submittedAt: number | null;
+  finishedAt: number | null;
+  /**
+   * @maxItems 1000
+   */
+  artifacts: Artifact[];
+}
+export interface TranscriptPage {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 500
+   */
+  entries: TranscriptEntry[];
+  next: number | null;
+}
+export interface TranscriptEntry {
+  id: Uuid;
+  invocationId: Uuid | null;
+  sourceKey: string;
+  revision: number;
+  position: number;
+  kind: 'user' | 'assistant' | 'tool' | 'status';
+  text?: string;
+  tool?: string;
+  status?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 export interface Event {
   cursor: EventCursor;

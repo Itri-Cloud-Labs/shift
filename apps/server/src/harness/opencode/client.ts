@@ -15,6 +15,12 @@ export interface OpenCodeEvent {
 const unavailable = () =>
   new ShiftError('HARNESS_UNAVAILABLE', 'The OpenCode runtime did not respond.', 503, true);
 
+// Told when each request starts and ends, so the supervisor never stops a runtime in use.
+export interface ClientActivity {
+  started(): void;
+  ended(): void;
+}
+
 // Basic-auth client for one runtime generation. Every request has a deadline that also covers
 // reading the body, so a stalled runtime cannot hold a caller indefinitely.
 export class OpenCodeClient {
@@ -23,6 +29,7 @@ export class OpenCodeClient {
   constructor(
     readonly url: string,
     password: string,
+    private readonly activity?: ClientActivity,
   ) {
     this.#authorization = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
   }
@@ -36,6 +43,7 @@ export class OpenCodeClient {
     if (options.location !== undefined) {
       target.searchParams.set('location[directory]', options.location);
     }
+    this.activity?.started();
     try {
       const response = await fetch(target, {
         method,
@@ -55,6 +63,8 @@ export class OpenCodeClient {
       return { status: response.status, body };
     } catch {
       throw unavailable();
+    } finally {
+      this.activity?.ended();
     }
   }
 

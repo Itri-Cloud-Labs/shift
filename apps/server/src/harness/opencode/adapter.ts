@@ -14,8 +14,10 @@ import type {
   InvocationObservation,
   Json,
   SubmissionReceipt,
+  TranscriptEntry,
 } from '../types.js';
 import { classifyInvocation, type OpenCodeMessage } from './classify.js';
+import { normalizeTranscript } from './transcript.js';
 import type { OpenCodeClient } from './client.js';
 import { compilePermissions, type PermissionRule } from './permissions.js';
 import { pluginId } from './namespace.js';
@@ -302,6 +304,11 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   // OpenCode v2 has no archive operation that keeps history, so archiving is Shift-side state.
   async archive(): Promise<void> {}
+
+  async transcript(handle: HarnessSessionHandle): Promise<TranscriptEntry[]> {
+    const { client } = await this.runtime.ensure();
+    return normalizeTranscript(await this.#messages(client, handle.harnessSessionId));
+  }
 
   // OpenCode loads agents and plugins lazily for each directory, so a session's agent defaults and
   // result tool exist only after its location has booted. Returns the agent's permission rules.

@@ -26,6 +26,8 @@ export interface HarnessConfig {
   defaultModel?: string;
   systemdManager?: 'user' | 'system';
   providerApiKey?: string;
+  // Milliseconds without work before the OpenCode runtime stops; 0 never stops it. Default 10 min.
+  idleMs?: number;
 }
 
 const validate = new Ajv2020({
@@ -55,6 +57,10 @@ const validate = new Ajv2020({
         defaultModel: { type: 'string', pattern: '^[^/\\s]+/\\S+$', maxLength: 200 },
         systemdManager: { enum: ['user', 'system'] },
         providerApiKey: { type: 'string', minLength: 1, maxLength: 4096 },
+        // 0 keeps the runtime running while Shift does; otherwise at least a second, at most a day.
+        idleMs: {
+          anyOf: [{ const: 0 }, { type: 'integer', minimum: 1000, maximum: 86_400_000 }],
+        },
       },
     },
   },

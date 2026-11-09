@@ -34,16 +34,31 @@ export interface OpenCodeRuntimeOptions {
   credentials?: readonly ProviderCredential[];
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
+  // Stops the runtime after this long without use while OpenCode reports no active session. The
+  // next use starts it again; conversations live in OpenCode's store and survive. Unset keeps it.
+  idleStopMs?: number;
+}
+
+// The OpenCode releases this adapter was probed against (docs/opencode-capabilities.md): v2 from
+// the probed 2.0.26. Another major version can change the experimental HTTP API, so it is refused.
+export function supportedVersion(version: unknown): boolean {
+  const match = typeof version === 'string' ? /^2\.(\d+)\.(\d+)$/.exec(version) : null;
+  if (!match) return false;
+  const [minor, patch] = [Number(match[1]), Number(match[2])];
+  return minor > 0 || patch >= 26;
 }
 
 export interface RuntimeGeneration {
   generation: number;
   unit: string;
   pid: number;
+  version: string;
   client: OpenCodeClient;
 }
 
 interface Running extends RuntimeGeneration {
+  // Kept for the supervisor's own questions, which must not count as use.
+  password: string;
   child: ChildProcess;
   endpoint: ResultEndpoint;
   exited: Promise<void>;
@@ -81,6 +96,20 @@ export class OpenCodeRuntime {
   // The scope of a generation that has been spawned but not yet published.
   #startingUnit: string | null = null;
   readonly #lostListeners: Array<(generation: number) => void> = [];
+  #lastUsed = Date.now();
+  // Requests to the runtime still waiting for their answer.
+  #inFlight = 0;
+  readonly #activity = {
+    started: () => {
+      this.#inFlight++;
+      this.#lastUsed = Date.now();
+    },
+    ended: () => {
+      this.#inFlight--;
+      this.#lastUsed = Date.now();
+    },
+  };
+  #idleTimer: NodeJS.Timeout | null = null;
 
   constructor(options: OpenCodeRuntimeOptions) {
     this.#options = options;
@@ -114,6 +143,7 @@ export class OpenCodeRuntime {
     if (this.#closed) {
       throw new ShiftError('HARNESS_STOPPED', 'The OpenCode runtime has been stopped.', 503);
     }
+    this.#lastUsed = Date.now();
     if (this.#current) return this.#current;
     this.#starting ??= this.#start().finally(() => {
       this.#starting = null;
@@ -159,6 +189,7 @@ export class OpenCodeRuntime {
   // for a pending start and for a graceful exit; killing the scope is the fallback either way.
   async stop(timeoutMs = this.#options.stopTimeoutMs ?? 5_000): Promise<void> {
     this.#closed = true;
+    if (this.#idleTimer) clearInterval(this.#idleTimer);
     const deadline = Date.now() + timeoutMs;
     if (this.#starting) {
       await withTimeout(
@@ -169,19 +200,50 @@ export class OpenCodeRuntime {
       if (this.#startingUnit) await this.#options.scopes.kill(this.#startingUnit);
     }
     const running = this.#current;
-    if (running) {
-      running.stopping = true;
-      this.#current = null;
-      running.child.kill('SIGTERM');
-      await withTimeout(running.exited, Math.max(0, deadline - Date.now()));
-      try {
-        // Tool processes leave the server's process group, so only the scope accounts for them.
-        await this.#options.scopes.kill(running.unit);
-      } finally {
-        await running.endpoint.close();
-      }
-    }
+    if (running) await this.#stopGeneration(running, deadline);
     await this.#cleanup;
+  }
+
+  async #stopGeneration(running: Running, deadline: number): Promise<void> {
+    running.stopping = true;
+    if (this.#current === running) this.#current = null;
+    running.child.kill('SIGTERM');
+    await withTimeout(running.exited, Math.max(0, deadline - Date.now()));
+    try {
+      // Tool processes leave the server's process group, so only the scope accounts for them.
+      await this.#options.scopes.kill(running.unit);
+    } finally {
+      await running.endpoint.close();
+    }
+  }
+
+  // Stops an unused runtime, but only while OpenCode itself reports no active session: a turn
+  // nobody polls, such as one whose outcome waits for the owner, keeps its tools running.
+  async #stopIfIdle(): Promise<void> {
+    const idleMs = this.#options.idleStopMs;
+    const running = this.#current;
+    if (idleMs === undefined || !running || this.#starting || this.#closed) return;
+    if (this.#inFlight > 0 || Date.now() - this.#lastUsed < idleMs) return;
+    const used = this.#lastUsed;
+    try {
+      // Asked without counting as use, so the question itself never keeps the runtime alive.
+      const response = await new OpenCodeClient(running.client.url, running.password).expect(
+        [200],
+        'GET',
+        '/api/session/active',
+      );
+      const active = (response.body as { data?: unknown[] } | null)?.data ?? [];
+      if (active.length > 0) return;
+    } catch {
+      return;
+    }
+    // Used again while asking, or replaced meanwhile: not idle.
+    if (this.#inFlight > 0 || this.#lastUsed !== used || this.#current !== running) return;
+    this.#options.logger.info(
+      { generation: running.generation, unit: running.unit },
+      'Stopping the idle OpenCode runtime; it starts again when next needed.',
+    );
+    await this.#stopGeneration(running, Date.now() + (this.#options.stopTimeoutMs ?? 5_000));
   }
 
   async #start(): Promise<Running> {
@@ -227,13 +289,34 @@ export class OpenCodeRuntime {
       let running: Running | undefined;
       try {
         const { url, password } = await this.#readStartup(child, exited);
-        const client = new OpenCodeClient(url, password);
-        await client.expect([200], 'GET', '/api/info');
+        const client = new OpenCodeClient(url, password, this.#activity);
+        const info = (await client.expect([200], 'GET', '/api/info')).body as {
+          version?: unknown;
+          pid?: unknown;
+        } | null;
+        // The process answering must be the one Shift started, inside its own scope, and speak
+        // the API Shift was built against. Either mismatch fails before anything uses it.
+        if (!supportedVersion(info?.version)) {
+          throw new ShiftError(
+            'HARNESS_VERSION_UNSUPPORTED',
+            `OpenCode ${String(info?.version)} is not supported; Shift needs OpenCode 2.x from 2.0.26.`,
+            503,
+          );
+        }
+        if (typeof info?.pid !== 'number' || !(await scopes.members(unit)).includes(info.pid)) {
+          throw new ShiftError(
+            'HARNESS_IDENTITY_MISMATCH',
+            'The OpenCode endpoint is not served by the runtime Shift started.',
+            503,
+          );
+        }
         running = {
           generation,
           unit,
           pid: child.pid!,
+          version: info.version as string,
           client,
+          password,
           child,
           endpoint,
           exited,
@@ -259,7 +342,16 @@ export class OpenCodeRuntime {
         throw error;
       }
       this.#current = running;
-      logger.info({ generation, unit }, 'OpenCode runtime started.');
+      this.#lastUsed = Date.now();
+      const idleMs = this.#options.idleStopMs;
+      if (idleMs !== undefined && !this.#idleTimer) {
+        this.#idleTimer = setInterval(
+          () => void this.#stopIfIdle().catch(() => undefined),
+          Math.max(50, Math.min(idleMs / 4, 30_000)),
+        );
+        this.#idleTimer.unref();
+      }
+      logger.info({ generation, unit, version: running.version }, 'OpenCode runtime started.');
       return running;
     } catch (error) {
       await endpoint.close();

@@ -109,6 +109,12 @@
       "$ref": "#/$defs/SessionResponse"
     },
     {
+      "$ref": "#/$defs/InvocationResponse"
+    },
+    {
+      "$ref": "#/$defs/TranscriptPage"
+    },
+    {
       "$ref": "#/$defs/Event"
     },
     {
@@ -2204,6 +2210,198 @@
         },
         "session": {
           "$ref": "#/$defs/AgentSessionDetail"
+        }
+      }
+    },
+    "Invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "sessionId",
+        "executionId",
+        "runId",
+        "kind",
+        "manual",
+        "state",
+        "correlationId",
+        "prompt",
+        "result",
+        "error",
+        "createdAt",
+        "submittedAt",
+        "finishedAt",
+        "artifacts"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "executionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": ["goal", "correction", "continuation"]
+        },
+        "manual": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "correlationId": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "result": {},
+        "error": {},
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "submittedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "finishedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          }
+        }
+      }
+    },
+    "TranscriptEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "invocationId",
+        "sourceKey",
+        "revision",
+        "position",
+        "kind",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "invocationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceKey": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "enum": ["user", "assistant", "tool", "status"]
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 9000
+        },
+        "tool": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "InvocationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "invocation"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "invocation": {
+          "$ref": "#/$defs/Invocation"
+        }
+      }
+    },
+    "TranscriptPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "entries", "next"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/TranscriptEntry"
+          }
+        },
+        "next": {
+          "type": ["integer", "null"],
+          "minimum": 0
         }
       }
     }

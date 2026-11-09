@@ -175,6 +175,8 @@ export async function startServer(
       logger,
       resultHandler: (submission) => handleResult(submission),
       stopTimeoutMs: config.shutdownTimeoutMs,
+      // An unused runtime stops after this long; conversations survive in OpenCode's store.
+      ...((harness.idleMs ?? 600_000) > 0 ? { idleStopMs: harness.idleMs ?? 600_000 } : {}),
       ...(harness.opencodeExecutable === undefined
         ? {}
         : { executable: harness.opencodeExecutable }),

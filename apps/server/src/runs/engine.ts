@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { dirname, join } from 'node:path';
 import type { Logger } from 'pino';
@@ -22,6 +23,7 @@ import {
   type AgentConfig,
   type Claim,
   type ExecutionContext,
+  type InvocationRow,
   type SessionPolicy,
   type FrozenInteraction,
   type RunSnapshot,
@@ -191,6 +193,8 @@ export class RunEngine {
     )) {
       this.#dispatch(claim);
     }
+    // An owner's goal left running continues where its record says it stopped.
+    for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
     this.#pump();
     this.#timer = setInterval(() => {
       this.#checkpoint();
@@ -224,6 +228,42 @@ export class RunEngine {
   // Starts the workflow's active version with trigger input. The base ref is resolved to a commit
   // first; the run, its first activation and the command receipt then commit together, so a
   // repeated command returns the same run without touching the repository again.
+  // Sends an owner's goal to a session outside any run. The response comes once the intent is
+  // recorded; the turn runs on in the server whatever happens to the client.
+  sendGoal(sessionId: string, input: unknown, actor: Actor = local): CommandResponse {
+    if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
+    const body = (input ?? {}) as { goal?: unknown; commandId?: unknown };
+    if (
+      typeof body.goal !== 'string' ||
+      body.goal.trim() === '' ||
+      body.goal.length > 20_000 ||
+      (body.commandId !== undefined && typeof body.commandId !== 'string')
+    )
+      throw new ShiftError(
+        'INVALID_REQUEST',
+        'A goal is text of 1 to 20000 characters.',
+        422,
+        false,
+        ['/goal'],
+      );
+    const id = body.commandId as string | undefined;
+    const request = { op: 'session.goal', sessionId, goal: body.goal };
+    const stored = id === undefined ? null : this.#options.receipts.lookup(actor, id, request);
+    if (stored) return stored;
+    let created: InvocationRow | undefined;
+    const response = this.#options.receipts.execute(actor, id, request, () => {
+      const invocationId = randomUUID();
+      created = this.repository.createManualGoal(sessionId, {
+        id: invocationId,
+        correlationId: this.#options.adapter.correlate(invocationId).providerMessageId!,
+        prompt: body.goal as string,
+      });
+      return { status: 202, body: { invocation: this.repository.invocationDetail(invocationId) } };
+    });
+    if (created) this.#launchManual(created);
+    return response;
+  }
+
   async startRun(input: unknown, actor: Actor = local): Promise<CommandResponse> {
     if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
     if (!validateStart(input)) {
@@ -744,6 +784,25 @@ export class RunEngine {
     } catch (finishError) {
       if (!(finishError instanceof StaleClaim)) throw finishError;
     }
+  }
+
+  #launchManual(goal: InvocationRow): void {
+    const key = `manual:${goal.id}`;
+    if (this.#tasks.has(key)) return;
+    const controller = new AbortController();
+    const done = this.agents
+      .driveManual(goal, controller.signal)
+      .catch((error: unknown) => {
+        this.#options.logger.error(
+          { invocationId: goal.id, code: (error as { code?: string }).code },
+          'An owner goal failed.',
+        );
+      })
+      .finally(() => {
+        this.#tasks.delete(key);
+        this.#pump();
+      });
+    this.#tasks.set(key, { controller, done });
   }
 
   #launch(claim: Claim): void {

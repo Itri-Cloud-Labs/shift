@@ -2,7 +2,13 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Clock } from '../domain/clock.js';
 import { ShiftError } from '../domain/errors.js';
-import type { HarnessSessionHandle, Json, ModelRef, ToolPolicy } from '../harness/types.js';
+import type {
+  HarnessSessionHandle,
+  Json,
+  ModelRef,
+  ToolPolicy,
+  TranscriptEntry,
+} from '../harness/types.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { NodeDefinition, WorkflowDocument } from '../workflows/document.js';
 import {
@@ -785,6 +791,290 @@ export class RunRepository {
     ).map((row) => ({ id: row.id, storageKey: row.storage_key, sizeBytes: row.size_bytes }));
   }
 
+  // An owner's goal for a session outside any run (specification 4.3, "manual message"). The
+  // session must have its conversation and no other owner: no execution holds it and no other
+  // turn is active. The intent is recorded here, before anything reaches the harness.
+  createManualGoal(
+    agentSessionId: string,
+    invocation: { id: string; correlationId: string; prompt: string },
+  ): InvocationRow {
+    return this.db
+      .transaction(() => {
+        const session = this.db
+          .prepare(
+            'SELECT s.state, h.state AS mapping, h.harness_session_id FROM agent_sessions s LEFT JOIN harness_sessions h ON h.agent_session_id = s.id WHERE s.id = ?',
+          )
+          .get(agentSessionId) as
+          { state: string; mapping: string | null; harness_session_id: string | null } | undefined;
+        if (!session) throw new ShiftError('SESSION_NOT_FOUND', 'Session not found.', 404);
+        if (session.state === 'ARCHIVED')
+          throw new ShiftError('SESSION_UNAVAILABLE', 'The session was archived.', 409);
+        if (session.mapping !== 'READY' || !session.harness_session_id)
+          throw new ShiftError(
+            'SESSION_UNAVAILABLE',
+            'The session has no confirmed conversation yet.',
+            409,
+          );
+        if (
+          this.#heldByOther('session', agentSessionId, '') ||
+          this.#manualActive(agentSessionId) ||
+          this.db
+            .prepare(
+              `SELECT 1 FROM agent_invocations WHERE agent_session_id = ? AND state IN ${activeInvocationStates}`,
+            )
+            .get(agentSessionId)
+        )
+          throw new ShiftError('SESSION_BUSY', 'Another task is using the session.', 409);
+        const now = this.clock.now();
+        this.db
+          .prepare(
+            "INSERT INTO agent_invocations (id, agent_session_id, kind, correlation_id, prompt_json, state, created_at) VALUES (?, ?, 'goal', ?, ?, 'PREPARING', ?)",
+          )
+          .run(
+            invocation.id,
+            agentSessionId,
+            invocation.correlationId,
+            JSON.stringify({ text: invocation.prompt }),
+            now,
+          );
+        this.db
+          .prepare(
+            "UPDATE agent_sessions SET state = 'BUSY', revision = revision + 1 WHERE id = ? AND state = 'IDLE'",
+          )
+          .run(agentSessionId);
+        this.#event(
+          'invocation.created',
+          { sessionId: agentSessionId },
+          {
+            invocationId: invocation.id,
+            kind: 'goal',
+            manual: true,
+          },
+        );
+        return this.#invocationRow(invocation.id);
+      })
+      .immediate();
+  }
+
+  // The harness address of a session with a confirmed conversation.
+  sessionHandle(agentSessionId: string): HarnessSessionHandle {
+    const row = this.db
+      .prepare(
+        "SELECT s.cwd, h.harness_session_id, h.storage_namespace FROM agent_sessions s JOIN harness_sessions h ON h.agent_session_id = s.id WHERE s.id = ? AND h.state = 'READY'",
+      )
+      .get(agentSessionId) as
+      { cwd: string; harness_session_id: string; storage_namespace: string } | undefined;
+    if (!row) throw new ShiftError('SESSION_UNAVAILABLE', 'The session has no conversation.', 409);
+    return {
+      shiftSessionId: agentSessionId,
+      harnessSessionId: row.harness_session_id,
+      storageNamespace: row.storage_namespace,
+      cwd: row.cwd,
+    };
+  }
+
+  // Active owner goals, for recovery after a restart.
+  activeManualGoals(): InvocationRow[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT id FROM agent_invocations WHERE execution_id IS NULL AND state IN ${activeInvocationStates} ORDER BY created_at`,
+        )
+        .all() as Array<{ id: string }>
+    ).map((row) => this.#invocationRow(row.id));
+  }
+
+  // Moves an owner goal on; it has no attempt to fence. A finished goal leaves its session idle.
+  transitionManualGoal(
+    invocationId: string,
+    from: readonly InvocationState[],
+    to: InvocationState,
+    error?: { code: string; message: string },
+  ): boolean {
+    return this.db
+      .transaction(() => {
+        const now = this.clock.now();
+        const changed = this.db
+          .prepare(
+            `UPDATE agent_invocations SET state = ?, submitted_at = CASE WHEN ? = 'RUNNING' THEN COALESCE(submitted_at, ?) ELSE submitted_at END, finished_at = CASE WHEN ? THEN ? ELSE finished_at END, error_json = COALESCE(?, error_json) WHERE id = ? AND execution_id IS NULL AND state IN (${from.map(() => '?').join(', ')})`,
+          )
+          .run(
+            to,
+            to,
+            now,
+            activeStates.has(to) ? 0 : 1,
+            now,
+            error ? JSON.stringify(error) : null,
+            invocationId,
+            ...from,
+          ).changes;
+        if (!changed) return false;
+        const { agent_session_id: sessionId } = this.db
+          .prepare('SELECT agent_session_id FROM agent_invocations WHERE id = ?')
+          .get(invocationId) as { agent_session_id: string };
+        if (!activeStates.has(to))
+          this.db
+            .prepare(
+              "UPDATE agent_sessions SET state = 'IDLE', revision = revision + 1 WHERE id = ? AND state = 'BUSY'",
+            )
+            .run(sessionId);
+        this.#event('invocation.transitioned', { sessionId }, { invocationId, state: to });
+        return true;
+      })
+      .immediate();
+  }
+
+  #manualActive(agentSessionId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM agent_invocations WHERE agent_session_id = ? AND execution_id IS NULL AND state IN ${activeInvocationStates}`,
+        )
+        .get(agentSessionId) !== undefined
+    );
+  }
+
+  // One invocation with its prompt, outcome and reports.
+  invocationDetail(id: string): Json {
+    const row = this.db
+      .prepare(
+        'SELECT i.*, e.run_id FROM agent_invocations i LEFT JOIN node_executions e ON e.id = i.execution_id WHERE i.id = ?',
+      )
+      .get(id) as
+      | {
+          id: string;
+          agent_session_id: string;
+          execution_id: string | null;
+          run_id: string | null;
+          kind: string;
+          state: string;
+          correlation_id: string;
+          prompt_json: string;
+          result_json: string | null;
+          error_json: string | null;
+          created_at: number;
+          submitted_at: number | null;
+          finished_at: number | null;
+        }
+      | undefined;
+    if (!row) throw new ShiftError('INVOCATION_NOT_FOUND', 'Invocation not found.', 404);
+    return {
+      id: row.id,
+      sessionId: row.agent_session_id,
+      executionId: row.execution_id,
+      runId: row.run_id,
+      kind: row.kind,
+      manual: row.execution_id === null,
+      state: row.state,
+      correlationId: row.correlation_id,
+      prompt: (JSON.parse(row.prompt_json) as { text: string }).text,
+      result: parse<Json>(row.result_json),
+      error: parse<Json>(row.error_json),
+      createdAt: row.created_at,
+      submittedAt: row.submitted_at,
+      finishedAt: row.finished_at,
+      artifacts: this.artifacts({ invocationId: id }) as unknown as Json[],
+    };
+  }
+
+  // Records a session's transcript as last inspected. A new entry is appended; one whose content
+  // changed keeps its row and position and takes the next revision; an unchanged one is left alone.
+  // Entries are attributed to the invocation whose prompt started their turn. Returns how many
+  // rows were written.
+  recordTranscript(agentSessionId: string, entries: readonly TranscriptEntry[]): number {
+    return this.db
+      .transaction(() => {
+        const now = this.clock.now();
+        const invocationOf = this.db.prepare(
+          'SELECT id FROM agent_invocations WHERE agent_session_id = ? AND correlation_id = ?',
+        );
+        const existing = this.db.prepare(
+          'SELECT id, payload_json FROM session_entries WHERE agent_session_id = ? AND source_key = ?',
+        );
+        let position = (
+          this.db
+            .prepare(
+              'SELECT COALESCE(MAX(position), 0) AS last FROM session_entries WHERE agent_session_id = ?',
+            )
+            .get(agentSessionId) as { last: number }
+        ).last;
+        let written = 0;
+        for (const entry of entries) {
+          const { sourceKey, turnMessageId, kind, ...payload } = entry;
+          const text = JSON.stringify(payload);
+          const row = existing.get(agentSessionId, sourceKey) as
+            { id: string; payload_json: string } | undefined;
+          if (row?.payload_json === text) continue;
+          const invocation = turnMessageId
+            ? (invocationOf.get(agentSessionId, turnMessageId) as { id: string } | undefined)
+            : undefined;
+          if (row) {
+            this.db
+              .prepare(
+                'UPDATE session_entries SET payload_json = ?, source_revision = source_revision + 1, updated_at = ? WHERE id = ?',
+              )
+              .run(text, now, row.id);
+          } else {
+            this.db
+              .prepare(
+                'INSERT INTO session_entries (id, agent_session_id, invocation_id, source_key, source_revision, position, kind, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)',
+              )
+              .run(
+                randomUUID(),
+                agentSessionId,
+                invocation?.id ?? null,
+                sourceKey,
+                ++position,
+                kind,
+                text,
+                now,
+                now,
+              );
+          }
+          written++;
+        }
+        if (written)
+          this.#event('session.transcript', { sessionId: agentSessionId }, { entries: written });
+        return written;
+      })
+      .immediate();
+  }
+
+  // A session's transcript in conversation order: `after` is a position, `limit` at most 500.
+  transcript(agentSessionId: string, after: number, limit: number): Json {
+    this.#sessionSummary(agentSessionId);
+    const rows = this.db
+      .prepare(
+        'SELECT id, invocation_id, source_key, source_revision, position, kind, payload_json, created_at, updated_at FROM session_entries WHERE agent_session_id = ? AND position > ? ORDER BY position LIMIT ?',
+      )
+      .all(agentSessionId, after, limit + 1) as Array<{
+      id: string;
+      invocation_id: string | null;
+      source_key: string;
+      source_revision: number;
+      position: number;
+      kind: string;
+      payload_json: string;
+      created_at: number;
+      updated_at: number;
+    }>;
+    const page = rows.slice(0, limit);
+    return {
+      entries: page.map((row) => ({
+        id: row.id,
+        invocationId: row.invocation_id,
+        sourceKey: row.source_key,
+        revision: row.source_revision,
+        position: row.position,
+        kind: row.kind,
+        ...(JSON.parse(row.payload_json) as Record<string, Json>),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+      next: rows.length > limit ? page.at(-1)!.position : null,
+    };
+  }
+
   // A project's sessions, newest first, or every session.
   sessions(projectId?: string): Json[] {
     const rows = this.db
@@ -1261,6 +1551,8 @@ export class RunRepository {
     const now = this.clock.now();
     const blocked = targets.find((target) => {
       if (this.#heldByOther(target.type, target.id, executionId)) return true;
+      // An owner's goal holds the session until its turn ends.
+      if (target.type === 'session' && this.#manualActive(target.id)) return true;
       // The run that created a workspace works in it without claims until it ends.
       if (target.type === 'workspace' && this.#workspaceRunActive(target.id)) return true;
       const ahead = this.db
@@ -1342,20 +1634,27 @@ export class RunRepository {
   invocations(attemptId: string): InvocationRow[] {
     return (
       this.db
-        .prepare(
-          'SELECT id, agent_session_id, kind, correlation_id, prompt_json, state, result_json, error_json FROM agent_invocations WHERE attempt_id = ? ORDER BY created_at, rowid',
-        )
-        .all(attemptId) as Array<{
-        id: string;
-        agent_session_id: string;
-        kind: InvocationKind;
-        correlation_id: string;
-        prompt_json: string;
-        state: InvocationState;
-        result_json: string | null;
-        error_json: string | null;
-      }>
-    ).map((row) => ({
+        .prepare('SELECT id FROM agent_invocations WHERE attempt_id = ? ORDER BY created_at, rowid')
+        .all(attemptId) as Array<{ id: string }>
+    ).map((row) => this.#invocationRow(row.id));
+  }
+
+  #invocationRow(id: string): InvocationRow {
+    const row = this.db
+      .prepare(
+        'SELECT id, agent_session_id, kind, correlation_id, prompt_json, state, result_json, error_json FROM agent_invocations WHERE id = ?',
+      )
+      .get(id) as {
+      id: string;
+      agent_session_id: string;
+      kind: InvocationKind;
+      correlation_id: string;
+      prompt_json: string;
+      state: InvocationState;
+      result_json: string | null;
+      error_json: string | null;
+    };
+    return {
       id: row.id,
       agentSessionId: row.agent_session_id,
       kind: row.kind,
@@ -1364,7 +1663,7 @@ export class RunRepository {
       state: row.state,
       result: parse<ResultEnvelope>(row.result_json),
       error: parse<{ code: string; message: string }>(row.error_json),
-    }));
+    };
   }
 
   createInvocation(

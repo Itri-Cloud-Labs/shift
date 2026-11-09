@@ -18,6 +18,7 @@ shift serve [--state-dir PATH] [--host 127.0.0.1] [--port 4317] [--public]
             [--shutdown-timeout-ms 5000] [--log-level info]
             [--sqlite-native-binding PATH] [--opencode-model PROVIDER/MODEL]
             [--opencode-executable PATH] [--opencode-environment host|isolated]
+            [--opencode-idle-minutes 10]
             [--systemd-manager user|system]
 shift info|health|ready|stop [--state-dir PATH]
 shift project add --path REPO [--name NAME] [--base-ref REF]
@@ -34,6 +35,9 @@ shift run executions RUN_ID [--after SEQUENCE] [--limit N]
 shift run variables RUN_ID
 shift session list [--project PROJECT_ID]
 shift session show SESSION_ID
+shift session send SESSION_ID --goal TEXT [--wait]
+shift session transcript SESSION_ID [--after POSITION]
+shift invocation show INVOCATION_ID
 shift artifact list RUN_ID
 shift artifact show ARTIFACT_ID
 shift artifact get ARTIFACT_ID
@@ -77,7 +81,9 @@ non-loopback IP; serve it only behind a TLS-terminating proxy, because tokens
 would otherwise cross the network in clear text. OpenCode runs as your own
 install, with your config, credentials and plugins. --opencode-environment
 isolated gives it a private namespace instead; SHIFT_OPENCODE_API_KEY then
-supplies the provider key for --opencode-model once.
+supplies the provider key for --opencode-model once. OpenCode stops after
+--opencode-idle-minutes without work (0 keeps it running) and starts again when
+needed; conversations survive.
 `;
 
 function integer(value: string | undefined, fallback: number): number {
@@ -110,6 +116,7 @@ async function main(): Promise<void> {
       'event',
       'artifact',
       'session',
+      'invocation',
     ].includes(command)
   ) {
     const { adminCommand } = await import('./cli-admin.js');
@@ -135,6 +142,7 @@ async function main(): Promise<void> {
         'opencode-model': { type: 'string' },
         'opencode-executable': { type: 'string' },
         'opencode-environment': { type: 'string' },
+        'opencode-idle-minutes': { type: 'string' },
         'systemd-manager': { type: 'string' },
         'event-keepalive-ms': { type: 'string' },
       },
@@ -179,6 +187,13 @@ async function main(): Promise<void> {
       environment: values['opencode-environment'] ?? process.env['SHIFT_OPENCODE_ENVIRONMENT'],
       systemdManager: values['systemd-manager'] ?? process.env['SHIFT_SYSTEMD_MANAGER'],
       providerApiKey: process.env['SHIFT_OPENCODE_API_KEY'],
+      // Minutes for people; SHIFT_OPENCODE_IDLE_MS gives tests a shorter, exact time.
+      idleMs:
+        values['opencode-idle-minutes'] !== undefined
+          ? integer(values['opencode-idle-minutes'], 10) * 60_000
+          : process.env['SHIFT_OPENCODE_IDLE_MS'] !== undefined
+            ? integer(process.env['SHIFT_OPENCODE_IDLE_MS'], 600_000)
+            : undefined,
     }).filter(([, value]) => value !== undefined && value !== ''),
   );
   const config = validateConfig({

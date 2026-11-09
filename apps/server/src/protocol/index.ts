@@ -63,6 +63,8 @@ export {
   validateArtifactResponse,
   validateSessionList,
   validateSessionResponse,
+  validateInvocationResponse,
+  validateTranscriptPage,
   validateEvent,
   validateEventPage,
   validateSnapshot,

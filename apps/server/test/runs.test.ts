@@ -18,6 +18,7 @@ import type {
   InvocationObservation,
   ResultHandler,
   SubmissionReceipt,
+  TranscriptEntry,
 } from '../src/harness/types.js';
 import { ShiftError } from '../src/domain/errors.js';
 import { createLogger } from '../src/logging.js';
@@ -177,6 +178,36 @@ class FakeHarness implements HarnessAdapter {
   }
 
   async archive(): Promise<void> {}
+
+  // Each turn as OpenCode would show it: the prompt, a reply once it ended, and how it ended.
+  async transcript(handle: HarnessSessionHandle): Promise<TranscriptEntry[]> {
+    return [...this.turns.values()]
+      .filter((turn) => turn.handle.shiftSessionId === handle.shiftSessionId)
+      .flatMap((turn): TranscriptEntry[] => [
+        {
+          sourceKey: turn.messageId,
+          turnMessageId: turn.messageId,
+          kind: 'user',
+          text: turn.prompt,
+        },
+        ...(turn.status === 'ended'
+          ? [
+              {
+                sourceKey: `${turn.messageId}:0`,
+                turnMessageId: turn.messageId,
+                kind: 'assistant' as const,
+                text: 'Done.',
+              },
+              {
+                sourceKey: `${turn.messageId}:idle`,
+                turnMessageId: turn.messageId,
+                kind: 'status' as const,
+                status: turn.outcome ?? 'succeeded',
+              },
+            ]
+          : []),
+      ]);
+  }
 
   submitResult(turn: Turn, input: unknown, toolCallId = `call_${++this.#calls}`) {
     return this.handler({
@@ -1244,6 +1275,204 @@ test('a reused session the harness lost needs the owner, and no new one is creat
     assert.equal(run.attention?.code, 'SESSION_MISSING');
     assert.equal(harnessed.fake.creates, 1);
     assert.equal(harnessed.fake.turns.size, 1, 'no goal was sent');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a capability the harness lacks fails the node before any session or prompt', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  const full = harnessed.fake.capabilities();
+  harnessed.fake.capabilities = () => ({ ...full, toolPolicy: 'limited' });
+  try {
+    const run = await settled(harnessed, await start(harnessed, { readOnly: true }));
+    assert.equal(run.state, 'FAILED');
+    assert.equal(run.executions[1]!.error?.code, 'HARNESS_CAPABILITY_UNSUPPORTED');
+    assert.equal(harnessed.fake.creates, 0);
+    assert.equal(harnessed.fake.turns.size, 0);
+    // The same harness still runs a node that does not need the missing capability.
+    assert.equal((await settled(harnessed, await start(harnessed))).state, 'COMPLETED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+type InvocationDetail = {
+  id: string;
+  state: string;
+  manual: boolean;
+  sessionId: string;
+  executionId: string | null;
+};
+type TranscriptView = {
+  entries: Array<{
+    kind: string;
+    text?: string;
+    invocationId: string | null;
+    revision: number;
+    position: number;
+    sourceKey: string;
+  }>;
+};
+
+// The session a finished single-agent run left behind.
+async function retainedSession(harnessed: Harnessed): Promise<string> {
+  const runId = await start(harnessed);
+  assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+  return sessionsOf(harnessed, runId)[0]!;
+}
+
+const sendGoal = (harnessed: Harnessed, sessionId: string, goal: string, commandId?: string) =>
+  (
+    harnessed.engine.sendGoal(sessionId, { goal, ...(commandId ? { commandId } : {}) }).body as {
+      invocation: InvocationDetail;
+    }
+  ).invocation;
+
+const goalState = (harnessed: Harnessed, id: string) =>
+  (harnessed.engine.repository.invocationDetail(id) as unknown as InvocationDetail).state;
+
+test('an owner goal runs in a retained session and its transcript is kept', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'List the TODOs.') turn.status = 'ended';
+    else await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const sessionId = await retainedSession(harnessed);
+    const goal = sendGoal(harnessed, sessionId, 'List the TODOs.', 'goal-1');
+    assert.deepEqual([goal.manual, goal.executionId, goal.sessionId], [true, null, sessionId]);
+    // The same command again answers with the same goal and sends nothing new.
+    assert.equal(sendGoal(harnessed, sessionId, 'List the TODOs.', 'goal-1').id, goal.id);
+    await eventually(() => (goalState(harnessed, goal.id) === 'COMPLETED' ? true : undefined));
+    assert.equal(harnessed.fake.creates, 1, 'the same conversation');
+    assert.equal(harnessed.fake.submits.filter((id) => id === `msg_${goal.id}`).length, 1);
+    const transcript = harnessed.engine.repository.transcript(
+      sessionId,
+      0,
+      100,
+    ) as unknown as TranscriptView;
+    const mine = transcript.entries.filter((entry) => entry.invocationId === goal.id);
+    assert.deepEqual(
+      mine.map((entry) => [entry.kind, entry.text ?? null]),
+      [
+        ['user', 'List the TODOs.'],
+        ['assistant', 'Done.'],
+        ['status', null],
+      ],
+    );
+    const session = harnessed.engine.repository.sessionDetail(
+      sessionId,
+    ) as unknown as SessionDetail;
+    assert.equal(session.state, 'IDLE');
+    // A result tool call during an owner goal has no contract to satisfy.
+    assert.deepEqual(
+      await harnessed.engine.agents.handleResult({
+        harnessSessionId: `ses_${sessionId}`,
+        assistantMessageId: 'msg_a',
+        toolCallId: 'call_manual',
+        input: { status: 'completed', data: {} },
+      }),
+      { accepted: false, reason: 'no Shift task is active in this session' },
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an owner goal and a run take the session one at a time', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let releaseAgent!: () => void;
+  const agentHeld = new Promise<void>((resolve) => (releaseAgent = resolve));
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Hold on.') {
+      await held;
+      turn.status = 'ended';
+    } else {
+      if (turn.prompt.includes('[slow]')) await agentHeld;
+      await complete({ count: 1 })(turn, fake);
+    }
+  });
+  try {
+    const sessionId = await retainedSession(harnessed);
+    const goal = sendGoal(harnessed, sessionId, 'Hold on.');
+    await eventually(() => (goalState(harnessed, goal.id) === 'RUNNING' ? true : undefined));
+    assert.throws(() => sendGoal(harnessed, sessionId, 'And this.'), { code: 'SESSION_BUSY' });
+    const runId = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    await eventually(() => (view(harnessed, runId).wait?.kind === 'resource' ? true : undefined));
+    release();
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+    assert.equal(goalState(harnessed, goal.id), 'COMPLETED');
+    // While a run's agent holds the session, an owner goal is refused.
+    const busy = await start(harnessed, {
+      goal: 'Slowly. [slow]',
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    await eventually(() =>
+      view(harnessed, busy).invocations[0]?.state === 'RUNNING' ? true : undefined,
+    );
+    assert.throws(() => sendGoal(harnessed, sessionId, 'Not now.'), { code: 'SESSION_BUSY' });
+    releaseAgent();
+    assert.equal((await settled(harnessed, busy)).state, 'COMPLETED');
+    assert.throws(() => sendGoal(harnessed, '00000000-0000-4000-8000-000000000000', 'x'), {
+      code: 'SESSION_NOT_FOUND',
+    });
+  } finally {
+    release();
+    releaseAgent();
+    await harnessed.close();
+  }
+});
+
+test('an owner goal left running across a restart finishes without being sent again', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const first = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Keep going.') await held;
+    else await complete({ count: 1 })(turn, fake);
+  });
+  const sessionId = await retainedSession(first);
+  const goal = sendGoal(first, sessionId, 'Keep going.');
+  await eventually(() => (goalState(first, goal.id) === 'RUNNING' ? true : undefined));
+  await first.close();
+  const restarted = await engineFor(() => {}, { state: first.state, fake: first.fake });
+  try {
+    for (const turn of first.fake.turns.values())
+      if (turn.prompt === 'Keep going.') turn.status = 'ended';
+    release();
+    await eventually(() => (goalState(restarted, goal.id) === 'COMPLETED' ? true : undefined));
+    assert.equal(first.fake.submits.filter((id) => id === `msg_${goal.id}`).length, 1);
+  } finally {
+    await restarted.close();
+  }
+});
+
+test('a transcript entry that changes takes the next revision in place', async () => {
+  const harnessed = await engineFor(complete({ count: 1 }));
+  try {
+    const sessionId = await retainedSession(harnessed);
+    const { repository } = harnessed.engine;
+    const before = (repository.transcript(sessionId, 0, 100) as unknown as TranscriptView).entries;
+    // Positions start at 1, so a page after 0 is the whole conversation.
+    assert.equal(before[0]!.position, 1);
+    const entry = { sourceKey: 'msg_live:0', turnMessageId: null, kind: 'assistant' as const };
+    assert.equal(repository.recordTranscript(sessionId, [{ ...entry, text: 'Working' }]), 1);
+    assert.equal(repository.recordTranscript(sessionId, [{ ...entry, text: 'Working' }]), 0);
+    assert.equal(repository.recordTranscript(sessionId, [{ ...entry, text: 'Working on it' }]), 1);
+    const after = (repository.transcript(sessionId, 0, 100) as unknown as TranscriptView).entries;
+    const live = after.filter((row) => row.sourceKey === 'msg_live:0');
+    assert.equal(live.length, 1);
+    assert.deepEqual(
+      [live[0]!.revision, live[0]!.text, live[0]!.position],
+      [2, 'Working on it', before.length + 1],
+    );
+    const page = repository.transcript(sessionId, 0, 1) as unknown as TranscriptView & {
+      next: number;
+    };
+    assert.equal(page.entries.length, 1);
+    assert.equal(page.next, page.entries[0]!.position);
   } finally {
     await harnessed.close();
   }

@@ -26,6 +26,7 @@ const options = {
   after: { type: 'string' },
   limit: { type: 'string' },
   all: { type: 'boolean' },
+  goal: { type: 'string' },
 } as const;
 
 type Values = {
@@ -247,6 +248,42 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
         (await get(`/api/v0/admin/sessions/${encodeURIComponent(need(target, 'SESSION_ID'))}`))[
           'session'
         ],
+      );
+    case 'session send': {
+      if (!values.goal) throw invalid('--goal is required.');
+      let invocation = (
+        await send(
+          'POST',
+          `/api/v0/admin/sessions/${encodeURIComponent(need(target, 'SESSION_ID'))}/goals`,
+          { goal: values.goal },
+        )
+      )['invocation'] as Record<string, unknown>;
+      // --wait follows the turn to its end; leaving does not stop it.
+      while (
+        values.wait &&
+        ['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN'].includes(String(invocation['state']))
+      ) {
+        await new Promise((done) => setTimeout(done, 1_000));
+        invocation = (await get(`/api/v0/admin/invocations/${String(invocation['id'])}`))[
+          'invocation'
+        ] as Record<string, unknown>;
+      }
+      return print(invocation);
+    }
+    case 'session transcript': {
+      const suffix = values.after === undefined ? '' : `?after=${encodeURIComponent(values.after)}`;
+      const { entries, next } = await get(
+        `/api/v0/admin/sessions/${encodeURIComponent(need(target, 'SESSION_ID'))}/transcript${suffix}`,
+      );
+      return print({ entries, next });
+    }
+    case 'invocation show':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/invocations/${encodeURIComponent(need(target, 'INVOCATION_ID'))}`,
+          )
+        )['invocation'],
       );
     case 'artifact list':
       return print(
