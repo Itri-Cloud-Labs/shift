@@ -139,6 +139,10 @@ test('the island keeps the latest entries and takes revisions in place', () => {
     ],
   );
   assert.equal(revised.dropped, 2);
+  // An older read that finishes last does not bring back the earlier revision.
+  const late = mergeTranscript(revised, [entry(5, 'entry 5'), entry(6)], 4);
+  assert.equal(late.entries.find((item) => item.position === 5)?.text, 'longer reply');
+  assert.equal(late.dropped, 2);
 });
 
 test('a report larger than its limit is cut off while it streams', async () => {

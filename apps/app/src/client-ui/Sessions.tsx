@@ -273,15 +273,19 @@ export async function readTranscript(
   return entries;
 }
 
-// Merges a fresh read into what is shown: an entry read again replaces its earlier revision, and
-// only the latest `keep` stay. `dropped` counts the earlier ones no longer shown.
+// Merges a fresh read into what is shown: an entry read again replaces an older revision, never a
+// newer one, and only the latest `keep` stay. `dropped` counts the earlier ones no longer shown.
 export function mergeTranscript(
   shown: { entries: Entry[]; dropped: number },
   read: Entry[],
   keep = transcriptKeep,
 ): { entries: Entry[]; dropped: number } {
   const byPosition = new Map(shown.entries.map((entry) => [entry.position, entry]));
-  for (const entry of read) byPosition.set(entry.position, entry);
+  // Reads can finish out of order, so an entry never goes back to an older revision.
+  for (const entry of read) {
+    const known = byPosition.get(entry.position);
+    if (!known || entry.revision > known.revision) byPosition.set(entry.position, entry);
+  }
   const all = [...byPosition.values()].sort((a, b) => a.position - b.position);
   const cut = Math.max(0, all.length - keep);
   return { entries: all.slice(cut), dropped: shown.dropped + cut };
