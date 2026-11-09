@@ -1449,6 +1449,95 @@ test('an owner goal left running across a restart finishes without being sent ag
   }
 });
 
+test('an owner goal keeps its session until the harness shows the turn stopped', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Ask me something.') turn.status = 'prompt';
+    else await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const sessionId = await retainedSession(harnessed);
+    // The harness cannot be inspected for a while: the goal stays active and keeps the session.
+    const inspect = harnessed.fake.inspectInvocation.bind(harnessed.fake);
+    let failing = true;
+    harnessed.fake.inspectInvocation = async (handle, correlation) => {
+      if (failing) throw new ShiftError('HARNESS_UNAVAILABLE', 'The runtime did not respond.', 503);
+      return inspect(handle, correlation);
+    };
+    // Its stop is not confirmed either.
+    harnessed.fake.confirmCancel = false;
+    const goal = sendGoal(harnessed, sessionId, 'Ask me something.');
+    await delay(400);
+    assert.equal(goalState(harnessed, goal.id), 'SUBMITTING');
+    failing = false;
+    await eventually(() => (goalState(harnessed, goal.id) === 'RUNNING' ? true : undefined));
+    // Waiting on a harness prompt whose stop is unconfirmed: still the owner.
+    await delay(300);
+    assert.equal(goalState(harnessed, goal.id), 'RUNNING');
+    assert.throws(() => sendGoal(harnessed, sessionId, 'Me too.'), { code: 'SESSION_BUSY' });
+    const runId = await start(harnessed, {
+      session: { strategy: 'reference', reference: sessionId },
+    });
+    await eventually(() => (view(harnessed, runId).wait?.kind === 'resource' ? true : undefined));
+    // Once the stop is confirmed, the goal fails with the prompt and the run takes the session.
+    harnessed.fake.confirmCancel = true;
+    await eventually(() => (goalState(harnessed, goal.id) === 'FAILED' ? true : undefined));
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a failed submit is retried by the same driver, without a restart', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Try twice.') turn.status = 'ended';
+    else await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const sessionId = await retainedSession(harnessed);
+    const submit = harnessed.fake.submit.bind(harnessed.fake);
+    let failures = 1;
+    harnessed.fake.submit = async (handle, request) => {
+      if (failures-- > 0)
+        throw new ShiftError('HARNESS_START_FAILED', 'The runtime did not start.', 503);
+      return submit(handle, request);
+    };
+    const goal = sendGoal(harnessed, sessionId, 'Try twice.');
+    await eventually(() => (goalState(harnessed, goal.id) === 'COMPLETED' ? true : undefined));
+    assert.equal(harnessed.fake.submits.filter((id) => id === `msg_${goal.id}`).length, 1);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a goal found queued after a restart waits an interval before it is woken', async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const first = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Queue me.') await held;
+    else await complete({ count: 1 })(turn, fake);
+  });
+  const sessionId = await retainedSession(first);
+  const goal = sendGoal(first, sessionId, 'Queue me.');
+  await eventually(() => (goalState(first, goal.id) === 'RUNNING' ? true : undefined));
+  await first.close();
+  // The harness reports the prompt as still queued when Shift comes back.
+  for (const turn of first.fake.turns.values())
+    if (turn.prompt === 'Queue me.') turn.status = 'queued';
+  const restarted = await engineFor(() => {}, { state: first.state, fake: first.fake });
+  try {
+    await delay(1_000);
+    assert.equal(
+      first.fake.submits.filter((id) => id === `msg_${goal.id}`).length,
+      1,
+      'not woken at once',
+    );
+    release();
+  } finally {
+    release();
+    await restarted.close();
+  }
+});
+
 test('a transcript entry that changes takes the next revision in place', async () => {
   const harnessed = await engineFor(complete({ count: 1 }));
   try {

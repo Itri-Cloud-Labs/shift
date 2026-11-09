@@ -800,6 +800,11 @@ export class RunEngine {
       })
       .finally(() => {
         this.#tasks.delete(key);
+        // A driver that failed unexpectedly leaves its goal active; another takes it up.
+        if (!this.#stopping && !controller.signal.aborted) {
+          const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
+          if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
+        }
         this.#pump();
       });
     this.#tasks.set(key, { controller, done });
