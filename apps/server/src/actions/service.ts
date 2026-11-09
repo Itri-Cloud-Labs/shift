@@ -321,8 +321,11 @@ export class ActionService {
       });
     if (config.action === 'http') {
       const headers: Record<string, string> = {};
+      const raw: string[] = [];
       for (const [name, ref] of Object.entries(config.credentialHeaders)) {
-        const value = `${ref.prefix}${secret(ref.credential)}`;
+        const credential = secret(ref.credential);
+        raw.push(credential);
+        const value = `${ref.prefix}${credential}`;
         if (/[\r\n\0]/.test(value))
           throw new ShiftError(
             'INVALID_ARGUMENT',
@@ -331,7 +334,7 @@ export class ActionService {
           );
         headers[name] = value;
       }
-      return sendRequest(config, headers, signal, () => submit(), this.#options.fetch);
+      return sendRequest(config, headers, raw, signal, () => submit(), this.#options.fetch);
     }
     const runner = this.#options.runner;
     if (!runner || !(await runner.available()))

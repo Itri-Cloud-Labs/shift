@@ -57,12 +57,14 @@ async function readCapped(
 
 export async function sendRequest(
   config: HttpConfig,
+  // Credential headers to send, and the raw credential values to keep out of what is recorded.
   secrets: Record<string, string>,
+  raw: readonly string[],
   signal: AbortSignal,
   submit: () => void,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Outcome> {
-  const values = Object.values(secrets);
+  const values = [...raw, ...Object.values(secrets)];
   const headers = new Headers();
   for (const [name, value] of Object.entries(config.headers)) headers.set(name, value);
   for (const [name, value] of Object.entries(secrets)) headers.set(name, value);

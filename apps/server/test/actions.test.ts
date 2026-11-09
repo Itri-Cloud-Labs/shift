@@ -489,6 +489,13 @@ test(
     const env = await setup();
     const http = await listen((req) => {
       if (req.url === '/ok') return [200, { 'content-type': 'application/json' }, '{"n":2}'];
+      // Echoes the token it was given without its prefix, as a careless API might.
+      if (req.url === '/echo')
+        return [
+          200,
+          { 'content-type': 'text/plain', 'x-seen': String(req.headers['authorization']).slice(7) },
+          `seen ${String(req.headers['authorization']).slice(7)}`,
+        ];
       if (req.url === '/big') return [200, { 'content-type': 'text/plain' }, 'x'.repeat(5000)];
       if (req.url === '/fail') return [503, { 'content-type': 'text/plain' }, 'down'];
       return null;
@@ -528,6 +535,27 @@ test(
         false,
       );
 
+      const echoed = await settled(
+        env,
+        await run(
+          env,
+          actionWorkflow('http', {
+            url: `${http.url}/echo`,
+            credentialHeaders: { authorization: { credential: 'api', prefix: 'Bearer ' } },
+          }),
+        ),
+      );
+      assert.equal(echoed.outcome!.data!['body'], 'seen [redacted]');
+      assert.equal(
+        (echoed.outcome!.data!['headers'] as Record<string, string>)['x-seen'],
+        '[redacted]',
+      );
+      assert.equal(
+        JSON.stringify(env.store.db.prepare('SELECT * FROM node_executions').all()).includes(
+          'tok-123456',
+        ),
+        false,
+      );
       const invalid = await settled(
         env,
         await run(
