@@ -607,3 +607,33 @@ test('report requirements and handoff sources are checked at publish', () => {
   ]);
   assert.equal(problems({ reports: { handoff: 'sometimes' } }).length, 1);
 });
+
+test('session strategies are checked at publish', () => {
+  const problems = (session: Record<string, unknown>) =>
+    diagnose(
+      normalizeDocument({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          { id: 'agent', type: 'agent', config: { goal: 'Work.', session } },
+        ],
+        connections: [],
+      }),
+    ).map((item) => `${item.path}: ${item.message}`);
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  assert.deepEqual(problems({ strategy: 'per_run', lifetime: 'persistent' }), []);
+  assert.deepEqual(problems({ strategy: 'fresh', lifetime: 'ephemeral' }), []);
+  assert.deepEqual(problems({ strategy: 'reference', reference: id }), []);
+  assert.deepEqual(problems({ strategy: 'per_run', lifetime: 'ephemeral' }), [
+    '/nodes/1/config/session/lifetime: An ephemeral session needs the fresh strategy.',
+  ]);
+  assert.deepEqual(problems({ strategy: 'reference' }), [
+    '/nodes/1/config/session/reference: A reference session needs the session it uses.',
+  ]);
+  assert.deepEqual(problems({ reference: id }), [
+    '/nodes/1/config/session/reference: Only the reference strategy names a session.',
+  ]);
+  assert.deepEqual(problems({ strategy: 'reference', reference: id, lifetime: 'persistent' }), [
+    '/nodes/1/config/session/lifetime: A referenced session keeps its own lifetime.',
+  ]);
+  assert.equal(problems({ strategy: 'reference', reference: 'not-a-session' }).length, 1);
+});

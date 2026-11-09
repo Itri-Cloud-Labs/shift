@@ -22,6 +22,7 @@ import {
   type AgentConfig,
   type Claim,
   type ExecutionContext,
+  type SessionPolicy,
   type FrozenInteraction,
   type RunSnapshot,
 } from './repository.js';
@@ -657,6 +658,11 @@ export class RunEngine {
         limits?: Partial<AgentConfig['limits']>;
         reports?: Partial<NonNullable<AgentConfig['reports']>>;
         handoffs?: { incoming?: boolean; nodes?: string[] };
+        session?: {
+          strategy?: 'fresh' | 'per_run' | 'reference';
+          lifetime?: 'persistent' | 'ephemeral';
+          reference?: string;
+        };
       };
       const model = authored.model ?? snapshot.defaults.model;
       if (!model) {
@@ -667,9 +673,20 @@ export class RunEngine {
         );
       }
       // Agents work in the run's worktree; runs admitted before workspaces keep the repository.
+      // A referenced session cannot move, so its agent works in that session's own workspace.
       const { baseCommit, id: projectId } = snapshot.project;
-      const workspace =
-        baseCommit !== undefined && projectId !== null
+      const policy: SessionPolicy =
+        authored.session?.strategy === 'reference'
+          ? { strategy: 'reference', sessionId: authored.session.reference! }
+          : {
+              strategy: authored.session?.strategy ?? 'fresh',
+              lifetime: authored.session?.lifetime ?? 'persistent',
+            };
+      const referenced =
+        policy.strategy === 'reference' ? this.#referenced(policy.sessionId, projectId) : null;
+      const workspace = referenced
+        ? { id: referenced.workspaceId, path: referenced.cwd }
+        : baseCommit !== undefined && projectId !== null
           ? this.#options.workspaces.allocate({
               runId: claim.runId,
               projectId,
@@ -681,7 +698,8 @@ export class RunEngine {
       const resolved: AgentConfig = {
         goal: renderText(authored.goal, bindings),
         cwd: workspace?.path ?? snapshot.project.repositoryPath,
-        ...(workspace ? { workspaceId: workspace.id } : {}),
+        ...(workspace?.id ? { workspaceId: workspace.id } : {}),
+        session: policy,
         model: parseModel(model),
         toolPolicy: { mode: authored.readOnly ? 'read_only' : 'workspace_write' },
         resultSchema: authored.resultSchema ?? defaultResultSchema,
@@ -699,6 +717,25 @@ export class RunEngine {
     }
     this.repository.prepareExecution(claim, { config, bindings, sources });
     return { ...context, config, bindings };
+  }
+
+  // A referenced session must be this project's, persistent and not archived, in a workspace that
+  // still exists. Anything else is the author's choice to fix, not something a retry changes.
+  #referenced(
+    sessionId: string,
+    projectId: string | null,
+  ): { workspaceId: string | null; cwd: string } {
+    const session = this.repository.referencedSession(sessionId);
+    const refuse = (message: string) => {
+      throw new ShiftError('SESSION_UNAVAILABLE', message, 422);
+    };
+    if (!session || session.projectId !== projectId)
+      return refuse(`This project has no session ${sessionId}.`);
+    if (session.lifetime !== 'persistent' || session.state === 'ARCHIVED')
+      return refuse(`Session ${sessionId} was archived and takes no more goals.`);
+    if (session.workspaceId !== null && session.workspaceState !== 'READY')
+      return refuse(`The workspace of session ${sessionId} no longer exists.`);
+    return { workspaceId: session.workspaceId, cwd: session.cwd };
   }
 
   #fail(claim: Claim, error: unknown): void {

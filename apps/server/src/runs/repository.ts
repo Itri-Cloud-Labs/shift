@@ -44,6 +44,8 @@ export interface AgentConfig {
   toolPolicy: ToolPolicy;
   resultSchema: Json;
   limits: { rejectedSubmissions: number; corrections: number; continuations: number };
+  // Missing from configurations frozen before strategies existed; those used fresh sessions.
+  session?: SessionPolicy;
   // Missing from configurations frozen before reports existed; those need no reports.
   reports?: { handoff: ReportRequirement; humanReport: ReportRequirement };
   // Handoff artifacts the agent reads, frozen with the node that produced each.
@@ -51,6 +53,10 @@ export interface AgentConfig {
 }
 
 export type ReportRequirement = 'required' | 'optional' | 'off';
+
+export type SessionPolicy =
+  | { strategy: 'fresh' | 'per_run'; lifetime: 'persistent' | 'ephemeral' }
+  | { strategy: 'reference'; sessionId: string };
 
 export type InvocationKind = 'goal' | 'correction' | 'continuation';
 export type InvocationState =
@@ -129,7 +135,15 @@ export type RunWait =
       error: { code: string; message: string };
     }
   | { kind: 'timer'; executionId: string; dueAt: number }
-  | { kind: 'human'; executionId: string; interactionId: string; expiresAt: number | null };
+  | { kind: 'human'; executionId: string; interactionId: string; expiresAt: number | null }
+  // An agent waits, queued, for the session or workspace another execution holds.
+  | {
+      kind: 'resource';
+      executionId: string;
+      resourceType: string;
+      resourceId: string;
+      heldBy: string | null;
+    };
 
 // A Human Input or Approval request as frozen when its execution was prepared.
 export interface FrozenInteraction {
@@ -528,6 +542,7 @@ export class RunRepository {
           .prepare("SELECT run_id FROM node_executions WHERE id = ? AND state = 'PENDING'")
           .get(executionId) as { run_id: string } | undefined;
         if (!execution) return null;
+        if (!this.#acquire(executionId)) return null;
         const attemptId = randomUUID();
         const now = this.clock.now();
         // An owner retry reopens the execution; its next attempt keeps the earlier ones in history.
@@ -770,6 +785,104 @@ export class RunRepository {
     ).map((row) => ({ id: row.id, storageKey: row.storage_key, sizeBytes: row.size_bytes }));
   }
 
+  // A project's sessions, newest first, or every session.
+  sessions(projectId?: string): Json[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM agent_sessions ${projectId ? 'WHERE project_id = ?' : ''} ORDER BY created_at DESC, rowid DESC LIMIT 500`,
+      )
+      .all(...(projectId ? [projectId] : [])) as Array<{ id: string }>;
+    return rows.map((row) => this.#sessionSummary(row.id));
+  }
+
+  // One session with the executions that used it and its invocations, oldest first.
+  sessionDetail(id: string): Json {
+    const summary = this.#sessionSummary(id) as Record<string, Json>;
+    const executions = this.db
+      .prepare(
+        'SELECT id, run_id, node_id, sequence, state FROM node_executions WHERE agent_session_id = ? ORDER BY started_at, rowid',
+      )
+      .all(id) as Array<{
+      id: string;
+      run_id: string;
+      node_id: string;
+      sequence: number;
+      state: string;
+    }>;
+    const invocations = this.db
+      .prepare(
+        'SELECT id, execution_id, kind, state, created_at, finished_at FROM agent_invocations WHERE agent_session_id = ? ORDER BY created_at, rowid',
+      )
+      .all(id) as Array<{
+      id: string;
+      execution_id: string | null;
+      kind: string;
+      state: string;
+      created_at: number;
+      finished_at: number | null;
+    }>;
+    return {
+      ...summary,
+      executions: executions.map((row) => ({
+        id: row.id,
+        runId: row.run_id,
+        nodeId: row.node_id,
+        sequence: row.sequence,
+        state: row.state,
+      })),
+      invocations: invocations.map((row) => ({
+        id: row.id,
+        executionId: row.execution_id,
+        kind: row.kind,
+        state: row.state,
+        createdAt: row.created_at,
+        finishedAt: row.finished_at,
+      })),
+    };
+  }
+
+  #sessionSummary(id: string): Json {
+    const row = this.db
+      .prepare(
+        "SELECT s.*, h.harness_session_id, h.state AS harness_state, (SELECT c.execution_id FROM resource_claims c JOIN node_executions e ON e.id = c.execution_id JOIN runs r ON r.id = e.run_id WHERE c.resource_type = 'session' AND c.resource_id = s.id AND e.state IN ('PENDING', 'RUNNING', 'WAITING') AND r.state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')) AS held_by FROM agent_sessions s LEFT JOIN harness_sessions h ON h.agent_session_id = s.id WHERE s.id = ?",
+      )
+      .get(id) as
+      | {
+          id: string;
+          project_id: string | null;
+          workspace_id: string | null;
+          node_id: string | null;
+          created_by_run_id: string | null;
+          harness_id: string;
+          cwd: string;
+          lifetime: string;
+          state: string;
+          created_at: number;
+          archived_at: number | null;
+          harness_session_id: string | null;
+          harness_state: string | null;
+          held_by: string | null;
+        }
+      | undefined;
+    if (!row) throw new ShiftError('SESSION_NOT_FOUND', 'Session not found.', 404);
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      workspaceId: row.workspace_id,
+      nodeId: row.node_id,
+      createdByRunId: row.created_by_run_id,
+      harness: row.harness_id,
+      harnessSessionId: row.harness_session_id,
+      mapping: row.harness_state ?? 'MISSING',
+      cwd: row.cwd,
+      lifetime: row.lifetime,
+      state: row.state,
+      heldBy: row.held_by,
+      createdAt: row.created_at,
+      archivedAt: row.archived_at,
+    };
+  }
+
   // Current values and every revision, oldest first, with the execution that wrote each.
   variableHistory(runId: string): Json {
     if (!this.db.prepare('SELECT 1 FROM runs WHERE id = ?').get(runId))
@@ -916,15 +1029,30 @@ export class RunRepository {
   // is reconciled by repeating the idempotent harness creation.
   bindSession(
     claim: Claim,
-    session: { harnessId: string; cwd: string; config: Json; storageNamespace: string },
+    session: {
+      harnessId: string;
+      cwd: string;
+      config: Json;
+      storageNamespace: string;
+      lifetime: 'persistent' | 'ephemeral';
+      workspaceId: string | null;
+      // Set for a per-run session: later visits of this node in the run reuse it.
+      perRun: boolean;
+    },
   ): SessionRow {
     return this.db
       .transaction(() => {
         this.#fenced(claim);
         const agentSessionId = randomUUID();
+        const now = this.clock.now();
+        const { node_id: nodeId, project_id: projectId } = this.db
+          .prepare(
+            'SELECT e.node_id, r.project_id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.id = ?',
+          )
+          .get(claim.executionId) as { node_id: string; project_id: string | null };
         this.db
           .prepare(
-            "INSERT INTO agent_sessions (id, created_by_run_id, harness_id, cwd, config_json, lifetime, state, created_at, revision) VALUES (?, ?, ?, ?, ?, 'ephemeral', 'CREATING', ?, 0)",
+            "INSERT INTO agent_sessions (id, created_by_run_id, harness_id, cwd, config_json, lifetime, state, created_at, revision, project_id, workspace_id, node_id) VALUES (?, ?, ?, ?, ?, ?, 'CREATING', ?, 0, ?, ?, ?)",
           )
           .run(
             agentSessionId,
@@ -932,8 +1060,24 @@ export class RunRepository {
             session.harnessId,
             session.cwd,
             JSON.stringify(session.config),
-            this.clock.now(),
+            session.lifetime,
+            now,
+            projectId,
+            session.workspaceId,
+            nodeId,
           );
+        if (session.perRun)
+          this.db
+            .prepare(
+              'INSERT INTO run_session_bindings (run_id, node_id, agent_session_id, created_at) VALUES (?, ?, ?, ?)',
+            )
+            .run(claim.runId, nodeId, agentSessionId, now);
+        // A new session has no other holder.
+        this.db
+          .prepare(
+            "INSERT INTO resource_claims (resource_type, resource_id, execution_id, claimed_at) VALUES ('session', ?, ?, ?)",
+          )
+          .run(agentSessionId, claim.executionId, now);
         this.db
           .prepare(
             "INSERT INTO harness_sessions (id, agent_session_id, adapter_version, storage_namespace, state) VALUES (?, ?, ?, ?, 'CREATING')",
@@ -958,6 +1102,231 @@ export class RunRepository {
         };
       })
       .immediate();
+  }
+
+  // Binds this execution to an existing session: a per-run session on a later visit, or a
+  // referenced one. Its claim was taken when the attempt started.
+  useSession(claim: Claim, agentSessionId: string): SessionRow {
+    return this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        const held = this.db
+          .prepare(
+            "SELECT 1 FROM resource_claims WHERE resource_type = 'session' AND resource_id = ? AND execution_id = ?",
+          )
+          .get(agentSessionId, claim.executionId);
+        if (!held)
+          throw new ShiftError('INTERNAL_ERROR', 'The execution does not hold its session.');
+        this.db
+          .prepare(
+            'UPDATE node_executions SET agent_session_id = ?, revision = revision + 1 WHERE id = ? AND agent_session_id IS NULL',
+          )
+          .run(agentSessionId, claim.executionId);
+        this.db
+          .prepare(
+            "UPDATE agent_sessions SET state = 'BUSY', revision = revision + 1 WHERE id = ? AND state != 'ARCHIVED'",
+          )
+          .run(agentSessionId);
+        this.#event(
+          'session.bound',
+          { runId: claim.runId, executionId: claim.executionId, sessionId: agentSessionId },
+          { reused: true },
+        );
+        return this.session(claim.executionId)!;
+      })
+      .immediate();
+  }
+
+  // The session a node reuses in this run, once its first visit created it.
+  perRunSession(runId: string, nodeId: string): string | null {
+    const row = this.db
+      .prepare('SELECT agent_session_id FROM run_session_bindings WHERE run_id = ? AND node_id = ?')
+      .get(runId, nodeId) as { agent_session_id: string } | undefined;
+    return row?.agent_session_id ?? null;
+  }
+
+  // A project session as a reference sees it, or null when no session has this ID.
+  referencedSession(id: string): {
+    projectId: string | null;
+    workspaceId: string | null;
+    workspaceState: string | null;
+    workspacePath: string | null;
+    cwd: string;
+    lifetime: 'persistent' | 'ephemeral';
+    state: string;
+  } | null {
+    const row = this.db
+      .prepare(
+        'SELECT s.project_id, s.workspace_id, s.cwd, s.lifetime, s.state, w.state AS workspace_state, w.path AS workspace_path FROM agent_sessions s LEFT JOIN workspaces w ON w.id = s.workspace_id WHERE s.id = ?',
+      )
+      .get(id) as
+      | {
+          project_id: string | null;
+          workspace_id: string | null;
+          cwd: string;
+          lifetime: 'persistent' | 'ephemeral';
+          state: string;
+          workspace_state: string | null;
+          workspace_path: string | null;
+        }
+      | undefined;
+    return row
+      ? {
+          projectId: row.project_id,
+          workspaceId: row.workspace_id,
+          workspaceState: row.workspace_state,
+          workspacePath: row.workspace_path,
+          cwd: row.cwd,
+          lifetime: row.lifetime,
+          state: row.state,
+        }
+      : null;
+  }
+
+  // The session and workspace an agent execution must hold before it starts: its own session on
+  // a later attempt, a per-run session on a later visit, or a referenced one; and that session's
+  // workspace when it belongs to another run. A fresh or first per-run session is new, so it
+  // needs nothing yet.
+  #targets(executionId: string): Array<{ type: 'session' | 'workspace'; id: string }> {
+    const row = this.db
+      .prepare(
+        'SELECT e.run_id, e.node_id, e.node_type, e.agent_session_id, e.config_json, r.snapshot_json FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.id = ?',
+      )
+      .get(executionId) as {
+      run_id: string;
+      node_id: string;
+      node_type: string | null;
+      agent_session_id: string | null;
+      config_json: string | null;
+      snapshot_json: string;
+    };
+    if ((row.node_type ?? row.node_id) !== 'agent') return [];
+    let sessionId = row.agent_session_id;
+    if (!sessionId) {
+      const snapshot = upgradeSnapshot(
+        JSON.parse(row.snapshot_json) as RunSnapshot | LegacySnapshot,
+      );
+      const node = snapshot.document.nodes.find((candidate) => candidate.id === row.node_id);
+      const policy = (node?.config as { session?: { strategy?: string; reference?: string } })
+        ?.session;
+      if (policy?.strategy === 'reference' && policy.reference) sessionId = policy.reference;
+      else if (policy?.strategy === 'per_run')
+        sessionId = this.perRunSession(row.run_id, row.node_id);
+    }
+    if (!sessionId) return [];
+    const session = this.db
+      .prepare(
+        'SELECT s.workspace_id, w.created_by_run_id FROM agent_sessions s LEFT JOIN workspaces w ON w.id = s.workspace_id WHERE s.id = ?',
+      )
+      .get(sessionId) as
+      { workspace_id: string | null; created_by_run_id: string | null } | undefined;
+    // An unknown reference fails when the execution is prepared.
+    if (!session) return [];
+    // The workspace first: a fixed acquisition order cannot deadlock.
+    return [
+      ...(session.workspace_id && session.created_by_run_id !== row.run_id
+        ? [{ type: 'workspace' as const, id: session.workspace_id }]
+        : []),
+      { type: 'session' as const, id: sessionId },
+    ];
+  }
+
+  // A holder counts while its execution can still use the resource: not finished, in a run that
+  // has not ended. Claims of finished work are released lazily, so no exit path can leak one.
+  #heldByOther(type: string, id: string, executionId: string): string | null {
+    const holder = this.db
+      .prepare(
+        "SELECT c.execution_id FROM resource_claims c JOIN node_executions e ON e.id = c.execution_id JOIN runs r ON r.id = e.run_id WHERE c.resource_type = ? AND c.resource_id = ? AND e.state IN ('PENDING', 'RUNNING', 'WAITING') AND r.state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+      )
+      .get(type, id) as { execution_id: string } | undefined;
+    return holder && holder.execution_id !== executionId ? holder.execution_id : null;
+  }
+
+  #workspaceRunActive(workspaceId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "SELECT 1 FROM workspaces w JOIN runs r ON r.id = w.created_by_run_id WHERE w.id = ? AND r.state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+        )
+        .get(workspaceId) !== undefined
+    );
+  }
+
+  // Takes every resource the execution needs, or none and joins the queue. Waiters are served in
+  // the order they asked; a waiter whose run is not running does not hold the line. Called inside
+  // the claiming transaction.
+  #acquire(executionId: string): boolean {
+    const targets = this.#targets(executionId);
+    if (targets.length === 0) return true;
+    const now = this.clock.now();
+    const holds = this.db.prepare(
+      'SELECT 1 FROM resource_claims WHERE resource_type = ? AND resource_id = ? AND execution_id = ?',
+    );
+    const blocked = targets.find((target) => {
+      // An execution that already holds a resource keeps it: a retry after a backoff or an owner
+      // retry resumes its own work and never queues behind executions waiting for that claim.
+      if (holds.get(target.type, target.id, executionId)) return false;
+      if (this.#heldByOther(target.type, target.id, executionId)) return true;
+      // The run that created a workspace works in it without claims until it ends.
+      if (target.type === 'workspace' && this.#workspaceRunActive(target.id)) return true;
+      const ahead = this.db
+        .prepare(
+          "SELECT 1 FROM resource_queue q JOIN node_executions e ON e.id = q.execution_id JOIN runs r ON r.id = e.run_id WHERE q.resource_type = ? AND q.resource_id = ? AND q.execution_id != ? AND q.sequence < COALESCE((SELECT sequence FROM resource_queue WHERE execution_id = ?), 9223372036854775807) AND e.state = 'PENDING' AND r.state = 'RUNNING'",
+        )
+        .get(target.type, target.id, executionId, executionId);
+      return ahead !== undefined;
+    });
+    if (blocked) {
+      const queued = this.db
+        .prepare('SELECT resource_type, resource_id FROM resource_queue WHERE execution_id = ?')
+        .get(executionId) as { resource_type: string; resource_id: string } | undefined;
+      if (!queued) {
+        this.db
+          .prepare(
+            'INSERT INTO resource_queue (execution_id, resource_type, resource_id, requested_at) VALUES (?, ?, ?, ?)',
+          )
+          .run(executionId, blocked.type, blocked.id, now);
+        const { run_id: runId } = this.db
+          .prepare('SELECT run_id FROM node_executions WHERE id = ?')
+          .get(executionId) as { run_id: string };
+        this.#event(
+          'execution.queued',
+          { runId, executionId },
+          { resourceType: blocked.type, resourceId: blocked.id },
+        );
+      }
+      return false;
+    }
+    for (const target of targets)
+      this.db
+        .prepare(
+          'INSERT INTO resource_claims (resource_type, resource_id, execution_id, claimed_at) VALUES (?, ?, ?, ?) ON CONFLICT (resource_type, resource_id) DO UPDATE SET execution_id = excluded.execution_id, claimed_at = excluded.claimed_at',
+        )
+        .run(target.type, target.id, executionId, now);
+    this.db.prepare('DELETE FROM resource_queue WHERE execution_id = ?').run(executionId);
+    return true;
+  }
+
+  // What a queued execution waits for, for the run view.
+  #queued(runId: string): {
+    executionId: string;
+    resourceType: string;
+    resourceId: string;
+    heldBy: string | null;
+  } | null {
+    const row = this.db
+      .prepare(
+        "SELECT q.execution_id, q.resource_type, q.resource_id FROM resource_queue q JOIN node_executions e ON e.id = q.execution_id WHERE e.run_id = ? AND e.state = 'PENDING'",
+      )
+      .get(runId) as
+      { execution_id: string; resource_type: string; resource_id: string } | undefined;
+    if (!row) return null;
+    return {
+      executionId: row.execution_id,
+      resourceType: row.resource_type,
+      resourceId: row.resource_id,
+      heldBy: this.#heldByOther(row.resource_type, row.resource_id, row.execution_id),
+    };
   }
 
   markSessionReady(claim: Claim, handle: HarnessSessionHandle): void {
@@ -1249,6 +1618,13 @@ export class RunRepository {
         "UPDATE agent_sessions SET state = 'ARCHIVED', archived_at = ?, revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?) AND lifetime = 'ephemeral'",
       )
       .run(now, claim.executionId);
+    // A persistent session outlives its execution and waits, idle, for its next goal.
+    this.db
+      .prepare(
+        "UPDATE agent_sessions SET state = 'IDLE', revision = revision + 1 WHERE id = (SELECT agent_session_id FROM node_executions WHERE id = ?) AND state = 'BUSY'",
+      )
+      .run(claim.executionId);
+    this.db.prepare('DELETE FROM resource_claims WHERE execution_id = ?').run(claim.executionId);
     this.#event(
       completed ? 'execution.completed' : 'execution.failed',
       { runId: claim.runId, executionId: claim.executionId },
@@ -2431,26 +2807,29 @@ export class RunRepository {
       )
       .get(runId) as
       { execution_id: string; reason: string; due_at: number; payload_json: string } | undefined;
-    const wait: RunWait | null = pendingInteraction
-      ? {
-          kind: 'human',
-          executionId: pendingInteraction.execution_id,
-          interactionId: pendingInteraction.id,
-          expiresAt: pendingInteraction.expires_at,
-        }
-      : !wakeup
-        ? null
-        : wakeup.reason === 'retry'
-          ? {
-              kind: 'retry',
-              executionId: wakeup.execution_id,
-              dueAt: wakeup.due_at,
-              ...(JSON.parse(wakeup.payload_json) as {
-                attempt: number;
-                error: { code: string; message: string };
-              }),
-            }
-          : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
+    const queued = run.state === 'RUNNING' ? this.#queued(runId) : null;
+    const wait: RunWait | null = queued
+      ? { kind: 'resource', ...queued }
+      : pendingInteraction
+        ? {
+            kind: 'human',
+            executionId: pendingInteraction.execution_id,
+            interactionId: pendingInteraction.id,
+            expiresAt: pendingInteraction.expires_at,
+          }
+        : !wakeup
+          ? null
+          : wakeup.reason === 'retry'
+            ? {
+                kind: 'retry',
+                executionId: wakeup.execution_id,
+                dueAt: wakeup.due_at,
+                ...(JSON.parse(wakeup.payload_json) as {
+                  attempt: number;
+                  error: { code: string; message: string };
+                }),
+              }
+            : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,

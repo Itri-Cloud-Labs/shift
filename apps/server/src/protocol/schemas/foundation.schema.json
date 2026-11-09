@@ -103,6 +103,12 @@
       "$ref": "#/$defs/ArtifactResponse"
     },
     {
+      "$ref": "#/$defs/SessionList"
+    },
+    {
+      "$ref": "#/$defs/SessionResponse"
+    },
+    {
       "$ref": "#/$defs/Event"
     },
     {
@@ -1896,6 +1902,308 @@
         },
         "artifact": {
           "$ref": "#/$defs/Artifact"
+        }
+      }
+    },
+    "AgentSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "workspaceId",
+        "nodeId",
+        "createdByRunId",
+        "harness",
+        "harnessSessionId",
+        "mapping",
+        "cwd",
+        "lifetime",
+        "state",
+        "heldBy",
+        "createdAt",
+        "archivedAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nodeId": {
+          "type": ["string", "null"],
+          "maxLength": 100
+        },
+        "createdByRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "harnessSessionId": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "mapping": {
+          "enum": ["CREATING", "READY", "MISSING"]
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "lifetime": {
+          "enum": ["persistent", "ephemeral"]
+        },
+        "state": {
+          "enum": ["CREATING", "IDLE", "BUSY", "BLOCKED", "UNAVAILABLE", "ARCHIVED"]
+        },
+        "heldBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "archivedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "AgentSessionDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "workspaceId",
+        "nodeId",
+        "createdByRunId",
+        "harness",
+        "harnessSessionId",
+        "mapping",
+        "cwd",
+        "lifetime",
+        "state",
+        "heldBy",
+        "createdAt",
+        "archivedAt",
+        "executions",
+        "invocations"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workspaceId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nodeId": {
+          "type": ["string", "null"],
+          "maxLength": 100
+        },
+        "createdByRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "harnessSessionId": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "mapping": {
+          "enum": ["CREATING", "READY", "MISSING"]
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "lifetime": {
+          "enum": ["persistent", "ephemeral"]
+        },
+        "state": {
+          "enum": ["CREATING", "IDLE", "BUSY", "BLOCKED", "UNAVAILABLE", "ARCHIVED"]
+        },
+        "heldBy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "archivedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "executions": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "runId", "nodeId", "sequence", "state"],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "runId": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "nodeId": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 20
+              }
+            }
+          }
+        },
+        "invocations": {
+          "type": "array",
+          "maxItems": 100000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "executionId", "kind", "state", "createdAt", "finishedAt"],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "executionId": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Uuid"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kind": {
+                "enum": ["goal", "correction", "continuation"]
+              },
+              "state": {
+                "type": "string",
+                "maxLength": 20
+              },
+              "createdAt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "finishedAt": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "SessionList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "sessions"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "sessions": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/AgentSession"
+          }
+        }
+      }
+    },
+    "SessionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "session"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "session": {
+          "$ref": "#/$defs/AgentSessionDetail"
         }
       }
     }

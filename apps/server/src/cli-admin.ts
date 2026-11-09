@@ -234,6 +234,20 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);
+    case 'session list':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/sessions${values.project ? `?projectId=${encodeURIComponent(values.project)}` : ''}`,
+          )
+        )['sessions'],
+      );
+    case 'session show':
+      return print(
+        (await get(`/api/v0/admin/sessions/${encodeURIComponent(need(target, 'SESSION_ID'))}`))[
+          'session'
+        ],
+      );
     case 'artifact list':
       return print(
         (await get(`/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/artifacts`))[

@@ -463,6 +463,21 @@ export function diagnose(document: unknown): Diagnostic[] {
       }
     }
     if (node.type === 'agent') {
+      const session = (config['session'] ?? {}) as {
+        strategy?: string;
+        lifetime?: string;
+        reference?: string;
+      };
+      const strategy = session.strategy ?? 'fresh';
+      // v0 archives an ephemeral session when its execution ends, so only a fresh one can be.
+      if (session.lifetime === 'ephemeral' && strategy !== 'fresh')
+        add(`${at}/config/session/lifetime`, 'An ephemeral session needs the fresh strategy.');
+      if (strategy === 'reference' && session.reference === undefined)
+        add(`${at}/config/session/reference`, 'A reference session needs the session it uses.');
+      if (strategy !== 'reference' && session.reference !== undefined)
+        add(`${at}/config/session/reference`, 'Only the reference strategy names a session.');
+      if (strategy === 'reference' && session.lifetime !== undefined)
+        add(`${at}/config/session/lifetime`, 'A referenced session keeps its own lifetime.');
       const named = (config['handoffs'] as { nodes?: string[] } | undefined)?.nodes ?? [];
       named.forEach((nodeId, index) => {
         const other = doc.nodes.find((candidate) => candidate.id === nodeId);

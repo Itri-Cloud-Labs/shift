@@ -27,6 +27,8 @@ import type {
   RunVariables,
   ArtifactList,
   ArtifactResponse,
+  SessionList,
+  SessionResponse,
   Event,
   EventPage,
   Snapshot,
@@ -70,6 +72,8 @@ export const validateExecutionPage: Validator<ExecutionPage>;
 export const validateRunVariables: Validator<RunVariables>;
 export const validateArtifactList: Validator<ArtifactList>;
 export const validateArtifactResponse: Validator<ArtifactResponse>;
+export const validateSessionList: Validator<SessionList>;
+export const validateSessionResponse: Validator<SessionResponse>;
 export const validateEvent: Validator<Event>;
 export const validateEventPage: Validator<EventPage>;
 export const validateSnapshot: Validator<Snapshot>;

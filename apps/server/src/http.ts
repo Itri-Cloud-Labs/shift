@@ -26,6 +26,8 @@ import {
   validateRunVariables,
   validateArtifactList,
   validateArtifactResponse,
+  validateSessionList,
+  validateSessionResponse,
   validateInteractionResponse,
   validateInteractionList,
   validateWorkspaceResponse,
@@ -290,6 +292,23 @@ export function createHttpServer(options: {
     router.get('/artifacts/:id', guard, (req, res) => {
       const { storageKey: _key, ...artifact } = engine.repository.artifact(id(req));
       reply(res, 200, { artifact }, validateArtifactResponse);
+    });
+    // Agent sessions: a project's, or all, newest first; one with its executions and invocations.
+    router.get('/sessions', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { sessions: engine.repository.sessions(query(req, 'projectId')) },
+        validateSessionList,
+      );
+    });
+    router.get('/sessions/:id', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { session: engine.repository.sessionDetail(id(req)) },
+        validateSessionResponse,
+      );
     });
     router.get('/artifacts/:id/content', guard, async (req, res) => {
       const artifact = engine.repository.artifact(id(req));

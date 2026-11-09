@@ -85,6 +85,13 @@
       "when": 1793059200000,
       "tag": "0011_artifacts",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793145600000,
+      "tag": "0012_session_strategies",
+      "breakpoints": true
     }
   ]
 }
