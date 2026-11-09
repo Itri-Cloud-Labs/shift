@@ -28,6 +28,7 @@ const limits = {
 };
 const schema = { anyOf: [{ type: 'object' }, { type: 'boolean' }] };
 const variableKey = { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' };
+const requirement = { enum: ['required', 'optional', 'off'] };
 const interaction = {
   title: { type: 'string', minLength: 1, maxLength: 200 },
   instructions: { type: 'string', maxLength: 20000 },
@@ -73,6 +74,27 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
         readOnly: { type: 'boolean' },
         resultSchema: schema,
         limits,
+        // Which reports a completed result needs (specification 6.5). Both are required by default.
+        reports: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { handoff: requirement, humanReport: requirement },
+        },
+        // Which earlier handoffs the agent reads: the one that came in (default yes), and those of
+        // named earlier agents. An independent reviewer can receive none.
+        handoffs: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            incoming: { type: 'boolean' },
+            nodes: {
+              type: 'array',
+              maxItems: 20,
+              uniqueItems: true,
+              items: { type: 'string', minLength: 1, maxLength: 100 },
+            },
+          },
+        },
       },
     },
   },

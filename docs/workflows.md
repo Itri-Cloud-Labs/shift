@@ -70,7 +70,7 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `manual_trigger` | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                                                                                                                | `success`                           |
 | `transform`      | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value, and [operations](#transform-operations) are computed.                                                       | `success`, `error`                  |
-| `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema` and `limits`. See [agent nodes](#agent-nodes).                                                                                       | `success`, `error`                  |
+| `agent`          | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema`, `limits`, `reports` and `handoffs`. See [agent nodes](#agent-nodes).                                                                | `success`, `error`                  |
 | `condition`      | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
 | `switch`         | Required `cases`: up to 20 `{"port", "when"}` in order. The first case whose rule holds selects its `port`; none selects `default`. Passes its input through.                                                                    | one per case, `default`, `error`    |
 | `wait`           | Exactly one of `durationMs` (up to 366 days) or `until`, an ISO 8601 time with an offset such as `2026-11-01T09:00:00Z`; `until` can use `{{name}}` bindings. Passes its input through when the time comes. See [waits](#waits). | `success`, `error`                  |
@@ -172,7 +172,7 @@ Every node publishes the same envelope, and the next node receives it as its inp
 }
 ```
 
-`data` is the business result. `references.agentSession` is present on an agent node's output. `context` carries handoffs forward unchanged.
+`data` is the business result. `references.agentSession` is present on an agent node's output, and `references.artifacts` lists its reports. `context.handoffs` is the current [handoff](#reports-and-handoffs): an agent node replaces it with its own, and every other node passes it on unchanged.
 
 ## Agent nodes
 
@@ -189,7 +189,9 @@ Every node publishes the same envelope, and the next node receives it as its inp
       "required": ["words"],
       "properties": { "words": { "type": "integer" } }
     },
-    "limits": { "rejectedSubmissions": 3, "corrections": 2, "continuations": 2 }
+    "limits": { "rejectedSubmissions": 3, "corrections": 2, "continuations": 2 },
+    "reports": { "handoff": "required", "humanReport": "required" },
+    "handoffs": { "incoming": true, "nodes": [] }
   },
   "bindings": { "file": { "kind": "trigger", "path": ["file"] } }
 }
@@ -198,6 +200,8 @@ Every node publishes the same envelope, and the next node receives it as its inp
 - `model` is `<provider>/<model>` as named in OpenCode. It defaults to the server's `--opencode-model`. Without either, the node fails with `MODEL_REQUIRED`.
 - `readOnly` agents can't edit files or run shell commands. They can still write their artifact directory.
 - `resultSchema` is the JSON Schema for the result's `data`. It defaults to any object.
+- `reports` says which [reports](#reports-and-handoffs) a completed result needs: `required` (the default), `optional` or `off`.
+- `handoffs` says which earlier [handoffs](#reports-and-handoffs) the agent reads: the incoming one unless `incoming` is `false`, and those of the agent nodes listed in `nodes`.
 
 Agents run on the server account's own OpenCode install, with its configuration, credentials, plugins and MCP servers. Each agent works in the run's worktree.
 
@@ -220,6 +224,19 @@ The `limits` bound the remedies:
 | `continuations`       | 2       | A turn was interrupted before it did anything, or Shift stopped it cleanly. Shift continues it in the same session. When continuations run out, the run waits in `NEEDS_HUMAN` with `AGENT_INTERRUPTED`. |
 
 A turn that OpenCode or the model provider fails, for example with a refused credential, gets no correction. The node fails at once with `PROVIDER_AUTH`, `PROVIDER_ERROR` or `HARNESS_TURN_FAILED`. An agent that asks for a permission or an answer is stopped, because unattended runs can't give one, and the node fails with `HARNESS_PROMPT`.
+
+### Reports and handoffs
+
+Each prompt Shift sends gets its own report directory, named in the prompt. Before submitting a completed result, the agent writes two Markdown files there:
+
+- `tothenextagent.md`, the **handoff**: what it did, its decisions, the current state and what is left, for the agent that continues.
+- `toahumanreader.md`, the **human report**: a short account for the workflow's owner.
+
+Shift stores each as an immutable [artifact](server-api.md#artifacts) of that prompt, so a correction's reports never replace the first turn's. A completed result counts only with its `required` reports: a missing, linked or oversized one gets a correction prompt that names it, and the agent writes its reports again and resubmits. When corrections run out, the node fails with `REPORTS_MISSING`. A blocked or failed result needs no reports and keeps its own code. A report set to `off` is not asked for.
+
+The successful prompt's reports become the node's `references.artifacts`, and its handoff becomes `context.handoffs`. Without a handoff the list is empty; an older handoff is never passed on as the agent's. Transforms, conditions, waits and other nodes pass `context.handoffs` along, so an agent two steps later still receives it.
+
+An agent reads the incoming handoff, inline in its prompt, or as a file in its report directory when it is over 64 KiB. Set `handoffs.incoming` to `false` for an independent reviewer that should judge the work without the author's notes. List agent nodes in `handoffs.nodes` to add their latest handoffs on the run's path; each must name another agent node. The handoffs are fixed when the node starts, and every goal prompt repeats them, also when a session is reused. Only a handoff that a successful execution on the run's own path published as its node's handoff is handed on; any other reference in the context, such as a human report, another run's artifact or the handoff of a turn that was later corrected, is ignored.
 
 ## Workspaces
 

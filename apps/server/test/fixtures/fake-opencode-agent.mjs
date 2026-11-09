@@ -9,6 +9,7 @@
 //   [fake-hang-interrupt] never answer an interrupt request, and ignore SIGTERM, during this turn
 //   [fake-provider-error N] fail the session's first N turns with a provider error (HTTP 503)
 //   [fake-report NAME TEXT] write TEXT to NAME in the invocation's report directory
+//   [fake-no-reports] do not write the two default reports, which every turn writes otherwise
 // A turn interrupted by a crash keeps its running tool and no idle record, as OpenCode does.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -89,6 +90,11 @@ async function runTurn(session, prompt) {
   }
   // The report directory is named in Shift's prompt.
   const reports = /(?:Put any reports under|write files only under) (\/\S+)\./.exec(text)?.[1];
+  // Both default reports, as Shift's prompt asks, unless the goal says otherwise.
+  if (reports && !/\[fake-no-reports\]/.test(text)) {
+    writeFileSync(join(reports, 'tothenextagent.md'), 'Handoff.\n');
+    writeFileSync(join(reports, 'toahumanreader.md'), 'Report.\n');
+  }
   for (const [, name, body] of text.matchAll(/\[fake-report ([\w.-]+) ([^\]]*)\]/g))
     if (reports) writeFileSync(join(reports, name), body);
   if (!/\[fake-no-result\]/.test(text)) {

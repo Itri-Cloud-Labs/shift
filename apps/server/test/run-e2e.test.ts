@@ -178,11 +178,15 @@ test('reports are listed and downloaded from the CLI', { skip, timeout: 120_000 
     }>;
     assert.deepEqual(
       listed.map((artifact) => [artifact.role, artifact.filename, artifact.sizeBytes]),
-      [['human_report', 'toahumanreader.md', 20]],
+      [
+        ['handoff', 'tothenextagent.md', 9],
+        ['human_report', 'toahumanreader.md', 20],
+      ],
     );
-    const shown = (await env.shift('artifact', 'show', listed[0]!.id)) as { id: string };
-    assert.equal(shown.id, listed[0]!.id);
-    const bytes = await runCli(['artifact', 'get', listed[0]!.id, '--state-dir', env.state.path]);
+    const report = listed[1]!;
+    const shown = (await env.shift('artifact', 'show', report.id)) as { id: string };
+    assert.equal(shown.id, report.id);
+    const bytes = await runCli(['artifact', 'get', report.id, '--state-dir', env.state.path]);
     assert.equal(bytes.code, 0);
     assert.equal(bytes.output, 'Counted three words.');
     const missing = await runCli([

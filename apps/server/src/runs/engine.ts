@@ -93,6 +93,42 @@ const defaultResultSchema: Json = {
   description: 'What the task produced or found.',
 };
 const defaultLimits = { rejectedSubmissions: 3, corrections: 2, continuations: 2 };
+
+type HandoffRef = { kind?: string; id?: string };
+
+// The handoffs an agent reads: those that came in with its input, unless it is to start without
+// them, then those of the named agents' latest successful executions on this run's path. Each is
+// listed once, with the node whose execution wrote it, which may lie before nodes it passed through.
+// A reference is only ever a hint: it is handed on only when Shift itself recorded a handoff by
+// that ID from a successful execution on this path. A human report, another run's artifact or an
+// unknown ID in the context is ignored, as is a handoff from a turn that was later corrected, so a forged reference can never become trusted context.
+function receivedHandoffs(
+  context: ExecutionContext,
+  selection: { incoming?: boolean; nodes?: string[] },
+  artifactOf: (artifactId: string) => { role: string; executionId: string | null } | null,
+): NonNullable<AgentConfig['handoffs']> {
+  const found: NonNullable<AgentConfig['handoffs']> = [];
+  const add = (refs: unknown) => {
+    for (const ref of (Array.isArray(refs) ? refs : []) as HandoffRef[])
+      if (ref?.kind === 'artifact' && typeof ref.id === 'string')
+        if (!found.some((item) => item.artifactId === ref.id)) {
+          const artifact = artifactOf(ref.id);
+          if (artifact?.role !== 'handoff') continue;
+          const producer = context.chain.find((entry) => entry.id === artifact.executionId);
+          // Only the successful turn's handoff is its node's; an earlier, corrected turn's stays
+          // in history and is never handed on.
+          const published = (producer?.output.context?.handoffs ?? []) as HandoffRef[];
+          if (!producer || !published.some((own) => own?.id === ref.id)) continue;
+          found.push({ artifactId: ref.id, nodeId: producer.nodeId });
+        }
+  };
+  if (selection.incoming !== false) add(context.input.context?.handoffs);
+  for (const nodeId of selection.nodes ?? []) {
+    const latest = context.chain.find((entry) => entry.nodeId === nodeId);
+    if (latest) add(latest.output.context?.handoffs);
+  }
+  return found;
+}
 const local = { kind: 'cli' as const, id: 'local' };
 
 function parseModel(value: string): ModelRef {
@@ -619,6 +655,8 @@ export class RunEngine {
         readOnly?: boolean;
         resultSchema?: Json;
         limits?: Partial<AgentConfig['limits']>;
+        reports?: Partial<NonNullable<AgentConfig['reports']>>;
+        handoffs?: { incoming?: boolean; nodes?: string[] };
       };
       const model = authored.model ?? snapshot.defaults.model;
       if (!model) {
@@ -648,6 +686,14 @@ export class RunEngine {
         toolPolicy: { mode: authored.readOnly ? 'read_only' : 'workspace_write' },
         resultSchema: authored.resultSchema ?? defaultResultSchema,
         limits: { ...defaultLimits, ...authored.limits },
+        reports: { handoff: 'required', humanReport: 'required', ...authored.reports },
+        handoffs: receivedHandoffs(context, authored.handoffs ?? {}, (artifactId) => {
+          try {
+            return this.repository.artifact(artifactId);
+          } catch {
+            return null;
+          }
+        }),
       };
       config = resolved as unknown as Json;
     }

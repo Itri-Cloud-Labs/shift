@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Logger } from 'pino';
@@ -20,6 +20,7 @@ import {
   goalPrompt,
   retryPrompt,
   type AgentTask,
+  type ReceivedHandoff,
 } from './prompts.js';
 import {
   StaleClaim,
@@ -71,6 +72,12 @@ export const reportFiles: Record<ArtifactRole, string> = {
 
 // Turns whose files are final: nothing in the harness still writes to their directory.
 const settled: readonly InvocationState[] = ['COMPLETED', 'FAILED', 'INTERRUPTED'];
+
+// A handoff larger than this is given to the agent as a file to read instead of inline.
+const inlineHandoffBytes = 64 * 1024;
+
+// Required reports named as the agent wrote them, by the configuration's keys.
+const reportRoles = { handoff: 'handoff', humanReport: 'human_report' } as const;
 
 export type Collected = Partial<
   Record<ArtifactRole, { kind: 'published'; id: string } | { kind: 'refused'; reason: string }>
@@ -185,6 +192,9 @@ export class AgentService {
       cwd: config.cwd,
       resultSchema: config.resultSchema,
       readOnly: config.toolPolicy.mode === 'read_only',
+      // Configurations frozen before reports existed ask for none.
+      reports: config.reports ?? { handoff: 'off', humanReport: 'off' },
+      handoffs: [],
     };
     if (config.workspaceId !== undefined) {
       if (!this.#options.workspaces) {
@@ -206,6 +216,8 @@ export class AgentService {
       if (!next) return;
       const id = randomUUID();
       const artifactDirectory = this.#artifactDirectory(claim, id);
+      // Every prompt that states the goal carries the handoffs again, also in a reused session.
+      if (next !== 'correction') task.handoffs = await this.#received(config, artifactDirectory);
       // A later attempt continues the session. Its first prompt says why the earlier one stopped:
       // an automatic retry follows a failure, an owner retry a stop whose effects are unknown. An
       // earlier attempt that never sent a prompt changed nothing, so the goal is sent as usual.
@@ -221,7 +233,11 @@ export class AgentService {
         : next === 'goal'
           ? goalPrompt(task, artifactDirectory)
           : next === 'correction'
-            ? correctionPrompt(task)
+            ? correctionPrompt(
+                task,
+                artifactDirectory,
+                last?.state === 'COMPLETED' ? this.#missingReports(config, last.id) : [],
+              )
             : continuationPrompt(task, artifactDirectory);
       repository.createInvocation(claim, {
         id,
@@ -278,6 +294,22 @@ export class AgentService {
     switch (last.state) {
       case 'COMPLETED': {
         const envelope = last.result!;
+        // A completed result counts only with its required reports; a blocker or failure keeps
+        // its own cause whatever reports came with it.
+        const missing =
+          envelope.status === 'completed' ? this.#missingReports(config, last.id) : [];
+        if (missing.length) {
+          if (count('correction') < limits.corrections) return 'correction';
+          this.#finish(claim, {
+            kind: 'failed',
+            error: {
+              code: 'REPORTS_MISSING',
+              category: 'contract',
+              message: `The agent completed without these required reports: ${missing.join(', ')}.`,
+            },
+          });
+          return null;
+        }
         if (envelope.status === 'completed') {
           this.#finish(claim, { kind: 'completed', data: envelope.data, invocationId: last.id });
         } else {
@@ -520,16 +552,19 @@ export class AgentService {
     const context = repository.execution(claim.executionId);
     const output = envelope(outcome.data, context.input);
     // The successful turn's reports are the node's (specification 6.5); earlier ones stay in history.
-    output.references.artifacts = repository
-      .artifacts({ invocationId: outcome.invocationId })
-      .map((artifact) => ({
-        kind: 'artifact',
-        id: artifact.id,
-        role: artifact.role,
-        filename: artifact.filename,
-        sha256: artifact.sha256,
-        sizeBytes: artifact.sizeBytes,
-      }));
+    // Its handoff becomes the current one; with none, nothing older is passed on as if it were.
+    const projectId = context.snapshot.project.id;
+    const refs = repository.artifacts({ invocationId: outcome.invocationId }).map((artifact) => ({
+      kind: 'artifact',
+      id: artifact.id,
+      projectId,
+      role: artifact.role,
+      filename: artifact.filename,
+      sha256: artifact.sha256,
+      sizeBytes: artifact.sizeBytes,
+    }));
+    output.references.artifacts = refs;
+    output.context.handoffs = refs.filter((ref) => ref.role === 'handoff');
     const session = repository.session(claim.executionId);
     if (session && context.snapshot.project.id) {
       output.references.agentSession = {
@@ -539,6 +574,43 @@ export class AgentService {
       };
     }
     repository.completeExecution(claim, { kind: 'completed', output, port: 'success' });
+  }
+
+  // Required reports a turn did not leave, by file name.
+  #missingReports(config: AgentConfig, invocationId: string): string[] {
+    const published = new Set(
+      this.#options.repository.artifacts({ invocationId }).map((artifact) => artifact.role),
+    );
+    return (Object.keys(reportRoles) as (keyof typeof reportRoles)[])
+      .filter((key) => config.reports?.[key] === 'required')
+      .filter((key) => !published.has(reportRoles[key]))
+      .map((key) => reportFiles[reportRoles[key]]);
+  }
+
+  // The frozen handoffs as the agent reads them: inline when small, otherwise copied into the
+  // turn's directory. Bytes that went missing fail the node before anything is sent.
+  async #received(config: AgentConfig, directory: string): Promise<ReceivedHandoff[]> {
+    const { repository, blobs } = this.#options;
+    const received: ReceivedHandoff[] = [];
+    for (const [index, { artifactId, nodeId }] of (config.handoffs ?? []).entries()) {
+      const artifact = repository.artifact(artifactId);
+      const stream = await blobs.read(artifact.storageKey);
+      if (!stream)
+        throw new ShiftError('ARTIFACT_BYTES_MISSING', 'A handoff’s bytes are missing.', 410);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(chunk as Buffer);
+      const bytes = Buffer.concat(chunks);
+      if (bytes.length <= inlineHandoffBytes) {
+        received.push({ nodeId, text: bytes.toString('utf8') });
+        continue;
+      }
+      const folder = join(directory, 'received');
+      await mkdir(folder, { recursive: true, mode: 0o700 });
+      const path = join(folder, `handoff-${index + 1}.md`);
+      await writeFile(path, bytes, { mode: 0o600 });
+      received.push({ nodeId, path });
+    }
+    return received;
   }
 
   // Stores the default reports a finished turn left in its directory. Collecting again publishes
