@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -118,6 +118,92 @@ test('killing an import at any moment leaves whole blobs named by their hash, or
     // Interrupted temporaries are only ever partial copies, never published names.
     const leftovers = await readdir(join(root, 'tmp')).catch(() => []);
     assert.ok(leftovers.every((name) => /^[0-9a-f-]{36}$/.test(name)));
+  } finally {
+    await state.remove();
+  }
+});
+
+test('a named pipe in place of a report is refused without waiting for a writer', async () => {
+  const state = await temporaryState();
+  try {
+    const container = join(state.path, 'artifacts');
+    const directory = join(container, 'run', 'invocation');
+    await mkdir(directory, { recursive: true });
+    execFileSync('mkfifo', [join(directory, 'toahumanreader.md')]);
+    const store = new BlobStore(join(state.path, 'blobs'));
+    const result = await Promise.race([
+      store.ingest(container, directory, 'toahumanreader.md', 1024),
+      delay(2_000).then(() => 'blocked' as const),
+    ]);
+    assert.deepEqual(result, {
+      kind: 'refused',
+      reason: 'toahumanreader.md is not a regular file.',
+    });
+  } finally {
+    await state.remove();
+  }
+});
+
+test('a short write is finished before the blob is named by its hash', async () => {
+  const state = await temporaryState();
+  try {
+    const container = join(state.path, 'artifacts');
+    const directory = join(container, 'run', 'invocation');
+    await mkdir(directory, { recursive: true });
+    const bytes = randomBytes(200 * 1024);
+    await writeFile(join(directory, 'toahumanreader.md'), bytes);
+    let calls = 0;
+    // Takes at most 1000 bytes per call, as a short write would.
+    const store = new BlobStore(join(state.path, 'blobs'), {
+      write: async (handle, chunk) => {
+        calls++;
+        return (await handle.write(chunk.subarray(0, 1000))).bytesWritten;
+      },
+    });
+    const stored = await store.ingest(container, directory, 'toahumanreader.md', bytes.length);
+    if (stored.kind !== 'stored') throw new Error(stored.kind);
+    assert.ok(calls > 200);
+    assert.equal(stored.sha256, sha(bytes));
+    const blob = await readFile(join(state.path, 'blobs', stored.storageKey));
+    assert.ok(blob.equals(bytes));
+  } finally {
+    await state.remove();
+  }
+});
+
+test('swapping the report directory for a link while importing never imports the target', async () => {
+  const state = await temporaryState();
+  try {
+    const container = join(state.path, 'artifacts');
+    const directory = join(container, 'run', 'invocation');
+    const outside = join(state.path, 'outside');
+    await mkdir(directory, { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(directory, 'toahumanreader.md'), 'inside');
+    await writeFile(join(outside, 'toahumanreader.md'), 'outside');
+    const store = new BlobStore(join(state.path, 'blobs'));
+    const aside = join(container, 'run', 'aside');
+    let swapping = true;
+    // Moves the real directory away and puts a link to `outside` in its place, back and forth.
+    const swapper = (async () => {
+      while (swapping) {
+        await rename(directory, aside);
+        await symlink(outside, directory);
+        await delay(0);
+        await rm(directory);
+        await rename(aside, directory);
+        await delay(0);
+      }
+    })();
+    const results = [];
+    for (let round = 0; round < 300; round++)
+      results.push(await store.ingest(container, directory, 'toahumanreader.md', 100));
+    swapping = false;
+    await swapper;
+    assert.ok(results.some((result) => result.kind === 'stored'));
+    for (const result of results)
+      if (result.kind === 'stored') assert.equal(result.sha256, sha('inside'));
+    assert.deepEqual(await blobsIn(join(state.path, 'blobs')), [sha('inside')]);
   } finally {
     await state.remove();
   }
