@@ -251,6 +251,42 @@ const sessionStates: Record<SessionView['state'], string> = {
   ARCHIVED: 'Archived',
 };
 
+// The island keeps the latest entries of a long conversation, not all of them.
+export const transcriptKeep = 1000;
+// A refresh re-reads this many entries before the newest, so entries revised since come back.
+const transcriptOverlap = 200;
+
+// Reads a transcript from `after` to its end, page by page, at most `maxPages` pages.
+export async function readTranscript(
+  page: (after: number) => Promise<TranscriptPage | null>,
+  after: number,
+  maxPages = 40,
+): Promise<Entry[] | null> {
+  const entries: Entry[] = [];
+  let cursor: number | null = after;
+  for (let read = 0; cursor !== null && read < maxPages; read++) {
+    const next = await page(cursor);
+    if (!next) return null;
+    entries.push(...next.entries);
+    cursor = next.next;
+  }
+  return entries;
+}
+
+// Merges a fresh read into what is shown: an entry read again replaces its earlier revision, and
+// only the latest `keep` stay. `dropped` counts the earlier ones no longer shown.
+export function mergeTranscript(
+  shown: { entries: Entry[]; dropped: number },
+  read: Entry[],
+  keep = transcriptKeep,
+): { entries: Entry[]; dropped: number } {
+  const byPosition = new Map(shown.entries.map((entry) => [entry.position, entry]));
+  for (const entry of read) byPosition.set(entry.position, entry);
+  const all = [...byPosition.values()].sort((a, b) => a.position - b.position);
+  const cut = Math.max(0, all.length - keep);
+  return { entries: all.slice(cut), dropped: shown.dropped + cut };
+}
+
 function TranscriptEntry({ entry }: { entry: Entry }) {
   if (entry.kind === 'tool')
     return (
@@ -287,16 +323,27 @@ export function SessionIsland({
   close: () => void;
 }) {
   useEscape(close);
+  // What is shown of the conversation, kept across reads so a refresh reads only its tail.
+  const shown = useRef<{ entries: Entry[]; dropped: number }>({ entries: [], dropped: 0 });
   const detail = usePolled(
     async () => {
-      const [session, transcript] = await Promise.all([
+      const last = shown.current.entries.at(-1)?.position ?? 0;
+      const [session, read] = await Promise.all([
         ask(bridge().data.session(sessionId)),
-        ask(bridge().data.transcript(sessionId)),
+        readTranscript(
+          async (after) => {
+            const answer = await ask(bridge().data.transcript(sessionId, after));
+            return answer.kind === 'resource' ? (answer.value as TranscriptPage) : null;
+          },
+          Math.max(0, last - transcriptOverlap),
+        ),
       ]);
       if (session.kind !== 'resource') return { error: true as const };
+      if (read) shown.current = mergeTranscript(shown.current, read);
       return {
         session: (session.value as SessionResponse).session,
-        entries: transcript.kind === 'resource' ? (transcript.value as TranscriptPage).entries : [],
+        entries: shown.current.entries,
+        dropped: shown.current.dropped,
       };
     },
     sessionId,
@@ -386,6 +433,11 @@ export function SessionIsland({
               </dd>
             </dl>
             <h3 className="section-title">Conversation</h3>
+            {detail.dropped > 0 && (
+              <p className="note">
+                The {detail.dropped.toLocaleString()} earliest messages are not shown.
+              </p>
+            )}
             {session!.invocations.length === 0 && (
               <p className="note">Nothing has been sent to this session yet.</p>
             )}

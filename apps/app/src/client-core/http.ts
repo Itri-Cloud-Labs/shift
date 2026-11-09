@@ -90,7 +90,6 @@ export class ServerHttp {
     const timeout = AbortSignal.timeout(this.options.timeoutMs);
     const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
     let response: FetchResponse;
-    let text: string;
     try {
       response = await this.fetch(`${base}${path}`, {
         method: 'GET',
@@ -98,11 +97,42 @@ export class ServerHttp {
         signal,
         redirect: 'error',
       });
-      text = await response.text();
     } catch {
       throw new TransportFailure('unreachable');
     }
-    if (Buffer.byteLength(text) > init.maxBytes) throw new TransportFailure('invalid');
+    // The bytes are counted as they arrive, so an answer larger than promised is cut off at the
+    // limit instead of being held in memory whole.
+    if (!response.body) throw new TransportFailure('invalid');
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > init.maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new TransportFailure('invalid');
+        }
+        chunks.push(value);
+      }
+    } catch (error) {
+      if (error instanceof TransportFailure) throw error;
+      throw new TransportFailure('unreachable');
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      throw new TransportFailure('invalid');
+    }
     return { status: response.status, text };
   }
 
