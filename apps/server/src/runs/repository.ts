@@ -1259,7 +1259,13 @@ export class RunRepository {
     const targets = this.#targets(executionId);
     if (targets.length === 0) return true;
     const now = this.clock.now();
+    const holds = this.db.prepare(
+      'SELECT 1 FROM resource_claims WHERE resource_type = ? AND resource_id = ? AND execution_id = ?',
+    );
     const blocked = targets.find((target) => {
+      // An execution that already holds a resource keeps it: a retry after a backoff or an owner
+      // retry resumes its own work and never queues behind executions waiting for that claim.
+      if (holds.get(target.type, target.id, executionId)) return false;
       if (this.#heldByOther(target.type, target.id, executionId)) return true;
       // The run that created a workspace works in it without claims until it ends.
       if (target.type === 'workspace' && this.#workspaceRunActive(target.id)) return true;

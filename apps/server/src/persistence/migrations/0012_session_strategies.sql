@@ -8,6 +8,13 @@ ALTER TABLE agent_sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id
 --> statement-breakpoint
 ALTER TABLE agent_sessions ADD COLUMN node_id TEXT;
 --> statement-breakpoint
+-- Sessions from before this migration get what can be recovered: the project of the run that
+-- created them, the workspace whose path they work in, and the node of their first execution.
+UPDATE agent_sessions SET
+  project_id = (SELECT r.project_id FROM runs r WHERE r.id = agent_sessions.created_by_run_id),
+  workspace_id = (SELECT w.id FROM workspaces w WHERE w.path = agent_sessions.cwd),
+  node_id = (SELECT e.node_id FROM node_executions e WHERE e.agent_session_id = agent_sessions.id ORDER BY e.sequence LIMIT 1);
+--> statement-breakpoint
 CREATE INDEX project_sessions ON agent_sessions(project_id, created_at);
 --> statement-breakpoint
 CREATE TABLE run_session_bindings (
