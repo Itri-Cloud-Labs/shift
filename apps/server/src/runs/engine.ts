@@ -93,6 +93,36 @@ const defaultResultSchema: Json = {
   description: 'What the task produced or found.',
 };
 const defaultLimits = { rejectedSubmissions: 3, corrections: 2, continuations: 2 };
+
+type HandoffRef = { kind?: string; id?: string };
+
+// The handoffs an agent reads: those that came in with its input, unless it is to start without
+// them, then those of the named agents' latest successful executions on this run's path. Each is
+// listed once, with the node whose execution wrote it, which may lie before nodes it passed through.
+function receivedHandoffs(
+  context: ExecutionContext,
+  selection: { incoming?: boolean; nodes?: string[] },
+  // The execution that wrote an artifact, or undefined for an ID that names no artifact.
+  producerOf: (artifactId: string) => string | null | undefined,
+): NonNullable<AgentConfig['handoffs']> {
+  const found: NonNullable<AgentConfig['handoffs']> = [];
+  const add = (refs: unknown) => {
+    for (const ref of (Array.isArray(refs) ? refs : []) as HandoffRef[])
+      if (ref?.kind === 'artifact' && typeof ref.id === 'string')
+        if (!found.some((item) => item.artifactId === ref.id)) {
+          const executionId = producerOf(ref.id);
+          if (executionId === undefined) continue;
+          const nodeId = context.chain.find((entry) => entry.id === executionId)?.nodeId ?? '';
+          found.push({ artifactId: ref.id, nodeId });
+        }
+  };
+  if (selection.incoming !== false) add(context.input.context?.handoffs);
+  for (const nodeId of selection.nodes ?? []) {
+    const latest = context.chain.find((entry) => entry.nodeId === nodeId);
+    if (latest) add(latest.output.context?.handoffs);
+  }
+  return found;
+}
 const local = { kind: 'cli' as const, id: 'local' };
 
 function parseModel(value: string): ModelRef {
@@ -619,6 +649,8 @@ export class RunEngine {
         readOnly?: boolean;
         resultSchema?: Json;
         limits?: Partial<AgentConfig['limits']>;
+        reports?: Partial<NonNullable<AgentConfig['reports']>>;
+        handoffs?: { incoming?: boolean; nodes?: string[] };
       };
       const model = authored.model ?? snapshot.defaults.model;
       if (!model) {
@@ -648,6 +680,15 @@ export class RunEngine {
         toolPolicy: { mode: authored.readOnly ? 'read_only' : 'workspace_write' },
         resultSchema: authored.resultSchema ?? defaultResultSchema,
         limits: { ...defaultLimits, ...authored.limits },
+        reports: { handoff: 'required', humanReport: 'required', ...authored.reports },
+        handoffs: receivedHandoffs(context, authored.handoffs ?? {}, (artifactId) => {
+          // A reference that names no artifact of this Shift is not handed to the agent.
+          try {
+            return this.repository.artifact(artifactId).executionId;
+          } catch {
+            return undefined;
+          }
+        }),
       };
       config = resolved as unknown as Json;
     }

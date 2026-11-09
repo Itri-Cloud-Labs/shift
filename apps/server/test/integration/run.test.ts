@@ -77,36 +77,28 @@ test(
         await delay(1_000);
       }
     };
-    // Publishes a start -> agent -> end workflow with this agent configuration, then starts it.
+    // Publishes start -> each agent in turn -> end, then starts it.
     let projectId: string | undefined;
-    const startAgent = async (agent: Record<string, unknown>) => {
+    const startAgents = async (agents: Array<{ id: string; config: Record<string, unknown> }>) => {
       projectId ??= ((await shift('project', 'add', '--path', repo)) as unknown as { id: string })
         .id;
       const file = join(state.path, `workflow-${Date.now()}.json`);
+      const ids = ['start', ...agents.map((agent) => agent.id), 'end'];
       await writeFile(
         file,
         JSON.stringify({
           nodes: [
             { id: 'start', type: 'manual_trigger' },
-            { id: 'agent', type: 'agent', config: agent },
+            ...agents.map((agent) => ({ id: agent.id, type: 'agent', config: agent.config })),
             { id: 'end', type: 'end' },
           ],
-          connections: [
-            {
-              id: 'c1',
-              fromNodeId: 'start',
-              fromPort: 'success',
-              toNodeId: 'agent',
-              toPort: 'input',
-            },
-            {
-              id: 'c2',
-              fromNodeId: 'agent',
-              fromPort: 'success',
-              toNodeId: 'end',
-              toPort: 'input',
-            },
-          ],
+          connections: ids.slice(1).map((to, index) => ({
+            id: `c${index + 1}`,
+            fromNodeId: ids[index],
+            fromPort: 'success',
+            toNodeId: to,
+            toPort: 'input',
+          })),
         }),
       );
       const workflow = (await shift(
@@ -122,6 +114,8 @@ test(
       await shift('workflow', 'publish', workflow.id);
       return shift('run', 'start', '--workflow', workflow.id);
     };
+    const startAgent = (agent: Record<string, unknown>) =>
+      startAgents([{ id: 'agent', config: agent }]);
     let server = await serve();
     try {
       await t.test('a read-only run completes with a schema-valid result', async () => {
@@ -164,6 +158,50 @@ test(
           }
         },
       );
+      await t.test('an agent leaves reports, and the next agent reads its handoff', async () => {
+        const run = await startAgents([
+          {
+            id: 'write',
+            config: {
+              goal: 'Count the words in notes.txt. In your handoff for the next agent, include the line "Codeword: heliotrope".',
+              readOnly: true,
+              resultSchema: {
+                type: 'object',
+                required: ['words'],
+                properties: { words: { type: 'integer' } },
+                additionalProperties: false,
+              },
+            },
+          },
+          {
+            id: 'review',
+            config: {
+              goal: 'Report the codeword that the previous agent gave in its handoff, without looking anywhere else.',
+              readOnly: true,
+              reports: { handoff: 'off' },
+              resultSchema: {
+                type: 'object',
+                required: ['codeword'],
+                properties: { codeword: { type: 'string' } },
+                additionalProperties: false,
+              },
+            },
+          },
+        ]);
+        const finished = await until(run.id);
+        assert.equal(finished.state, 'COMPLETED', JSON.stringify(finished));
+        assert.deepEqual(finished.outcome, { data: { codeword: 'heliotrope' } });
+        const listed = (await shift('artifact', 'list', run.id)) as unknown as Array<{
+          id: string;
+          role: string;
+        }>;
+        const roles = listed.map((artifact) => artifact.role);
+        assert.equal(roles.filter((role) => role === 'handoff').length, 1, JSON.stringify(roles));
+        assert.ok(roles.filter((role) => role === 'human_report').length >= 2);
+        const handoff = listed.find((artifact) => artifact.role === 'handoff')!;
+        const bytes = await runCli(['artifact', 'get', handoff.id, '--state-dir', state.path]);
+        assert.match(bytes.output, /heliotrope/);
+      });
       await t.test('an agent edits its worktree, never the project checkout', async () => {
         const run = await startAgent({
           goal: 'Append the line "omega" to notes.txt, then report {"done": true}.',

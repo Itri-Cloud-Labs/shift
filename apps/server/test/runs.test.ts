@@ -55,6 +55,8 @@ class FakeHarness implements HarnessAdapter {
   // Session creations that fail as if the runtime could not start.
   failCreates = 0;
   confirmCancel = true;
+  // Each turn writes both default reports first, as Shift's prompt asks, unless switched off.
+  writeReports = true;
   handler!: ResultHandler;
   #calls = 0;
 
@@ -115,6 +117,10 @@ class FakeHarness implements HarnessAdapter {
       return { kind: 'accepted', correlation };
     }
     const started = turn;
+    if (this.writeReports && request.artifactDirectory) {
+      await writeFile(join(request.artifactDirectory, 'tothenextagent.md'), 'Handoff.\n');
+      await writeFile(join(request.artifactDirectory, 'toahumanreader.md'), 'Report.\n');
+    }
     setImmediate(() => void this.behave(started, this));
     return { kind: 'accepted', correlation };
   }
@@ -690,14 +696,18 @@ test('reports are stored per invocation, and the successful turn’s become the 
   }
 });
 
-test('a report that is a link is refused and never published', async () => {
+test('a report that is a link is refused, never published, and counts as missing', async () => {
   const harnessed = await engineFor(async (turn, fake) => {
     await symlink('/etc/hostname', join(turn.artifactDirectory, 'toahumanreader.md'));
     await complete({ count: 3 })(turn, fake);
   });
+  harnessed.fake.writeReports = false;
   try {
-    const runId = await start(harnessed);
-    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+    const runId = await start(harnessed, { reports: { handoff: 'off' } });
+    const run = await settled(harnessed, runId);
+    assert.equal(run.state, 'FAILED');
+    assert.equal(run.executions[1]!.error?.code, 'REPORTS_MISSING');
+    assert.equal(run.invocations.length, 3);
     assert.deepEqual(harnessed.engine.repository.artifacts({ runId }), []);
   } finally {
     await harnessed.close();
@@ -711,12 +721,13 @@ test('a report stored but not published before a crash is published once after r
     await report(turn, 'toahumanreader.md', '# Counted\n');
     await complete({ count: 3 })(turn, fake);
   });
+  first.fake.writeReports = false;
   // The process dies after the blob is renamed and before the row is written.
   first.engine.repository.publishArtifact = () => {
     reached();
     throw new StaleClaim();
   };
-  const runId = await start(first);
+  const runId = await start(first, { reports: { handoff: 'off' } });
   await stored;
   void first.engine.stop(5_000);
   first.store.close();
@@ -737,6 +748,175 @@ test('a report stored but not published before a crash is published once after r
     assert.deepEqual(first.fake.submits.length, 1, 'nothing was resubmitted');
   } finally {
     await restarted.close();
+  }
+});
+
+test('a completed result without a required report gets a correction that writes it', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (/required reports were missing/.test(turn.prompt)) {
+      await report(turn, 'tothenextagent.md', 'Now with a handoff.');
+      await report(turn, 'toahumanreader.md', 'Report.');
+    } else await report(turn, 'toahumanreader.md', 'Report only.');
+    await complete({ count: 3 })(turn, fake);
+  });
+  harnessed.fake.writeReports = false;
+  try {
+    const runId = await start(harnessed);
+    const run = await settled(harnessed, runId);
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(
+      run.invocations.map((invocation) => [invocation.kind, invocation.state]),
+      [
+        ['goal', 'COMPLETED'],
+        ['correction', 'COMPLETED'],
+      ],
+    );
+    const correction = [...harnessed.fake.turns.values()][1]!;
+    assert.match(correction.prompt, /missing or unreadable: tothenextagent\.md\./);
+    assert.match(
+      correction.prompt,
+      new RegExp(`write these Markdown files in ${correction.artifactDirectory}`),
+    );
+    const output = run.executions[1]!.output as {
+      context: { handoffs: Array<{ id: string; kind: string; role: string }> };
+    };
+    const [handoff] = output.context.handoffs;
+    assert.equal(handoff?.kind, 'artifact');
+    assert.equal(handoff?.role, 'handoff');
+    // The first turn's human report stays in history, apart from the node's.
+    assert.equal(harnessed.engine.repository.artifacts({ runId }).length, 3);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a blocker needs no reports and keeps its own cause', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    await fake.submitResult(turn, {
+      status: 'blocked',
+      blocker: { code: 'NEED_KEY', message: 'No API key.' },
+    });
+    turn.status = 'ended';
+  });
+  harnessed.fake.writeReports = false;
+  try {
+    const run = await settled(harnessed, await start(harnessed));
+    assert.equal(run.state, 'FAILED');
+    assert.equal(run.executions[1]!.error?.code, 'NEED_KEY');
+    assert.equal(run.invocations.length, 1, 'no correction for missing reports');
+    assert.match(
+      [...harnessed.fake.turns.values()][0]!.prompt,
+      /A blocked or failed result needs no reports\./,
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('reports switched off are not asked for or required', async () => {
+  const harnessed = await engineFor(complete({ count: 3 }));
+  harnessed.fake.writeReports = false;
+  try {
+    const run = await settled(
+      harnessed,
+      await start(harnessed, { reports: { handoff: 'off', humanReport: 'off' } }),
+    );
+    assert.equal(run.state, 'COMPLETED');
+    assert.doesNotMatch(
+      [...harnessed.fake.turns.values()][0]!.prompt,
+      /tothenextagent|toahumanreader/,
+    );
+    const output = run.executions[1]!.output as { context: { handoffs: unknown[] } };
+    assert.deepEqual(output.context.handoffs, [], 'no imaginary handoff');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// write -> shape (a Transform) -> review, then audit that names `write` and takes nothing incoming.
+const handoffWorkflow = (review: Record<string, unknown>, audit: Record<string, unknown>): Json =>
+  ({
+    nodes: [
+      { id: 'start', type: 'manual_trigger' },
+      { id: 'write', type: 'agent', config: { goal: 'Write it. [write]' } },
+      { id: 'shape', type: 'transform', config: { data: { shaped: true } } },
+      { id: 'review', type: 'agent', config: { goal: 'Review it. [review]', ...review } },
+      { id: 'audit', type: 'agent', config: { goal: 'Audit it. [audit]', ...audit } },
+      { id: 'end', type: 'end' },
+    ],
+    connections: [
+      { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'write', toPort: 'input' },
+      { id: 'c2', fromNodeId: 'write', fromPort: 'success', toNodeId: 'shape', toPort: 'input' },
+      { id: 'c3', fromNodeId: 'shape', fromPort: 'success', toNodeId: 'review', toPort: 'input' },
+      { id: 'c4', fromNodeId: 'review', fromPort: 'success', toNodeId: 'audit', toPort: 'input' },
+      { id: 'c5', fromNodeId: 'audit', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+    ],
+  }) as Json;
+
+test('a handoff passes through a non-agent node, and a reviewer can be kept from it', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    const node = /\[(\w+)\]/.exec(turn.prompt)![1]!;
+    await report(
+      turn,
+      'tothenextagent.md',
+      node === 'write' ? 'X'.repeat(70 * 1024) : `From ${node}.`,
+    );
+    await complete({})(turn, fake);
+  });
+  try {
+    const workflowId = await publish(
+      harnessed,
+      handoffWorkflow({}, { handoffs: { incoming: false, nodes: ['write'] } }),
+    );
+    const response = await harnessed.engine.startRun({ workflowId });
+    const runId = (response.body as { run: { id: string } }).run.id;
+    const run = await settled(harnessed, runId);
+    assert.equal(run.state, 'COMPLETED');
+    const prompts = Object.fromEntries(
+      [...harnessed.fake.turns.values()].map((turn) => [/\[(\w+)\]/.exec(turn.prompt)![1]!, turn]),
+    );
+    assert.doesNotMatch(prompts['write']!.prompt, /left these handoffs/);
+    // The large handoff from `write` reached `review` through the Transform, as a file to read.
+    const file = /The handoff from the write node is in (\S+)\./.exec(
+      prompts['review']!.prompt,
+    )?.[1];
+    assert.ok(file?.startsWith(prompts['review']!.artifactDirectory));
+    assert.equal((await readFile(file!, 'utf8')).length, 70 * 1024);
+    // `audit` names `write` and takes nothing from `review`.
+    assert.match(prompts['audit']!.prompt, /The handoff from the write node is in/);
+    assert.doesNotMatch(prompts['audit']!.prompt, /From review\./);
+    const shape = run.executions.find((execution) => execution.node === 'shape')!;
+    const write = run.executions.find((execution) => execution.node === 'write')!;
+    assert.deepEqual(
+      (shape.output as { context: unknown }).context,
+      (write.output as { context: unknown }).context,
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a small handoff is given inline to the next agent', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    const node = /\[(\w+)\]/.exec(turn.prompt)![1]!;
+    await report(turn, 'tothenextagent.md', `Notes from ${node}.`);
+    await complete({})(turn, fake);
+  });
+  try {
+    const workflowId = await publish(harnessed, handoffWorkflow({}, {}));
+    const response = await harnessed.engine.startRun({ workflowId });
+    const run = await settled(harnessed, (response.body as { run: { id: string } }).run.id);
+    assert.equal(run.state, 'COMPLETED');
+    const audit = [...harnessed.fake.turns.values()].find((turn) =>
+      turn.prompt.includes('[audit]'),
+    )!;
+    assert.match(
+      audit.prompt,
+      /--- Handoff from the review node ---\nNotes from review\.\n--- End of handoff ---/,
+    );
+    assert.doesNotMatch(audit.prompt, /Notes from write/);
+  } finally {
+    await harnessed.close();
   }
 });
 

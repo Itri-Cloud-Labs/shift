@@ -580,3 +580,30 @@ test('variable sources and transform operations are checked at publish', () => {
     ],
   );
 });
+
+test('report requirements and handoff sources are checked at publish', () => {
+  const problems = (config: Record<string, unknown>) =>
+    diagnose(
+      normalizeDocument({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          { id: 'write', type: 'agent', config: { goal: 'Write.' } },
+          { id: 'review', type: 'agent', config: { goal: 'Review.', ...config } },
+        ],
+        connections: [],
+      }),
+    ).map((item) => `${item.path}: ${item.message}`);
+  assert.deepEqual(
+    problems({
+      reports: { handoff: 'off', humanReport: 'optional' },
+      handoffs: { incoming: false, nodes: ['write'] },
+    }),
+    [],
+  );
+  assert.deepEqual(problems({ handoffs: { nodes: ['missing', 'start', 'review'] } }), [
+    '/nodes/2/config/handoffs/nodes/0: No node missing.',
+    '/nodes/2/config/handoffs/nodes/1: start is not another agent node.',
+    '/nodes/2/config/handoffs/nodes/2: review is not another agent node.',
+  ]);
+  assert.equal(problems({ reports: { handoff: 'sometimes' } }).length, 1);
+});

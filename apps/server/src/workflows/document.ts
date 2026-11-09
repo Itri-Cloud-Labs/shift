@@ -462,6 +462,15 @@ export function diagnose(document: unknown): Diagnostic[] {
         }
       }
     }
+    if (node.type === 'agent') {
+      const named = (config['handoffs'] as { nodes?: string[] } | undefined)?.nodes ?? [];
+      named.forEach((nodeId, index) => {
+        const other = doc.nodes.find((candidate) => candidate.id === nodeId);
+        if (!other) add(`${at}/config/handoffs/nodes/${index}`, `No node ${nodeId}.`);
+        else if (other.type !== 'agent' || nodeId === node.id)
+          add(`${at}/config/handoffs/nodes/${index}`, `${nodeId} is not another agent node.`);
+      });
+    }
     if (node.type === 'get_variable' && config['optional'] === true && !('fallback' in config)) {
       add(`${at}/config/fallback`, 'An optional variable needs an explicit fallback.');
     }

@@ -44,7 +44,13 @@ export interface AgentConfig {
   toolPolicy: ToolPolicy;
   resultSchema: Json;
   limits: { rejectedSubmissions: number; corrections: number; continuations: number };
+  // Missing from configurations frozen before reports existed; those need no reports.
+  reports?: { handoff: ReportRequirement; humanReport: ReportRequirement };
+  // Handoff artifacts the agent reads, frozen with the node that produced each.
+  handoffs?: { artifactId: string; nodeId: string }[];
 }
+
+export type ReportRequirement = 'required' | 'optional' | 'off';
 
 export type InvocationKind = 'goal' | 'correction' | 'continuation';
 export type InvocationState =
