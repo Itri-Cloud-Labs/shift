@@ -898,7 +898,14 @@ test('a handoff passes through a non-agent node, and a reviewer can be kept from
 
 test('only a handoff recorded on this run’s path is handed on, whatever the context claims', async () => {
   const harnessed = await engineFor(async (turn, fake) => {
-    await report(turn, 'tothenextagent.md', `Genuine from ${/\[(\w+)\]/.exec(turn.prompt)?.[1]}.`);
+    // The writer's first turn leaves a draft handoff and no result; its correction completes.
+    if (turn.prompt.includes('[write]') && !/without a result/.test(turn.prompt)) {
+      await report(turn, 'tothenextagent.md', 'Draft from write.');
+      turn.status = 'ended';
+      return;
+    }
+    const node = /\[(\w+)\]/.exec(turn.prompt)?.[1] ?? 'write';
+    await report(turn, 'tothenextagent.md', `Genuine from ${node}.`);
     await complete({ count: 1 })(turn, fake);
   });
   try {
@@ -926,12 +933,13 @@ test('only a handoff recorded on this run’s path is handed on, whatever the co
     const runId = (started.body as { run: { id: string } }).run.id;
     await eventually(() => (view(harnessed, runId).wait?.kind === 'timer' ? true : undefined));
     const mine = harnessed.engine.repository.artifacts({ runId });
-    const genuine = mine.find((artifact) => artifact.role === 'handoff')!;
+    const [draft, genuine] = mine.filter((artifact) => artifact.role === 'handoff');
+    assert.ok(draft && genuine && draft.invocationId !== genuine.invocationId);
     const report_ = mine.find((artifact) => artifact.role === 'human_report')!;
     const pause = view(harnessed, runId).executions.find(
       (execution) => execution.node === 'pause',
     )!;
-    const forged = [genuine, report_, elsewhere]
+    const forged = [draft, genuine, report_, elsewhere]
       .map((artifact) => ({ kind: 'artifact', id: artifact.id }))
       .concat([{ kind: 'artifact', id: '00000000-0000-4000-8000-000000000000' }]);
     harnessed.store.db
@@ -945,7 +953,10 @@ test('only a handoff recorded on this run’s path is handed on, whatever the co
       turn.prompt.includes('[review]'),
     )!;
     assert.match(review.prompt, /--- Handoff from the write node ---\nGenuine from write\.\n/);
-    assert.doesNotMatch(review.prompt, /Genuine from elsewhere|Report\.|an earlier node/);
+    assert.doesNotMatch(
+      review.prompt,
+      /Draft from write|Genuine from elsewhere|Report\.|an earlier node/,
+    );
     assert.equal(review.prompt.match(/--- Handoff from/g)?.length, 1);
   } finally {
     await harnessed.close();

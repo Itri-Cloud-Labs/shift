@@ -102,7 +102,7 @@ type HandoffRef = { kind?: string; id?: string };
 // listed once, with the node whose execution wrote it, which may lie before nodes it passed through.
 // A reference is only ever a hint: it is handed on only when Shift itself recorded a handoff by
 // that ID from a successful execution on this path. A human report, another run's artifact or an
-// unknown ID in the context is ignored, so a forged reference can never become trusted context.
+// unknown ID in the context is ignored, as is a handoff from a turn that was later corrected, so a forged reference can never become trusted context.
 function receivedHandoffs(
   context: ExecutionContext,
   selection: { incoming?: boolean; nodes?: string[] },
@@ -116,7 +116,10 @@ function receivedHandoffs(
           const artifact = artifactOf(ref.id);
           if (artifact?.role !== 'handoff') continue;
           const producer = context.chain.find((entry) => entry.id === artifact.executionId);
-          if (!producer) continue;
+          // Only the successful turn's handoff is its node's; an earlier, corrected turn's stays
+          // in history and is never handed on.
+          const published = (producer?.output.context?.handoffs ?? []) as HandoffRef[];
+          if (!producer || !published.some((own) => own?.id === ref.id)) continue;
           found.push({ artifactId: ref.id, nodeId: producer.nodeId });
         }
   };
