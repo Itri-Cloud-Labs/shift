@@ -1478,6 +1478,53 @@ test('a transcript entry that changes takes the next revision in place', async (
   }
 });
 
+test('a session holder retrying never waits behind a run queued for its session', async () => {
+  const seen = new Map<string, number>();
+  const harnessed = await engineFor(async (turn, fake) => {
+    const tag = /\[(\w+)\]/.exec(turn.prompt)?.[1] ?? 'origin';
+    const visits = (seen.get(tag) ?? 0) + 1;
+    seen.set(tag, visits);
+    if (tag === 'backoff' && visits === 1) {
+      turn.status = 'ended';
+      turn.outcome = 'failed';
+      turn.failure = { code: 'PROVIDER_ERROR', message: 'The provider failed.' };
+    } else if (tag === 'stuck' && visits === 1) turn.status = 'unknown';
+    else await complete({ count: 1 })(turn, fake);
+  });
+  try {
+    const origin = await start(harnessed);
+    assert.equal((await settled(harnessed, origin)).state, 'COMPLETED');
+    const [sessionId] = sessionsOf(harnessed, origin);
+    const reference = (goal: string, extra: Record<string, unknown> = {}) =>
+      start(harnessed, { goal, session: { strategy: 'reference', reference: sessionId } }, extra);
+    const queuedBehind = async () => {
+      const waiter = await reference('Wait. [waiter]');
+      await eventually(() =>
+        view(harnessed, waiter).wait?.kind === 'resource' ? true : undefined,
+      );
+      return waiter;
+    };
+
+    // An automatic retry: the holder waits out its backoff while another run queues.
+    const backoff = await reference('Retry later. [backoff]', retrying(2, 10_000));
+    await eventually(() => (view(harnessed, backoff).wait?.kind === 'retry' ? true : undefined));
+    const first = await queuedBehind();
+    harnessed.clock.advance(10_000);
+    assert.equal((await settled(harnessed, backoff)).state, 'COMPLETED');
+    assert.equal((await settled(harnessed, first)).state, 'COMPLETED');
+
+    // An owner retry: the holder needs a human, another run queues, then the owner retries.
+    const stuck = await reference('Get stuck. [stuck]');
+    assert.equal((await settled(harnessed, stuck)).state, 'NEEDS_HUMAN');
+    const second = await queuedBehind();
+    control(harnessed, stuck, 'retry', { commandId: 'retry-holder' });
+    assert.equal((await settled(harnessed, stuck)).state, 'COMPLETED');
+    assert.equal((await settled(harnessed, second)).state, 'COMPLETED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
 test('the same tool call delivered twice is recorded once', async () => {
   const verdicts: unknown[] = [];
   const harnessed = await engineFor(async (turn, fake) => {

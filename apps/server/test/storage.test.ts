@@ -268,3 +268,61 @@ test('liveness remains alive while readiness fails; timestamps follow the inject
     (error: unknown) => error instanceof Error && !(error instanceof ShiftError),
   );
 });
+
+test('sessions from before session strategies get their project, workspace and node', async (t) => {
+  const state = await temporaryState();
+  t.after(() => state.remove());
+  // The migrations up to artifacts, as an older server applied them.
+  const older = join(state.path, 'migrations');
+  await mkdir(join(older, 'meta'), { recursive: true });
+  const journal = JSON.parse(
+    await readFile(join(migrationsDirectory, 'meta/_journal.json'), 'utf8'),
+  ) as { entries: Array<{ idx: number; tag: string }> };
+  const kept = journal.entries.filter((entry) => entry.idx <= 11);
+  for (const entry of kept)
+    await writeFile(
+      join(older, `${entry.tag}.sql`),
+      await readFile(join(migrationsDirectory, `${entry.tag}.sql`)),
+    );
+  await writeFile(join(older, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: kept }));
+  const db = new Database(join(state.path, 'test.db'));
+  try {
+    db.pragma('foreign_keys = ON');
+    applyMigrations(db, older);
+    const insert = (sql: string, ...values: unknown[]) => db.prepare(sql).run(...values);
+    insert(
+      "INSERT INTO projects (id, name, repository_path, base_ref, defaults_json, permissions_json, revision, created_at) VALUES ('p', 'repo', '/repo', 'main', '{}', '{}', 0, 1)",
+    );
+    insert(
+      "INSERT INTO runs (id, snapshot_json, state, revision, created_at, project_id) VALUES ('r', '{}', 'COMPLETED', 0, 1, 'p')",
+    );
+    insert(
+      "INSERT INTO workspaces (id, project_id, created_by_run_id, path, repository_path, base_ref, base_commit, state, created_at) VALUES ('w', 'p', 'r', '/ws/w', '/repo', 'main', 'abc', 'READY', 1)",
+    );
+    insert(
+      "INSERT INTO agent_sessions (id, created_by_run_id, harness_id, cwd, config_json, lifetime, state, created_at, revision) VALUES ('s', 'r', 'opencode', '/ws/w', '{}', 'ephemeral', 'ARCHIVED', 1, 0)",
+    );
+    insert(
+      "INSERT INTO node_executions (id, run_id, node_id, sequence, input_json, state, agent_session_id, revision) VALUES ('e', 'r', 'review', 2, '{}', 'COMPLETED', 's', 0)",
+    );
+    // A session whose run predates projects and whose directory is not a workspace keeps nulls.
+    insert(
+      "INSERT INTO runs (id, snapshot_json, state, revision, created_at) VALUES ('old', '{}', 'COMPLETED', 0, 1)",
+    );
+    insert(
+      "INSERT INTO agent_sessions (id, created_by_run_id, harness_id, cwd, config_json, lifetime, state, created_at, revision) VALUES ('legacy', 'old', 'opencode', '/repo', '{}', 'ephemeral', 'ARCHIVED', 1, 0)",
+    );
+    applyMigrations(db);
+    assert.deepEqual(
+      db
+        .prepare('SELECT id, project_id, workspace_id, node_id FROM agent_sessions ORDER BY id')
+        .all(),
+      [
+        { id: 'legacy', project_id: null, workspace_id: null, node_id: null },
+        { id: 's', project_id: 'p', workspace_id: 'w', node_id: 'review' },
+      ],
+    );
+  } finally {
+    db.close();
+  }
+});
