@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
@@ -71,12 +71,14 @@ async function setup() {
   };
   // Registers the repository once, then publishes a start -> agent -> end workflow per run.
   let projectId: string | undefined;
+  const project = async () =>
+    (projectId ??= ((await shift('project', 'add', '--path', repo)) as { id: string }).id);
   const start = async (
     goal: string,
     agent: Record<string, unknown> = {},
     document: Record<string, unknown> = {},
   ) => {
-    projectId ??= ((await shift('project', 'add', '--path', repo)) as { id: string }).id;
+    projectId = await project();
     const file = join(state.path, `workflow-${Date.now()}.json`);
     await writeFile(
       file,
@@ -147,6 +149,7 @@ async function setup() {
     repo,
     serve,
     shift,
+    project,
     start,
     show,
     until,
@@ -526,6 +529,89 @@ test(
       const completed = await env.until(run.id, (candidate) => candidate.state !== 'RUNNING');
       assert.equal(completed.state, 'COMPLETED');
       assert.deepEqual(completed.outcome, { data: { checked: true } });
+    } finally {
+      await stopped(server);
+      await env.state.remove();
+    }
+  },
+);
+
+test(
+  'killing Shift during a command stops it and leaves its outcome to the owner',
+  { skip, timeout: 120_000 },
+  async () => {
+    const env = await setup();
+    let server = await env.serve();
+    try {
+      // The credential arrives on standard input and is only ever listed by name.
+      const projectId = await env.project();
+      const set = await runCli(
+        [
+          'credential',
+          'set',
+          '--project',
+          projectId,
+          '--name',
+          'token',
+          '--state-dir',
+          env.state.path,
+        ],
+        {},
+        'hush-hush-123\n',
+      );
+      assert.equal(set.code, 0, set.errors);
+      assert.equal(set.output.includes('hush'), false);
+      const listed = await env.shift('credential', 'list', '--project', projectId);
+      assert.deepEqual(
+        (listed as Array<{ name: string }>).map((credential) => credential.name),
+        ['token'],
+      );
+      const pidFile = join(env.state.path, 'command.pid');
+      const run = await env.start(
+        'unused',
+        {},
+        {
+          nodes: [
+            { id: 'start', type: 'manual_trigger' },
+            {
+              id: 'agent',
+              type: 'command',
+              config: {
+                mode: 'shell',
+                script: `test "$TOKEN" = hush-hush-123 && echo $$ > ${pidFile} && sleep 60`,
+                credentials: { TOKEN: 'token' },
+              },
+            },
+            { id: 'end', type: 'end' },
+          ],
+        },
+      );
+      const pid = await eventually(() =>
+        existsSync(pidFile)
+          ? Number(execFileSync('cat', [pidFile], { encoding: 'utf8' }))
+          : undefined,
+      );
+      assert.equal(alive(pid), true);
+      await server.terminate('SIGKILL');
+      server = await env.serve();
+      const stuck = await env.until(run.id, (candidate) => candidate.state !== 'RUNNING');
+      assert.equal(stuck.state, 'NEEDS_HUMAN');
+      assert.equal(stuck.attention?.code, 'EFFECT_UNCERTAIN');
+      assert.equal(alive(pid), false, 'the orphaned command died with its scope');
+      // The owner decides it is safe to run again; it runs under a new operation.
+      await rm(pidFile);
+      await env.shift('run', 'retry', run.id);
+      await eventually(() => (existsSync(pidFile) ? true : undefined));
+      await env.shift('run', 'cancel', run.id, '--wait');
+      const executions = (await env.shift('run', 'executions', run.id)) as {
+        executions: Array<{ node: string; operations: Array<{ state: string }> }>;
+      };
+      assert.deepEqual(
+        executions.executions
+          .find((execution) => execution.node === 'agent')!
+          .operations.map((operation) => operation.state),
+        ['ABANDONED', 'UNKNOWN'],
+      );
     } finally {
       await stopped(server);
       await env.state.remove();

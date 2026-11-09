@@ -18,6 +18,7 @@ import {
   type OutputEnvelope,
   type VariableValue,
 } from './bindings.js';
+import type { Authority } from '../actions/credentials.js';
 import { checkValue, type ResultEnvelope } from './envelope.js';
 
 // A run freezes its published document, the project it runs in and the defaults it resolved
@@ -38,6 +39,8 @@ export interface RunSnapshot {
     baseCommit?: string;
   };
   defaults: { model?: string };
+  // What the run's actions may do, frozen at admission. Runs admitted before actions had none.
+  authority?: Authority;
 }
 
 // The agent node's configuration after bindings were applied, frozen per execution.
@@ -286,6 +289,8 @@ const formatDuration = (ms: number): string => {
   return minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
 };
 const activeInvocationStates = "('PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN')";
+// Action steps an owner can complete with a result they verified.
+const completable = new Set(['command', 'http', 'script']);
 const activeStates = new Set<InvocationState>(['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN']);
 
 // Runs created before definitions existed froze a fixed manual -> agent -> end graph. They are
@@ -2495,6 +2500,10 @@ export class RunRepository {
     return parse<RunLimits>(row?.limits_json ?? null) ?? {};
   }
 
+  runState(runId: string): string {
+    return this.#runState(runId);
+  }
+
   #runState(runId: string): string {
     return (this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string })
       .state;
@@ -2575,8 +2584,15 @@ export class RunRepository {
         let unconfirmed = false;
         for (const claim of this.#runningClaims(runId)) {
           const last = this.invocations(claim.attemptId).at(-1);
+          // An action whose processes Shift could not stop is still submitted.
+          const submitted = this.db
+            .prepare(
+              "SELECT 1 FROM effect_operations WHERE execution_id = ? AND state = 'SUBMITTED'",
+            )
+            .get(claim.executionId);
           const uncertain =
-            last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN');
+            submitted !== undefined ||
+            (last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN'));
           unconfirmed ||= uncertain;
           this.#charge(runId, claim.attemptId);
           this.db
@@ -2648,6 +2664,17 @@ export class RunRepository {
           );
         }
         this.#control(runId, 'retry', actor, commandId, stuck.id, {});
+        // The owner confirmed that the uncertain action had no effect, or that repeating it is
+        // fine: it is set aside, with who decided, and the next attempt starts a new operation.
+        this.db
+          .prepare(
+            "UPDATE effect_operations SET state = 'ABANDONED', resolution_json = ?, updated_at = ? WHERE execution_id = ? AND state IN ('SUBMITTED', 'UNKNOWN')",
+          )
+          .run(
+            JSON.stringify({ by: 'owner', control: 'retry', actor: { ...actor } }),
+            this.clock.now(),
+            stuck.id,
+          );
         this.db
           .prepare(
             "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ?",
@@ -2700,14 +2727,20 @@ export class RunRepository {
         this.#require(run, ['NEEDS_HUMAN'], 'complete');
         this.#notCancelling(run);
         const stuck = this.#stuck(runId);
-        if (!stuck || stuck.node_type !== 'agent') {
+        const action = stuck !== undefined && completable.has(stuck.node_type ?? '');
+        if (!stuck || (stuck.node_type !== 'agent' && !action)) {
           throw new ShiftError(
             'NOTHING_TO_COMPLETE',
-            'No agent step is waiting for a result.',
+            'No agent or action step is waiting for a result.',
             409,
           );
         }
-        const invalid = checkValue(this.agentConfig(stuck.id).resultSchema, data, 'data');
+        // An action's result is what the owner verified it did; a script's must fit its schema.
+        const schema = action
+          ? ((this.execution(stuck.id).config as { resultSchema?: Json | null } | null)
+              ?.resultSchema ?? true)
+          : this.agentConfig(stuck.id).resultSchema;
+        const invalid = checkValue(schema, data, 'data');
         if (invalid) {
           throw new ShiftError(
             'INVALID_RESULT',
@@ -2726,6 +2759,15 @@ export class RunRepository {
           };
         }
         this.#control(runId, 'complete', actor, commandId, stuck.id, { data });
+        this.db
+          .prepare(
+            "UPDATE effect_operations SET resolution_json = ?, updated_at = ? WHERE execution_id = ? AND state IN ('SUBMITTED', 'UNKNOWN')",
+          )
+          .run(
+            JSON.stringify({ by: 'owner', control: 'complete', actor: { ...actor } }),
+            this.clock.now(),
+            stuck.id,
+          );
         this.#resume(runId);
         this.#finishExecution(
           { runId, executionId: stuck.id, attemptId: null },
@@ -3024,6 +3066,21 @@ export class RunRepository {
       state: string;
       error_json: string | null;
     }>;
+    const operations = this.db
+      .prepare(
+        'SELECT o.id, o.execution_id, o.operation_key, o.action, o.state, o.evidence_json, o.resolution_json, o.created_at, o.updated_at FROM effect_operations o WHERE o.run_id = ? ORDER BY o.created_at, o.rowid',
+      )
+      .all(runId) as Array<{
+      id: string;
+      execution_id: string;
+      operation_key: string;
+      action: string;
+      state: string;
+      evidence_json: string;
+      resolution_json: string | null;
+      created_at: number;
+      updated_at: number;
+    }>;
     return executions.map((execution) => ({
       id: execution.id,
       node: execution.node_id,
@@ -3043,6 +3100,19 @@ export class RunRepository {
           number: attempt.attempt_number,
           state: attempt.state,
           error: parse<Json>(attempt.error_json),
+        })),
+      // External actions it performed, with the evidence recovery relies on.
+      operations: operations
+        .filter((operation) => operation.execution_id === execution.id)
+        .map((operation) => ({
+          id: operation.id,
+          key: operation.operation_key,
+          action: operation.action,
+          state: operation.state,
+          evidence: JSON.parse(operation.evidence_json) as Json,
+          resolution: parse<Json>(operation.resolution_json),
+          createdAt: operation.created_at,
+          updatedAt: operation.updated_at,
         })),
     }));
   }

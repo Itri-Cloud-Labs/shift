@@ -14,6 +14,11 @@ import { evaluateRule, type Rule } from '../workflows/rules.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
+import { actionTypes, freezeAction } from '../actions/config.js';
+import type { Credentials } from '../actions/credentials.js';
+import { EffectStore } from '../actions/effects.js';
+import type { ProcessRunner } from '../actions/process.js';
+import { ActionService } from '../actions/service.js';
 import { AgentService } from './agent-service.js';
 import { envelope, renderTemplate, renderText, resolveBindings } from './bindings.js';
 import { checkValue } from './envelope.js';
@@ -41,6 +46,10 @@ export interface RunEngineOptions {
   receipts: CommandReceipts;
   workspaces: Workspaces;
   defaultModel?: string;
+  // Project credentials and permissions for actions, and the runner that contains their processes.
+  credentials?: Credentials;
+  runner?: ProcessRunner;
+  fetch?: typeof fetch;
   maxActiveAgents?: number;
   pollIntervalMs?: number;
 }
@@ -154,10 +163,14 @@ const failure = (error: unknown) =>
 export class RunEngine {
   readonly repository: RunRepository;
   readonly agents: AgentService;
+  readonly actions: ActionService;
+  readonly effects: EffectStore;
   readonly blobs: BlobStore;
   readonly #options: RunEngineOptions;
   readonly #tasks = new Map<string, { controller: AbortController; done: Promise<void> }>();
   readonly #cancellations = new Set<Promise<void>>();
+  // Action tasks among #tasks; they do not count against the agent limit.
+  readonly #actionTasks = new Set<string>();
   // Runs whose attempts are being stopped because they ran out of active time.
   readonly #limitStops = new Set<string>();
   #timer: NodeJS.Timeout | undefined;
@@ -177,6 +190,17 @@ export class RunEngine {
       logger: options.logger,
       workspaces: options.workspaces,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
+    });
+    this.effects = new EffectStore(options.store.db, options.clock);
+    this.actions = new ActionService({
+      db: options.store.db,
+      repository: this.repository,
+      effects: this.effects,
+      logger: options.logger,
+      workspaces: options.workspaces,
+      ...(options.credentials ? { credentials: options.credentials } : {}),
+      ...(options.runner ? { runner: options.runner } : {}),
+      ...(options.fetch ? { fetch: options.fetch } : {}),
     });
   }
 
@@ -320,6 +344,12 @@ export class RunEngine {
           baseCommit,
         },
         defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
+        // The run keeps the permissions and credentials it was admitted with; later revocations
+        // still apply when an action runs.
+        authority: this.#options.credentials?.authority(project.id) ?? {
+          denied: [],
+          credentials: {},
+        },
       };
       const runId = this.repository.createRun(snapshot, triggerInput);
       return { status: 201, body: { run: this.repository.run(runId) } };
@@ -479,7 +509,8 @@ export class RunEngine {
       for (let progressed = true; progressed && !this.#stopping;) {
         progressed = false;
         for (const pending of this.repository.pendingExecutions()) {
-          if (pending.nodeType === 'agent' && this.#tasks.size >= limit) continue;
+          if (pending.nodeType === 'agent' && this.#tasks.size - this.#actionTasks.size >= limit)
+            continue;
           const claim = this.repository.claimAttempt(
             pending.id,
             this.#options.store.workerGeneration,
@@ -519,6 +550,10 @@ export class RunEngine {
     }
     if (context.node.type === 'agent') {
       this.#launch(claim);
+      return false;
+    }
+    if (actionTypes.has(context.node.type)) {
+      this.#launchAction(claim);
       return false;
     }
     try {
@@ -689,6 +724,27 @@ export class RunEngine {
       };
       config = frozen as unknown as Json;
     }
+    if (actionTypes.has(node.type)) {
+      // Commands work in the run's own workspace, created on first use.
+      const { baseCommit, id: projectId } = snapshot.project;
+      const workspace =
+        node.type === 'command' && baseCommit !== undefined && projectId !== null
+          ? this.#options.workspaces.allocate({
+              runId: claim.runId,
+              projectId,
+              repositoryPath: snapshot.project.repositoryPath,
+              baseRef: snapshot.project.baseRef,
+              baseCommit,
+            })
+          : undefined;
+      config = freezeAction(
+        node.type,
+        node.config as Record<string, Json>,
+        bindings,
+        context.input.data,
+        workspace?.id,
+      ) as unknown as Json;
+    }
     if (node.type === 'agent') {
       const authored = node.config as {
         goal: string;
@@ -808,6 +864,26 @@ export class RunEngine {
         this.#pump();
       });
     this.#tasks.set(key, { controller, done });
+  }
+
+  // Actions run as tasks, so a cancellation or shutdown can stop their processes.
+  #launchAction(claim: Claim): void {
+    const controller = new AbortController();
+    const done = this.actions
+      .run(claim, controller.signal)
+      .catch((error: unknown) => {
+        this.#options.logger.error(
+          { runId: claim.runId, code: (error as { code?: string }).code },
+          'An action task failed.',
+        );
+      })
+      .finally(() => {
+        this.#tasks.delete(claim.attemptId);
+        this.#actionTasks.delete(claim.attemptId);
+        this.#pump();
+      });
+    this.#tasks.set(claim.attemptId, { controller, done });
+    this.#actionTasks.add(claim.attemptId);
   }
 
   #launch(claim: Claim): void {

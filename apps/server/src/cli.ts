@@ -46,6 +46,10 @@ shift run retry RUN_ID [--wait]
 shift run fail RUN_ID [--reason TEXT]
 shift run complete RUN_ID --file DATA.json
 shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
+shift project permissions PROJECT_ID [--allow ACTIONS] [--deny ACTIONS]
+shift credential list --project PROJECT_ID
+shift credential set --project PROJECT_ID --name NAME   (value on standard input)
+shift credential revoke CREDENTIAL_ID --project PROJECT_ID
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
@@ -70,6 +74,12 @@ Each run works in its own detached worktree of the project, under the state
 directory, at the commit its base ref had when the run started. Worktrees are
 kept after runs finish; remove refuses one with uncommitted changes unless
 --force is given.
+
+Command, HTTP and Script nodes run owner-authored code and requests as your
+account; they are not a sandbox. ACTIONS are command, http, script, git and
+git_push, all allowed until denied. A credential is a project secret that
+workflows name; its value is written once and never shown again. A run uses the
+permissions and credentials it started with, minus anything revoked since.
 
 device pair prints a single-use, eight-word phrase that pairs one desktop client
 within ten minutes; revoke cuts a device off without stopping runs it started.
@@ -117,6 +127,7 @@ async function main(): Promise<void> {
       'artifact',
       'session',
       'invocation',
+      'credential',
     ].includes(command)
   ) {
     const { adminCommand } = await import('./cli-admin.js');

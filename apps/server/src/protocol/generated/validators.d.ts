@@ -27,6 +27,9 @@ import type {
   RunVariables,
   ArtifactList,
   ArtifactResponse,
+  CredentialList,
+  CredentialResponse,
+  ProjectPermissionsResponse,
   SessionList,
   SessionResponse,
   InvocationResponse,
@@ -74,6 +77,9 @@ export const validateExecutionPage: Validator<ExecutionPage>;
 export const validateRunVariables: Validator<RunVariables>;
 export const validateArtifactList: Validator<ArtifactList>;
 export const validateArtifactResponse: Validator<ArtifactResponse>;
+export const validateCredentialList: Validator<CredentialList>;
+export const validateCredentialResponse: Validator<CredentialResponse>;
+export const validateProjectPermissionsResponse: Validator<ProjectPermissionsResponse>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
 export const validateInvocationResponse: Validator<InvocationResponse>;

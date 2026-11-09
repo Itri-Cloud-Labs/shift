@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ShiftError } from '../domain/errors.js';
@@ -83,6 +83,14 @@ export class SecretBox {
       cipher.getAuthTag().toString('base64url'),
       ciphertext.toString('base64url'),
     ].join('.');
+  }
+
+  // A keyed digest of a secret, so a command receipt can tell a repeated request from a changed
+  // one without holding anything that could be guessed back to the secret.
+  digest(plaintext: string, context: string): string {
+    return createHmac('sha256', this.keys.get(this.current)!)
+      .update(`${context}\0${plaintext}`, 'utf8')
+      .digest('base64url');
   }
 
   unseal(sealed: string, context: string): string {

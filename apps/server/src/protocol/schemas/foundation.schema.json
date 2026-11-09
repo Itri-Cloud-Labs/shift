@@ -784,6 +784,13 @@
             "$ref": "#/$defs/Attempt"
           },
           "maxItems": 1000
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EffectOperation"
+          },
+          "maxItems": 1000
         }
       }
     },
@@ -2402,6 +2409,143 @@
         "next": {
           "type": ["integer", "null"],
           "minimum": 0
+        }
+      }
+    },
+    "EffectOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "action",
+        "state",
+        "evidence",
+        "resolution",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "action": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "state": {
+          "enum": ["INTENDED", "SUBMITTED", "SUCCEEDED", "FAILED", "UNKNOWN", "ABANDONED"]
+        },
+        "evidence": {
+          "type": "object"
+        },
+        "resolution": {},
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Credential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "projectId", "name", "revision", "createdAt", "updatedAt"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "updatedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CredentialList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "credentials"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "credentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Credential"
+          },
+          "maxItems": 1000
+        }
+      }
+    },
+    "CredentialResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "credential"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        }
+      }
+    },
+    "ProjectPermissionsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "permissions"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["projectId", "denied"],
+          "properties": {
+            "projectId": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "denied": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": ["command", "http", "script", "git", "git_push"]
+              }
+            }
+          }
         }
       }
     }

@@ -25,6 +25,9 @@ import {
   validateExecutionPage,
   validateRunVariables,
   validateArtifactList,
+  validateCredentialList,
+  validateCredentialResponse,
+  validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateSessionList,
   validateSessionResponse,
@@ -48,6 +51,7 @@ import type { DeviceService } from './devices/service.js';
 import type { EventLog } from './events/log.js';
 import type { EventStreams } from './events/streams.js';
 import type { Device } from './devices/registry.js';
+import type { Credentials } from './actions/credentials.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
 import type { DefinitionRepository } from './workflows/repository.js';
@@ -66,6 +70,7 @@ export function createHttpServer(options: {
   engine?: RunEngine;
   definitions?: { service: DefinitionService; repository: DefinitionRepository };
   workspaces?: WorkspaceService;
+  credentials?: Credentials;
   devices?: DeviceService;
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
@@ -209,6 +214,38 @@ export function createHttpServer(options: {
     router.get('/projects', guard, (_req, res) => {
       reply(res, 200, { projects: repository.projects() }, validateProjectList);
     });
+    const credentials = options.credentials;
+    if (credentials) {
+      // Credential values are write-only: listings and responses carry names and revisions.
+      router.get('/projects/:id/credentials', guard, (req, res) => {
+        reply(res, 200, { credentials: credentials.list(id(req)) }, validateCredentialList);
+      });
+      router.post('/projects/:id/credentials', guard, json, (req, res) => {
+        command(res, credentials.put(id(req), body(req), actorOf(res)), validateCredentialResponse);
+      });
+      router.post('/projects/:id/credentials/:credentialId/revoke', guard, json, (req, res) => {
+        command(
+          res,
+          credentials.revoke(id(req), String(req.params['credentialId']), body(req), actorOf(res)),
+          validateCredentialResponse,
+        );
+      });
+      router.get('/projects/:id/permissions', guard, (req, res) => {
+        reply(
+          res,
+          200,
+          { permissions: { projectId: id(req), denied: credentials.denied(id(req)) } },
+          validateProjectPermissionsResponse,
+        );
+      });
+      router.post('/projects/:id/permissions', guard, json, (req, res) => {
+        command(
+          res,
+          credentials.setPermissions(id(req), body(req), actorOf(res)),
+          validateProjectPermissionsResponse,
+        );
+      });
+    }
     router.post('/workflows', guard, json, (req, res) => {
       command(res, service.createWorkflow(body(req), actorOf(res)), validateWorkflowResponse);
     });
