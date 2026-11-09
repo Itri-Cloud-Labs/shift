@@ -17,11 +17,30 @@ import { nodeType } from '../workflows/nodes.js';
 import {
   safeToRepeat,
   type ActionConfig,
+  gitReads,
+  gitTypes,
   type CommandConfig,
+  type GitConfig,
   type ScriptConfig,
 } from './config.js';
 import type { Authority, Credentials } from './credentials.js';
-import { EffectConflict, RunNotActive, type EffectStore, type Operation } from './effects.js';
+import {
+  argumentHash,
+  EffectConflict,
+  RunNotActive,
+  type EffectStore,
+  type Operation,
+} from './effects.js';
+import {
+  gitDiff,
+  gitIdentity,
+  gitStatus,
+  hostTransport,
+  performGit,
+  planGit,
+  reconcileGit,
+  type GitContext,
+} from './git.js';
 import { sendRequest } from './http.js';
 import { redact, type Outcome } from './outcome.js';
 import type { ProcessResult, ProcessRunner } from './process.js';
@@ -147,6 +166,7 @@ export class ActionService {
       if (!(error instanceof ShiftError)) throw error;
       return fail(actionError(error.code, error.message, 'permission'));
     }
+    if (gitTypes.has(config.action)) return this.#git(claim, config as GitConfig, signal);
     let operation = effects.latest(claim.executionId, config.action);
     // A known outcome is final for the operation: a recovered attempt reports it, never repeats it.
     // An automatic retry after a safe failure starts a new operation.
@@ -201,6 +221,141 @@ export class ActionService {
           explanation: 'Shift lost track of the action after it started.',
         };
       }
+    }
+    this.#settle(claim, operation, outcome);
+  }
+
+  // Git reads observe the workspace afresh on every attempt and record no operation. Mutations
+  // are planned first: what they will change and what they expect to find becomes the
+  // operation's arguments and evidence, so recovery decides from the repository and the remote
+  // what an interrupted one did instead of guessing.
+  async #git(claim: Claim, config: GitConfig, signal: AbortSignal): Promise<void> {
+    const { repository, effects, runner } = this.#options;
+    if (!this.#options.workspaces)
+      throw new ShiftError('WORKSPACE_UNAVAILABLE', 'Run workspaces are not configured.', 503);
+    let context: GitContext;
+    try {
+      const workspace = (await this.#options.workspaces.ensureReady(config.workspaceId)) as {
+        path: string;
+        baseCommit?: string;
+      };
+      context = {
+        cwd: workspace.path,
+        baseCommit: workspace.baseCommit ?? '',
+        env: baseEnvironment(),
+        transport: hostTransport,
+        signal,
+        ...(runner ? { runner } : {}),
+      };
+    } catch (error) {
+      if (!(error instanceof ShiftError)) throw error;
+      return repository.completeExecution(claim, {
+        kind: 'failed',
+        error: actionError(error.code, error.message, 'external'),
+      });
+    }
+    const finish = (outcome: Outcome, operation?: Operation) => {
+      if (operation) return this.#settle(claim, operation, outcome);
+      if (outcome.kind === 'succeeded') return this.#complete(claim, null, outcome.data);
+      if (outcome.kind === 'failed')
+        return repository.completeExecution(claim, { kind: 'failed', error: outcome.error });
+    };
+    const guarded = async (work: () => Promise<Outcome>): Promise<Outcome> => {
+      try {
+        return await work();
+      } catch (error) {
+        if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+        if (error instanceof ShiftError)
+          return { kind: 'failed', error: actionError(error.code, error.message, 'external') };
+        throw error;
+      }
+    };
+    if (gitReads.has(config.action))
+      return finish(
+        await guarded(() =>
+          config.action === 'git_status' ? gitStatus(config, context) : gitDiff(config, context),
+        ),
+      );
+    const identity = gitIdentity(config);
+    let operation = effects.latest(claim.executionId, config.action);
+    if (operation?.state === 'SUCCEEDED')
+      return this.#complete(claim, operation, (operation.result as { data: Json }).data);
+    if (operation?.state === 'FAILED') {
+      const error = operation.error as unknown as ExecutionError;
+      if (!(error.retryDisposition === 'safe' && operation.attemptId !== claim.attemptId))
+        return finish({ kind: 'failed', error });
+      operation = null;
+    }
+    if (operation?.state === 'ABANDONED') operation = null;
+    if (
+      operation &&
+      argumentHash((operation.args as Record<string, Json>)['config'] ?? null) !==
+        argumentHash(identity)
+    ) {
+      repository.needsHuman(claim, {
+        code: 'EFFECT_CONFLICT',
+        explanation: `Operation ${operation.key} was recorded with different arguments than this step now has. Shift will not perform a changed action under the same identity.`,
+        executionId: claim.executionId,
+      });
+      return;
+    }
+    if (operation?.state === 'SUBMITTED' || operation?.state === 'UNKNOWN') {
+      const unit = operation.evidence['unit'];
+      if (typeof unit === 'string' && runner) await runner.kill(unit);
+      const recorded = operation;
+      const observed = await guarded(async () => {
+        const result = await reconcileGit(
+          config,
+          context,
+          recorded.args as Record<string, Json>,
+          recorded.evidence,
+        );
+        return result.kind === 'redo' ? ({ kind: 'stopped' } as Outcome) : (result as Outcome);
+      });
+      // A redo performs exactly the recorded operation again; anything else settles it.
+      if (observed.kind !== 'stopped') return finish(observed, operation);
+      operation = effects.adopt(claim, operation, operation.args);
+    }
+    if (!operation) {
+      const plan = await guarded(async () => {
+        const planned = await planGit(config, context);
+        return planned.kind === 'done'
+          ? planned.outcome
+          : ({ kind: 'succeeded', data: planned as unknown as Json } as Outcome);
+      });
+      if (plan.kind !== 'succeeded') return finish(plan);
+      const { args, evidence } = plan.data as unknown as {
+        args: Record<string, Json>;
+        evidence: Record<string, Json>;
+      };
+      operation = effects.intend(claim, config.action, { ...args, config: identity }, evidence);
+    } else if (operation.state === 'INTENDED') {
+      operation = effects.adopt(claim, operation, operation.args);
+    }
+    const unit = runner ? runner.unit(operation.id) : null;
+    operation = effects.submit(claim, operation.id, {
+      submittedAt: Date.now(),
+      ...(config.action === 'git_push' && unit ? { unit } : {}),
+    });
+    const submitted = operation;
+    let outcome: Outcome;
+    try {
+      outcome = await performGit(
+        config,
+        context,
+        submitted.args as Record<string, Json>,
+        submitted.evidence,
+      );
+    } catch (error) {
+      if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+      this.#options.logger.error(
+        { runId: claim.runId, code: (error as { code?: string }).code },
+        'A Git action failed after it was submitted.',
+      );
+      outcome = {
+        kind: 'uncertain',
+        explanation: 'Shift lost track of the Git action after it started.',
+      };
     }
     this.#settle(claim, operation, outcome);
   }
@@ -292,7 +447,7 @@ export class ActionService {
     }
   }
 
-  #complete(claim: Claim, _operation: Operation, data: Json): void {
+  #complete(claim: Claim, _operation: Operation | null, data: Json): void {
     const { input } = this.#options.repository.execution(claim.executionId);
     this.#options.repository.completeExecution(claim, {
       kind: 'completed',
@@ -375,6 +530,8 @@ export class ActionService {
       });
       return commandOutcome(config, result, Object.values(secrets));
     }
+    if (config.action !== 'script')
+      throw new ShiftError('UNSUPPORTED_NODE', `${config.action} has no executor.`, 422);
     submit({ unit });
     const result = await runner.run({
       unit,

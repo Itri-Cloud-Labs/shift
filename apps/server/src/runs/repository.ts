@@ -290,7 +290,14 @@ const formatDuration = (ms: number): string => {
 };
 const activeInvocationStates = "('PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN')";
 // Action steps an owner can complete with a result they verified.
-const completable = new Set(['command', 'http', 'script']);
+const completable = new Set([
+  'command',
+  'http',
+  'script',
+  'git_create_branch',
+  'git_commit',
+  'git_push',
+]);
 const activeStates = new Set<InvocationState>(['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN']);
 
 // Runs created before definitions existed froze a fixed manual -> agent -> end graph. They are

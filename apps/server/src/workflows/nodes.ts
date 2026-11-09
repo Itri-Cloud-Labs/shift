@@ -368,6 +368,84 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
     },
   },
   {
+    // Observes the run workspace: HEAD, branch and changed paths. Every run is a fresh look.
+    type: 'git_status',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'git',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { maxEntries: { type: 'integer', minimum: 1, maximum: 10000 } },
+    },
+  },
+  {
+    // The workspace's changes against the run's base commit or HEAD, as text and per file.
+    type: 'git_diff',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'git',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        against: { enum: ['base', 'head'] },
+        paths: {
+          type: 'array',
+          maxItems: 100,
+          items: { type: 'string', minLength: 1, maxLength: 1024 },
+        },
+        maxBytes: { type: 'integer', minimum: 1024, maximum: 1024 * 1024 },
+      },
+    },
+  },
+  {
+    // Names the workspace's current commit, keeping its changes. `{{name}}` bindings fill it.
+    type: 'git_create_branch',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'git',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name'],
+      properties: { name: { type: 'string', minLength: 1, maxLength: 250 } },
+    },
+  },
+  {
+    // Commits every change in the workspace with `message`, which `{{name}}` bindings fill.
+    type: 'git_commit',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'git',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: {
+        message: { type: 'string', minLength: 1, maxLength: 20000 },
+        allowEmpty: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    // Pushes a local branch, the current one by default, to `remote` (default origin).
+    type: 'git_push',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'git_push',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        remote: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' },
+        branch: { type: 'string', minLength: 1, maxLength: 250 },
+        remoteBranch: { type: 'string', minLength: 1, maxLength: 250 },
+        timeoutMs: { type: 'integer', minimum: 1000, maximum: 60 * 60 * 1000 },
+      },
+    },
+  },
+  {
     type: 'end',
     version: 1,
     ports: [],
