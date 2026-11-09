@@ -27,7 +27,28 @@ const options = {
   limit: { type: 'string' },
   all: { type: 'boolean' },
   goal: { type: 'string' },
+  allow: { type: 'string' },
+  deny: { type: 'string' },
 } as const;
+
+// A credential value comes from standard input, so it never appears in a command line or history.
+async function readSecret(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const value = Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+  if (!value) throw invalid('Pipe the credential value to standard input.');
+  return value;
+}
+
+const list = (value: string | undefined) =>
+  value === undefined
+    ? []
+    : value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
 
 type Values = {
   [K in keyof typeof options]?: (typeof options)[K]['type'] extends 'boolean' ? boolean : string;
@@ -337,6 +358,44 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       if (values.wait) run = await waitFor(run);
       return print(run);
     }
+    case 'project permissions': {
+      const path = `/api/v0/admin/projects/${encodeURIComponent(need(target, 'PROJECT_ID'))}/permissions`;
+      if (values.allow === undefined && values.deny === undefined)
+        return print((await get(path))['permissions']);
+      return print(
+        (await send('POST', path, { allow: list(values.allow), deny: list(values.deny) }))[
+          'permissions'
+        ],
+      );
+    }
+    case 'credential list':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/credentials`,
+          )
+        )['credentials'],
+      );
+    case 'credential set':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/credentials`,
+            { name: need(values.name, '--name'), value: await readSecret() },
+          )
+        )['credential'],
+      );
+    case 'credential revoke':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/credentials/${encodeURIComponent(need(target, 'CREDENTIAL_ID'))}/revoke`,
+            {},
+          )
+        )['credential'],
+      );
     case 'workspace list':
       return print(
         (

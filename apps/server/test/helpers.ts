@@ -147,8 +147,10 @@ export async function startChild(
 export async function runCli(
   args: string[],
   env: NodeJS.ProcessEnv = {},
+  input = '',
 ): Promise<{ code: number | null; output: string; errors: string }> {
   const process = ownedProcess([cli, ...args], env);
+  process.child.stdin!.end(input);
   const timeout = setTimeout(() => {
     if (process.child.exitCode === null && process.child.signalCode === null)
       process.child.kill('SIGKILL');

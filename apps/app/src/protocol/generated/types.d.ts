@@ -294,11 +294,27 @@ export interface Execution {
    * @maxItems 1000
    */
   attempts: Attempt[];
+  /**
+   * @maxItems 1000
+   */
+  operations?: EffectOperation[];
 }
 export interface Attempt {
   number: number;
   state: 'PENDING' | 'RUNNING' | 'WAITING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED' | 'CANCELLED';
   error: unknown;
+}
+export interface EffectOperation {
+  id: Uuid;
+  key: string;
+  action: string;
+  state: 'INTENDED' | 'SUBMITTED' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN' | 'ABANDONED';
+  evidence: {
+    [k: string]: unknown;
+  };
+  resolution: unknown;
+  createdAt: number;
+  updatedAt: number;
 }
 export interface Interaction {
   id: Uuid;

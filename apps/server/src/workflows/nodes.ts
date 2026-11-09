@@ -1,5 +1,6 @@
 // Registered node types (server specification sections 4.1 and 8). A published version pins each
 // node's type version; a type version this server does not implement fails publication and start.
+import { credentialName, type ActionPermission } from '../actions/credentials.js';
 import type { Json } from '../harness/types.js';
 import { defaultOutcomes } from './forms.js';
 import { ruleDefs, ruleRef } from './rules.js';
@@ -15,6 +16,10 @@ export interface NodeTypeDefinition {
   entry?: boolean;
   // Only these may return variable writes (specification 6.5).
   writesVariables?: boolean;
+  // The project permission an action needs (specification 8).
+  permission?: ActionPermission;
+  // Authored in an explicit advanced mode rather than ordinary forms.
+  advanced?: boolean;
 }
 
 const limits = {
@@ -27,6 +32,9 @@ const limits = {
   },
 };
 const schema = { anyOf: [{ type: 'object' }, { type: 'boolean' }] };
+const envName = { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]{0,127}$' };
+const headerName = { type: 'string', pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,100}$" };
+const credentialRef = { type: 'string', pattern: credentialName.source };
 const variableKey = { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' };
 const requirement = { enum: ['required', 'optional', 'off'] };
 const interaction = {
@@ -248,6 +256,115 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
       additionalProperties: false,
       required: ['key'],
       properties: { key: variableKey, optional: { type: 'boolean' }, fallback: {} },
+    },
+  },
+  {
+    // Runs an executable with an argument array, or a script under /bin/sh in explicit shell
+    // mode, in the run workspace. `{{name}}` bindings fill arguments and environment values, never
+    // the shell script, which reads them from the environment instead.
+    type: 'command',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'command',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mode: { enum: ['exec', 'shell'] },
+        executable: { type: 'string', minLength: 1, maxLength: 4096 },
+        args: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 16384 } },
+        script: { type: 'string', minLength: 1, maxLength: 65536 },
+        cwd: { type: 'string', minLength: 1, maxLength: 1024 },
+        env: {
+          type: 'object',
+          maxProperties: 50,
+          propertyNames: envName,
+          additionalProperties: { type: 'string', maxLength: 16384 },
+        },
+        credentials: {
+          type: 'object',
+          maxProperties: 20,
+          propertyNames: envName,
+          additionalProperties: credentialRef,
+        },
+        timeoutMs: { type: 'integer', minimum: 1000, maximum: 24 * 60 * 60 * 1000 },
+        maxOutputBytes: { type: 'integer', minimum: 1024, maximum: 256 * 1024 },
+        parseJson: { type: 'boolean' },
+        safeToRetry: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    // Sends one HTTP request. `{{name}}` bindings fill the URL, header values and a text body; a
+    // JSON body is a Transform template. Credential headers are injected when the request is sent.
+    type: 'http',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'http',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['url'],
+      properties: {
+        method: { enum: ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'] },
+        url: { type: 'string', minLength: 1, maxLength: 8192 },
+        headers: {
+          type: 'object',
+          maxProperties: 50,
+          propertyNames: headerName,
+          additionalProperties: { type: 'string', maxLength: 8192 },
+        },
+        credentialHeaders: {
+          type: 'object',
+          maxProperties: 10,
+          propertyNames: headerName,
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['credential'],
+            properties: {
+              credential: credentialRef,
+              prefix: { type: 'string', maxLength: 100, pattern: '^[^\\r\\n]*$' },
+            },
+          },
+        },
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind'],
+          properties: {
+            kind: { enum: ['json', 'text'] },
+            value: {},
+            text: { type: 'string', maxLength: 1024 * 1024 },
+            contentType: { type: 'string', minLength: 1, maxLength: 200 },
+          },
+        },
+        timeoutMs: { type: 'integer', minimum: 1000, maximum: 10 * 60 * 1000 },
+        maxResponseBytes: { type: 'integer', minimum: 1024, maximum: 1024 * 1024 },
+        responseSchema: schema,
+        followRedirects: { type: 'boolean' },
+        safeToRetry: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    // Advanced: the body of an async JavaScript function `(input, bindings)` returning JSON, run
+    // in a bounded child process with no credentials, files or engine objects.
+    type: 'script',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'script',
+    advanced: true,
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['source'],
+      properties: {
+        source: { type: 'string', minLength: 1, maxLength: 100_000 },
+        timeoutMs: { type: 'integer', minimum: 100, maximum: 5 * 60 * 1000 },
+        resultSchema: schema,
+        safeToRetry: { type: 'boolean' },
+      },
     },
   },
   {

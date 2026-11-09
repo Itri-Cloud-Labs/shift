@@ -172,6 +172,14 @@ Status `201`. Errors: `NOT_A_REPOSITORY`, `INVALID_BASE_REF`, `PROJECT_EXISTS` (
 
 `GET /api/v0/admin/projects` returns `{"projects": [Project, …]}`.
 
+#### Credentials and permissions
+
+A credential is a project secret that actions name. Its value is write-only: no response, receipt or event contains it.
+
+`POST /api/v0/admin/projects/{id}/credentials` with `name` (letters, digits, `_` and `-`, up to 64), `value` (up to 16 KiB of text) and `commandId` creates the credential (`201`) or replaces the value of the one with that name (`200`, `revision` increases). The receipt holds a keyed digest of the value, so repeating a command with a different value is a `COMMAND_CONFLICT`. `GET /api/v0/admin/projects/{id}/credentials` returns `{"credentials": [Credential, …]}`, each with `id`, `projectId`, `name`, `revision`, `createdAt` and `updatedAt`. `POST /api/v0/admin/projects/{id}/credentials/{credentialId}/revoke` revokes it and discards the sealed value. CLI: `shift credential set|list|revoke`.
+
+`GET /api/v0/admin/projects/{id}/permissions` returns `{"permissions": {"projectId", "denied": [...]}}`. `POST` the same path with `allow` and `deny` arrays of `command`, `http`, `script`, `git` and `git_push` changes it. CLI: `shift project permissions`.
+
 ### Workflows
 
 A workflow belongs to a project. It has one mutable draft with a revision number, and immutable numbered versions. Runs always use the active version. The document format is described in [Workflows and runs](workflows.md).
@@ -568,6 +576,9 @@ These codes are never HTTP errors. They appear inside a run: in `attention` when
 | `attention`  | `AGENT_INTERRUPTED`                                                         | The turn was interrupted more times than the continuation limit allows.                                                                                                              |
 | `attention`  | `EXECUTION_LIMIT`                                                           | A loop reached a node or run execution limit.                                                                                                                                        |
 | `attention`  | `ACTIVE_TIME_LIMIT`                                                         | The run used its active execution time, before a step or during an agent turn, which was stopped. Has `limit: {scope: "active", value}`.                                             |
+| `attention`  | `EFFECT_UNCERTAIN`                                                          | A command, script or request was submitted but its outcome was not recorded, for example because Shift was killed. Its processes were stopped; nothing is repeated automatically.     |
+| `attention`  | `EFFECT_CONFLICT`                                                           | An operation was recorded with other arguments than the step now has. Shift does not perform a changed action under the same identity.                                               |
+| `attention`  | `ACTION_STOP_UNCONFIRMED`                                                   | Shift could not confirm that an action's processes stopped.                                                                                                                          |
 | `attention`  | `CANCEL_UNCONFIRMED`                                                        | A cancellation could not confirm that the agent stopped. Only `cancel` is accepted.                                                                                                  |
 | node `error` | `ABANDONED`                                                                 | The owner abandoned the step with `fail` (`external`).                                                                                                                               |
 | node `error` | `RESULT_MISSING`, `RESULT_REJECTED`                                         | The agent ended without a result Shift accepted, after the correction prompts ran out (`contract`).                                                                                  |
@@ -577,6 +588,10 @@ These codes are never HTTP errors. They appear inside a run: in `attention` when
 | node `error` | `HARNESS_PROMPT`                                                            | The agent asked for a permission or an answer, which unattended runs cannot give (`blocked`).                                                                                        |
 | node `error` | `WORKSPACE_UNAVAILABLE`                                                     | The run's worktree could not be created, or was deleted outside Shift (`external`).                                                                                                  |
 | node `error` | `BINDING_MISSING`, `MODEL_REQUIRED`, `OUTPUT_TOO_LARGE`, `INVALID_DEADLINE` | The node's inputs or configuration could not be resolved (`input`).                                                                                                                  |
+| node `error` | `COMMAND_FAILED`, `COMMAND_TIMED_OUT`, `HTTP_STATUS`, `HTTP_UNREACHABLE`, `HTTP_RESPONSE_TOO_LARGE`, `SCRIPT_FAILED`, `SCRIPT_TIMED_OUT` | An action finished with a known failure (`external`); `details` holds its output or response.                                                                                       |
+| node `error` | `COMMAND_OUTPUT_INVALID`, `HTTP_RESPONSE_INVALID`, `SCRIPT_RESULT_INVALID`, `SCRIPT_RESULT_TOO_LARGE` | An action's output does not match what the node expects (`contract`).                                                                                                               |
+| node `error` | `ACTION_NOT_PERMITTED`, `CREDENTIAL_UNAVAILABLE`                            | The project denies the action, or a credential is unknown or revoked (`permission`). Nothing ran.                                                                                    |
+| node `error` | `INVALID_DIRECTORY`, `INVALID_ARGUMENT`, `INVALID_REQUEST_URL`, `ACTION_CONTAINMENT_UNAVAILABLE` | An action could not start (`input`). Nothing ran.                                                                                                                                    |
 | node `error` | `CONDITION_TYPE`                                                            | A condition or switch compared values of the wrong types (`input`).                                                                                                                  |
 | node `error` | `BINDING_UNAVAILABLE`                                                       | A `sequence` or `executionId` selector names an execution that is not an earlier successful one on the run's path (`input`).                                                         |
 | node `error` | any agent code                                                              | A `blocked` or `failed` result from the agent keeps the agent's own code (`blocked` or `external`).                                                                                  |

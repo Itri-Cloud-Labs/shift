@@ -45,7 +45,7 @@ export class SystemdScopes {
     unit: string,
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string> },
+    options: { cwd: string; env: Record<string, string>; stdin?: boolean; resultPipe?: boolean },
   ): ChildProcess {
     if (!unitName.test(unit)) throw new ShiftError('INVALID_UNIT_NAME', 'Invalid scope name.');
     const bus: Record<string, string> = {};
@@ -68,7 +68,17 @@ export class SystemdScopes {
         command,
         ...args,
       ],
-      { cwd: options.cwd, env: { ...options.env, ...bus }, stdio: ['ignore', 'pipe', 'pipe'] },
+      {
+        cwd: options.cwd,
+        env: { ...options.env, ...bus },
+        // A result pipe is the child's descriptor 3, kept apart from what it prints.
+        stdio: [
+          options.stdin ? 'pipe' : 'ignore',
+          'pipe',
+          'pipe',
+          ...(options.resultPipe ? (['pipe'] as const) : []),
+        ],
+      },
     );
   }
 

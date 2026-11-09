@@ -395,7 +395,7 @@ export function diagnose(document: unknown): Diagnostic[] {
       return;
     }
     const config = node.config as Record<string, Json>;
-    for (const field of ['resultSchema', 'inputSchema'] as const) {
+    for (const field of ['resultSchema', 'inputSchema', 'responseSchema'] as const) {
       if (config[field] === undefined) continue;
       try {
         assertResultSchema(config[field]);
@@ -486,6 +486,57 @@ export function diagnose(document: unknown): Diagnostic[] {
           add(`${at}/config/handoffs/nodes/${index}`, `${nodeId} is not another agent node.`);
       });
     }
+    if (node.type === 'command') {
+      const shell = config['mode'] === 'shell';
+      if (shell && config['script'] === undefined)
+        add(`${at}/config/script`, 'Shell mode needs a script.');
+      if (shell && (config['executable'] !== undefined || config['args'] !== undefined))
+        add(`${at}/config`, 'Shell mode runs a script; it takes no executable or arguments.');
+      if (!shell && config['executable'] === undefined)
+        add(`${at}/config/executable`, 'A command needs an executable.');
+      if (!shell && config['script'] !== undefined)
+        add(`${at}/config/script`, 'Only shell mode runs a script.');
+      if (typeof config['script'] === 'string' && templateBindings(config['script']).length > 0)
+        add(
+          `${at}/config/script`,
+          'Bindings never fill a shell script; pass them through env and read them as variables.',
+        );
+      const cwd = config['cwd'];
+      if (typeof cwd === 'string' && (cwd.startsWith('/') || cwd.split('/').includes('..')))
+        add(`${at}/config/cwd`, 'The directory is relative to the workspace and stays inside it.');
+      const env = (config['env'] ?? {}) as Record<string, Json>;
+      for (const name of Object.keys((config['credentials'] ?? {}) as object))
+        if (name in env) add(`${at}/config/credentials/${name}`, `${name} is also set in env.`);
+    }
+    if (node.type === 'http') {
+      const method = (config['method'] as string | undefined) ?? 'GET';
+      if (config['body'] !== undefined && ['GET', 'HEAD', 'OPTIONS'].includes(method))
+        add(`${at}/config/body`, `A ${method} request has no body.`);
+      const body = config['body'] as { kind: string; value?: Json; text?: string } | undefined;
+      if (body?.kind === 'json' && (body.value === undefined || body.text !== undefined))
+        add(`${at}/config/body`, 'A JSON body has a value and no text.');
+      if (body?.kind === 'text' && (body.text === undefined || body.value !== undefined))
+        add(`${at}/config/body`, 'A text body has text and no value.');
+      const url = config['url'] as string;
+      if (templateBindings(url).length === 0) {
+        let parsed: URL | null = null;
+        try {
+          parsed = new URL(url);
+        } catch {
+          add(`${at}/config/url`, 'Not an absolute URL.');
+        }
+        if (parsed && !['http:', 'https:'].includes(parsed.protocol))
+          add(`${at}/config/url`, 'Only http and https URLs are supported.');
+        if (parsed && (parsed.username || parsed.password))
+          add(`${at}/config/url`, 'Put credentials in a credential header, never in the URL.');
+      }
+      const headers = Object.keys((config['headers'] ?? {}) as object).map((name) =>
+        name.toLowerCase(),
+      );
+      for (const name of Object.keys((config['credentialHeaders'] ?? {}) as object))
+        if (headers.includes(name.toLowerCase()))
+          add(`${at}/config/credentialHeaders/${name}`, `${name} is also set in headers.`);
+    }
     if (node.type === 'get_variable' && config['optional'] === true && !('fallback' in config)) {
       add(`${at}/config/fallback`, 'An optional variable needs an explicit fallback.');
     }
@@ -495,7 +546,19 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(problem.path, problem.message);
       }
     }
-    const templated = ['goal', 'data', 'value', 'until', 'title', 'instructions']
+    const templated = [
+      'goal',
+      'data',
+      'value',
+      'until',
+      'title',
+      'instructions',
+      'args',
+      'env',
+      'url',
+      'headers',
+      'body',
+    ]
       .map((field) => config[field])
       .filter((value) => value !== undefined);
     for (const name of templateBindings(templated)) {

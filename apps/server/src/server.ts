@@ -12,7 +12,10 @@ import { acquireInstanceLock } from './lifecycle/instance-lock.js';
 import { ReadinessState } from './lifecycle/readiness.js';
 import { openStore, type Store } from './persistence/store.js';
 import { createHttpServer } from './http.js';
+import { Credentials } from './actions/credentials.js';
+import { ProcessRunner } from './actions/process.js';
 import { SystemdScopes } from './harness/containment.js';
+import { namespaceId, namespaceLayout } from './harness/opencode/namespace.js';
 import { OpenCodeAdapter } from './harness/opencode/adapter.js';
 import { OpenCodeRuntime } from './harness/opencode/runtime.js';
 import type { ResultHandler } from './harness/types.js';
@@ -200,7 +203,16 @@ export async function startServer(
     const definitions = new DefinitionRepository(store.db, clock);
     const definitionService = new DefinitionService(definitions, receipts);
     const workspaces = new Workspaces(store.db, clock, join(state.path, 'workspaces'));
-    const registry = new DeviceRegistry(store.db, clock, await SecretBox.open(state.path));
+    const secrets = await SecretBox.open(state.path);
+    const registry = new DeviceRegistry(store.db, clock, secrets);
+    const credentials = new Credentials(store.db, clock, secrets, receipts);
+    // Command and script processes run in scopes named after this state directory, so a start
+    // stops only the ones its own earlier process left.
+    const runner = new ProcessRunner(
+      new SystemdScopes(harness.systemdManager ?? 'user'),
+      `shift-action-${namespaceId(namespaceLayout(state.path))}-`,
+    );
+    await runner.reapStale();
     const devices = new DeviceService(registry, receipts);
     const workspaceService = new WorkspaceService(workspaces, receipts);
     const eventLog = new EventLog(store.db, store.identity.eventEpoch);
@@ -222,6 +234,8 @@ export async function startServer(
       logger,
       adapter: new OpenCodeAdapter(runtime),
       artifactRoot,
+      credentials,
+      runner,
       ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     handleResult = engine.agents.handleResult;
@@ -237,6 +251,7 @@ export async function startServer(
       engine,
       definitions: { service: definitionService, repository: definitions },
       workspaces: workspaceService,
+      credentials,
       devices,
       receipts,
       events,
@@ -256,6 +271,7 @@ export async function startServer(
       engine,
       definitions: { service: definitionService, repository: definitions },
       workspaces: workspaceService,
+      credentials,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {
