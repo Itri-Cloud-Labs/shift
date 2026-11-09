@@ -2264,3 +2264,140 @@ textarea {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
+
+/* An agent session, beside the canvas on the left so the inspector stays open on the right. */
+.session-island {
+  top: var(--below-top);
+  left: 8px;
+  bottom: 8px;
+  width: min(420px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: island-in var(--duration) var(--ease-out);
+}
+
+.session-link {
+  margin: var(--space-2) 0 0;
+}
+
+.turns,
+.entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.turn {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.turn-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-1);
+  font-weight: 500;
+}
+
+.entry {
+  margin: var(--space-1) 0;
+}
+
+.entry-who {
+  display: block;
+  color: var(--ink-muted);
+  font-size: var(--text-xs);
+}
+
+.entry-prompt {
+  margin: 0;
+  max-height: 8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--ink-muted);
+}
+
+.entry[data-kind='tool'] .entry-who {
+  display: inline;
+  margin-right: var(--space-1);
+}
+
+.goal-form {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--hairline);
+}
+
+.goal-form textarea {
+  resize: vertical;
+}
+
+.goal-form .actions {
+  justify-content: space-between;
+}
+
+/* Agent reports, rendered from Markdown text into elements only. */
+.report {
+  margin-top: var(--space-2);
+}
+
+.earlier-reports {
+  margin-top: var(--space-3);
+}
+
+.earlier-reports summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.markdown {
+  overflow-wrap: anywhere;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol {
+  margin: 0 0 var(--space-2);
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 1.25em;
+}
+
+.markdown h4 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-weight: 600;
+}
+
+.markdown .md-h1 {
+  font-size: var(--text-md);
+}
+
+.markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.md-link {
+  text-decoration: underline dotted;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-weight: 500;
+}
+
+.raw-output {
+  margin-top: var(--space-3);
+}
+
+.raw-output summary {
+  cursor: pointer;
+  font-weight: 500;
+}

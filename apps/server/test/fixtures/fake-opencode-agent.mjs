@@ -10,6 +10,7 @@
 //   [fake-provider-error N] fail the session's first N turns with a provider error (HTTP 503)
 //   [fake-report NAME TEXT] write TEXT to NAME in the invocation's report directory
 //   [fake-no-reports] do not write the two default reports, which every turn writes otherwise
+//   [fake-say TEXT]   reply with TEXT before any tool call
 // A turn interrupted by a crash keeps its running tool and no idle record, as OpenCode does.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -59,6 +60,8 @@ async function runTurn(session, prompt) {
   await sleep(delay);
   if (aborted) return;
   const assistant = { id: id('msg'), type: 'assistant', content: [] };
+  for (const [, said] of text.matchAll(/\[fake-say ([^\]]*)\]/g))
+    assistant.content.push({ type: 'text', text: said });
   session.messages.push(assistant);
   save();
   const providerErrors = Number(/\[fake-provider-error (\d+)\]/.exec(text)?.[1] ?? 0);

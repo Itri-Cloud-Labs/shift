@@ -54,7 +54,21 @@ try {
     { cwd: repository },
   );
   const port = await freePort();
-  server = shift(['serve', '--state-dir', stateDir, '--port', String(port)]);
+  // Agents run on the server tests' scripted OpenCode stand-in, in a private namespace, so the
+  // screenshots need no model and never touch this account's own OpenCode.
+  server = shift([
+    'serve',
+    '--state-dir',
+    stateDir,
+    '--port',
+    String(port),
+    '--opencode-executable',
+    join(serverDirectory, 'test/fixtures/fake-opencode-agent.mjs'),
+    '--opencode-environment',
+    'isolated',
+    '--opencode-model',
+    'fake/model',
+  ]);
   let log = '';
   server.stdout.on('data', (chunk) => (log += chunk));
   for (let index = 0; index < 200 && !log.includes('"server.ready"'); index++) await delay(50);
@@ -229,6 +243,65 @@ try {
   ]);
   await cli(['workflow', 'publish', loop.id, ...admin]);
   const stuck = await cli(['run', 'start', '--workflow', loop.id, ...admin]);
+
+  // Two agents: the first leaves both reports, and the reviewer reads its handoff.
+  const agentFile = join(temporaryRoot, 'agents.json');
+  const report = [
+    '# Billing refactor',
+    'Moved invoice rounding into `ledger.ts` and **kept** the old API as a shim.',
+    '- 42 files touched under billing/',
+    '- Risky: ledger.ts, rounding.ts',
+    'Details: [the design note](https://example.com/notes)',
+  ].join('\n');
+  await writeFile(
+    agentFile,
+    JSON.stringify({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'write',
+          type: 'agent',
+          config: {
+            goal: `Refactor the billing rounding. [fake-say I moved the rounding into ledger.ts and kept a shim.] [fake-report toahumanreader.md ${report}] [fake-report tothenextagent.md Rounding now lives in ledger.ts; check the shim.] [fake-result {"status":"completed","data":{"files":42}}]`,
+            session: { strategy: 'per_run' },
+          },
+        },
+        {
+          id: 'review',
+          type: 'agent',
+          config: {
+            goal: 'Review the refactor. [fake-say Looks right; the shim keeps old callers working.] [fake-result {"status":"completed","data":{"verdict":"approved"}}]',
+            reports: { handoff: 'off' },
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'write', toPort: 'input' },
+        { id: 'c2', fromNodeId: 'write', fromPort: 'success', toNodeId: 'review', toPort: 'input' },
+        { id: 'c3', fromNodeId: 'review', fromPort: 'success', toNodeId: 'done', toPort: 'input' },
+      ],
+    }),
+  );
+  const agents = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Agent handoff',
+    '--file',
+    agentFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', agents.id, ...admin]);
+  let agentRun = await cli(['run', 'start', '--workflow', agents.id, ...admin]);
+  for (let tries = 0; agentRun.state === 'RUNNING' && tries < 120; tries++) {
+    await delay(500);
+    agentRun = await cli(['run', 'show', agentRun.id, ...admin]);
+  }
+  if (agentRun.state !== 'COMPLETED') throw new Error(`The agent run ended ${agentRun.state}`);
+  const agentBase = `#/p/${project.id}/w/${agents.id}`;
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   // Added through the app in step j01.
@@ -730,6 +803,41 @@ try {
       expect:
         "document.querySelector('.run-status')?.textContent.includes('Completed') && document.querySelector('.react-flow__node[data-id=condition] .node-loop')?.textContent === '×4' && document.querySelector('.react-flow__node[data-id=set_variable_2] .node-loop')?.textContent === '×3'",
       report: 'location.hash',
+    },
+    // Prompts 16 to 18: an agent step's reports, its session and the owner's goal, then the form.
+    {
+      name: 'a1-agent-reports',
+      hash: `${agentBase}/r/${agentRun.id}/n/write`,
+      wait: 2000,
+      expect:
+        "document.querySelector('.report .markdown h4')?.textContent === 'Billing refactor' && !document.querySelector('.report .markdown a')",
+    },
+    {
+      name: 'a2-handoff-tab',
+      script: `J.click('.inspector .tab', 'Handoff to the next agent');`,
+      wait: 800,
+      expect: "document.querySelector('.report')?.dataset.role === 'handoff'",
+    },
+    {
+      name: 'a3-session',
+      script: `J.click('.inspector button', 'Open the agent');`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.session-island .turn') && document.querySelector('.session-island').textContent.includes('I moved the rounding')",
+    },
+    {
+      name: 'a4-goal-sent',
+      script: `J.set('#session-goal', 'List any callers that still use the shim.'); setTimeout(() => J.click('.goal-form button', 'Send'), 300);`,
+      wait: 3000,
+      expect:
+        "document.querySelector('.goal-form .note')?.textContent.includes('Sent') && document.querySelectorAll('.session-island .turn').length === 2",
+    },
+    {
+      name: 'a5-agent-form',
+      script: `window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); setTimeout(() => { location.hash = '${agentBase}/n/review'; }, 300); setTimeout(() => document.querySelector('#review-session-strategy')?.scrollIntoView({ block: 'start' }), 1500);`,
+      wait: 2200,
+      expect:
+        "document.querySelector('#review-session-strategy')?.value === 'fresh' && document.querySelector('#review-reports-handoff')?.value === 'off'",
     },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },

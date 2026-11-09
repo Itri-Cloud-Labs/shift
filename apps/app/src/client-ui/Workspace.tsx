@@ -71,6 +71,7 @@ import { Palette } from './Palette.js';
 import { paletteEntries, type PaletteAction, type PaletteEntry } from './commands.js';
 import { useRoute } from './route.js';
 import { Settings, type SettingsSection } from './Settings.js';
+import { SessionIsland } from './Sessions.js';
 
 const nodeTypes = { card: NodeCard };
 // A small graph is not blown up to fill the window.
@@ -401,6 +402,8 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     from: { nodeId: string; port: string } | null;
   } | null>(null);
   const [problemsOpen, setProblemsOpen] = useState(false);
+  // The agent session shown beside the canvas, opened from an agent step.
+  const [sessionOpen, setSessionOpen] = useState<string | null>(null);
   const [publishProblems, setPublishProblems] = useState<DraftProblem[]>([]);
   const [focusNode, setFocusNode] = useState<string | null>(null);
   const [pendingPublish, setPendingPublish] = useState<string | null>(null);
@@ -956,11 +959,14 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           live={live}
           deviceId={connection.profiles.find((item) => item.active)?.deviceId ?? null}
           commands={sync.commands}
+          runId={inRun ? (route.runId ?? null) : null}
+          openSession={setSessionOpen}
           editor={
             editable ? (
               <NodeEditor
                 key={`${workflowId}:${selected}`}
                 document={document}
+                projectId={projectId}
                 node={document.nodes.find((node) => node.id === selected)!}
                 problems={problems}
                 focus={focusNode === selected}
@@ -994,6 +1000,14 @@ function Shell({ desktop }: { desktop: DesktopState }) {
               />
             ) : null
           }
+        />
+      )}
+      {sessionOpen && (
+        <SessionIsland
+          key={sessionOpen}
+          sessionId={sessionOpen}
+          live={live}
+          close={() => setSessionOpen(null)}
         />
       )}
       {editable && picker && (

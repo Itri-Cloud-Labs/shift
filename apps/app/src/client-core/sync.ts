@@ -817,6 +817,19 @@ export class SyncRuntime {
     return exchange;
   }
 
+  // A text download, such as a report's bytes, from the live server.
+  async queryText(path: string, maxBytes: number): Promise<{ status: number; text: string }> {
+    const target = this.#target;
+    if (!target || this.#state.status !== 'live') throw new SyncFailure('NOT_LIVE');
+    const exchange = await this.#http.requestText(target.url, path, {
+      bearer: target.bearer,
+      signal: target.signal,
+      maxBytes,
+    });
+    if (target.signal.aborted || this.#target !== target) throw new SyncFailure('NOT_LIVE');
+    return exchange;
+  }
+
   // Sends a command once, with a new command ID. If its answer is lost it becomes `unknown`
   // until its receipt is checked; it is never resent automatically.
   async send(request: CommandRequest): Promise<CommandView> {

@@ -81,6 +81,31 @@ export class ServerHttp {
     }
   }
 
+  // An artifact's bytes as text: a report, never JSON. `maxBytes` bounds what is read.
+  async requestText(
+    base: string,
+    path: string,
+    init: { bearer: string; signal?: AbortSignal; maxBytes: number },
+  ): Promise<{ status: number; text: string }> {
+    const timeout = AbortSignal.timeout(this.options.timeoutMs);
+    const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    let response: FetchResponse;
+    let text: string;
+    try {
+      response = await this.fetch(`${base}${path}`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${init.bearer}` },
+        signal,
+        redirect: 'error',
+      });
+      text = await response.text();
+    } catch {
+      throw new TransportFailure('unreachable');
+    }
+    if (Buffer.byteLength(text) > init.maxBytes) throw new TransportFailure('invalid');
+    return { status: response.status, text };
+  }
+
   // Opens a long-lived SSE stream. It has no overall timeout: the caller watches keepalives and
   // aborts the signal to close it.
   async stream(

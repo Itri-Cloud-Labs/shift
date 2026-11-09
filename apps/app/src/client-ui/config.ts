@@ -480,7 +480,7 @@ export function formProblem(form: unknown): { at: string; message: string } | nu
 export const configKeys: Record<string, readonly string[]> = {
   manual_trigger: ['inputSchema'],
   transform: ['data'],
-  agent: ['goal', 'model', 'readOnly', 'resultSchema', 'limits'],
+  agent: ['goal', 'model', 'readOnly', 'resultSchema', 'limits', 'session', 'reports', 'handoffs'],
   wait: ['durationMs', 'until'],
   condition: ['when'],
   switch: ['cases'],

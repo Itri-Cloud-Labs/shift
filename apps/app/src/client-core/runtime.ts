@@ -8,8 +8,13 @@ import {
 } from '../shared/contracts.js';
 import { createShell } from './fixtures.js';
 import {
+  validateArtifactList,
+  validateArtifactResponse,
   validateDeviceList,
   validateRunResponse,
+  validateSessionList,
+  validateSessionResponse,
+  validateTranscriptPage,
   validateServerHealth,
   validateServerInfo,
   validateWorkflowResponse,
@@ -45,7 +50,14 @@ const validators: Record<ResourceKind, (value: unknown) => boolean> = {
   workflow: validateWorkflowResponse,
   version: validateWorkflowVersionResponse,
   run: validateRunResponse,
+  sessions: validateSessionList,
+  session: validateSessionResponse,
+  transcript: validateTranscriptPage,
+  artifacts: validateArtifactList,
 };
+
+// The largest report the server stores.
+const reportLimit = 1024 * 1024;
 
 // The last copy of each resource read, shown read-only while the connection is not live.
 const cacheLimit = 50;
@@ -120,6 +132,38 @@ export class ClientCore {
     this.#cache.set(key, read);
     for (const old of [...this.#cache.keys()].slice(0, -cacheLimit)) this.#cache.delete(old);
     return read;
+  }
+
+  // A report's metadata and text, from the live server. Only text reports are read; their bytes
+  // are decoded as UTF-8 and shown as text, never as markup.
+  async report(artifactId: string): Promise<{ artifact: unknown; text: string }> {
+    const failed = (error: unknown) =>
+      new ClientFailure(
+        error instanceof TransportFailure && error.kind === 'invalid'
+          ? 'INVALID_RESPONSE'
+          : 'DISCONNECTED',
+      );
+    let metadata;
+    try {
+      metadata = await this.sync.query(`/api/v0/artifacts/${artifactId}`);
+    } catch (error) {
+      throw failed(error);
+    }
+    if (metadata.status === 404) throw new ClientFailure('NOT_FOUND');
+    if (metadata.status !== 200 || !validateArtifactResponse(metadata.body))
+      throw new ClientFailure('INVALID_RESPONSE');
+    const { artifact } = metadata.body;
+    if (!/^text\/(markdown|plain)\b/.test(artifact.mediaType) || artifact.sizeBytes > reportLimit)
+      throw new ClientFailure('INVALID_RESPONSE');
+    let content;
+    try {
+      content = await this.sync.queryText(`/api/v0/artifacts/${artifactId}/content`, reportLimit);
+    } catch (error) {
+      throw failed(error);
+    }
+    if (content.status === 404 || content.status === 410) throw new ClientFailure('NOT_FOUND');
+    if (content.status !== 200) throw new ClientFailure('INVALID_RESPONSE');
+    return { artifact, text: content.text };
   }
 
   // The paired devices, always from the live server: they are not part of the projection.

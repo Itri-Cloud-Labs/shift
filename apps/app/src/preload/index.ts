@@ -13,8 +13,13 @@ import {
 } from '../shared/contracts.js';
 import { validInteractions } from '../shared/interactions.js';
 import {
+  validateArtifactList,
+  validateArtifactResponse,
   validateDeviceList,
   validateRunResponse,
+  validateSessionList,
+  validateSessionResponse,
+  validateTranscriptPage,
   validateServerHealth,
   validateServerInfo,
   validateWorkflowResponse,
@@ -25,6 +30,10 @@ const resourceValidators = {
   workflow: validateWorkflowResponse,
   version: validateWorkflowVersionResponse,
   run: validateRunResponse,
+  sessions: validateSessionList,
+  session: validateSessionResponse,
+  transcript: validateTranscriptPage,
+  artifacts: validateArtifactList,
 };
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
@@ -39,7 +48,13 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
         : validateServerHealth(response.value))) ||
     (response.kind === 'resource' && !resourceValidators[response.resource](response.value)) ||
     (response.kind === 'interactions' && !validInteractions(response.value)) ||
-    (response.kind === 'devices' && !validateDeviceList(response.value))
+    (response.kind === 'devices' && !validateDeviceList(response.value)) ||
+    (response.kind === 'report' &&
+      !validateArtifactResponse({
+        schemaVersion: 1,
+        requestId: '00000000-0000-4000-8000-000000000000',
+        artifact: response.artifact,
+      }))
   ) {
     return { kind: 'error', code: 'INVALID_RESPONSE', message: 'The server response is invalid.' };
   }
@@ -72,6 +87,19 @@ const bridge: DesktopBridge = {
       invoke({ kind: 'data.version', workflowId, versionId }),
     run: (runId: string) => invoke({ kind: 'data.run', runId }),
     devices: () => invoke({ kind: 'data.devices' }),
+    sessions: (projectId: string) => invoke({ kind: 'data.sessions', projectId }),
+    session: (sessionId: string) => invoke({ kind: 'data.session', sessionId }),
+    transcript: (sessionId: string, after?: number) =>
+      invoke({
+        kind: 'data.transcript',
+        sessionId,
+        ...(after === undefined ? {} : { after }),
+      } as DesktopRequest),
+    artifacts: (runId: string) => invoke({ kind: 'data.artifacts', runId }),
+    report: (artifactId: string) => invoke({ kind: 'data.report', artifactId }),
+  }),
+  session: Object.freeze({
+    goal: (sessionId: string, goal: string) => invoke({ kind: 'session.goal', sessionId, goal }),
   }),
   run: Object.freeze({
     start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
