@@ -2,8 +2,8 @@
   "protocolVersion": 0,
   "payloadSchemaVersion": 1,
   "sources": {
-    "foundation.schema.json": "b7325e68076e985401b417be0db440b145d045508f43ce26e6ea8c78d89885b5",
-    "foundation.fixture.json": "9f8e5f74c7fd78bbfeff82a9676ba892604787890b8a231e05c0b10c5a0f53ba"
+    "foundation.schema.json": "d2c9bd6afc073b4fcff316e308741eb81709b6973aea5cf089905ef6d5e3d6e6",
+    "foundation.fixture.json": "059481eb80f046f339492dcafca38f2b5495375a6c53ca1baf0d8824c86e0618"
   },
   "generators": {
     "ajv": "8.20.0",

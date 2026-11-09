@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+  validateArtifactList,
   validateCommandReceiptResponse,
   validateInteractionList,
   validateProtocolError,
@@ -119,6 +120,19 @@ test('a paired device drives runs and answers approvals with its own command rec
   assert.equal(started.status, 201);
   assert(validateRunResponse(started.body));
   const runId = started.body.run.id;
+  // An approval has no reports; an unknown artifact is a protocol error, bytes need the token.
+  const artifacts = await call(desktop, 'GET', `/runs/${runId}/artifacts`);
+  assert.equal(artifacts.status, 200);
+  assert(validateArtifactList(artifacts.body));
+  assert.deepEqual(artifacts.body.artifacts, []);
+  const unknown = await call(desktop, 'GET', '/artifacts/00000000-0000-4000-8000-000000000000');
+  assert.equal(unknown.status, 404);
+  assert(validateProtocolError(unknown.body));
+  assert.equal(unknown.body.code, 'ARTIFACT_NOT_FOUND');
+  const unauthenticated = await fetch(
+    `${server.url}/api/v0/artifacts/00000000-0000-4000-8000-000000000000/content`,
+  );
+  assert.equal(unauthenticated.status, 401);
 
   // A stream opened and dropped by the client leaves the waiting run as it was.
   const snapshot = await call(desktop, 'GET', '/snapshot');

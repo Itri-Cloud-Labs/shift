@@ -1,5 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import { dirname, join } from 'node:path';
 import type { Logger } from 'pino';
+import { BlobStore } from '../artifacts/store.js';
 import type { Clock } from '../domain/clock.js';
 import { ShiftError } from '../domain/errors.js';
 import type { HarnessAdapter, Json, ModelRef } from '../harness/types.js';
@@ -30,6 +32,8 @@ export interface RunEngineOptions {
   logger: Logger;
   adapter: HarnessAdapter;
   artifactRoot: string;
+  // Artifact bytes; by default `blobs` beside the artifact root.
+  blobs?: BlobStore;
   definitions: DefinitionRepository;
   receipts: CommandReceipts;
   workspaces: Workspaces;
@@ -111,6 +115,7 @@ const failure = (error: unknown) =>
 export class RunEngine {
   readonly repository: RunRepository;
   readonly agents: AgentService;
+  readonly blobs: BlobStore;
   readonly #options: RunEngineOptions;
   readonly #tasks = new Map<string, { controller: AbortController; done: Promise<void> }>();
   readonly #cancellations = new Set<Promise<void>>();
@@ -124,10 +129,12 @@ export class RunEngine {
   constructor(options: RunEngineOptions) {
     this.#options = options;
     this.repository = new RunRepository(options.store.db, options.clock);
+    this.blobs = options.blobs ?? new BlobStore(join(dirname(options.artifactRoot), 'blobs'));
     this.agents = new AgentService({
       repository: this.repository,
       adapter: options.adapter,
       artifactRoot: options.artifactRoot,
+      blobs: this.blobs,
       logger: options.logger,
       workspaces: options.workspaces,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),

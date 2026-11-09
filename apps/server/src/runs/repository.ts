@@ -57,6 +57,25 @@ export type InvocationState =
   | 'INTERRUPTED'
   | 'UNKNOWN';
 
+export type ArtifactRole = 'handoff' | 'human_report';
+
+// An artifact as clients see it. Its bytes are fetched separately by ID.
+export interface ArtifactView {
+  id: string;
+  role: ArtifactRole;
+  filename: string;
+  mediaType: string;
+  sha256: string;
+  sizeBytes: number;
+  projectId: string | null;
+  runId: string | null;
+  executionId: string | null;
+  attemptId: string | null;
+  invocationId: string | null;
+  agentSessionId: string | null;
+  createdAt: number;
+}
+
 export interface Claim {
   attemptId: string;
   executionId: string;
@@ -199,6 +218,39 @@ export interface ControlActor {
 }
 
 export class StaleClaim extends Error {}
+
+interface ArtifactRow {
+  id: string;
+  project_id: string | null;
+  run_id: string | null;
+  execution_id: string | null;
+  attempt_id: string | null;
+  invocation_id: string | null;
+  agent_session_id: string | null;
+  role: ArtifactRole;
+  filename: string;
+  media_type: string;
+  sha256: string;
+  size_bytes: number;
+  storage_key: string;
+  created_at: number;
+}
+
+const artifactView = (row: ArtifactRow): ArtifactView => ({
+  id: row.id,
+  role: row.role,
+  filename: row.filename,
+  mediaType: row.media_type,
+  sha256: row.sha256,
+  sizeBytes: row.size_bytes,
+  projectId: row.project_id,
+  runId: row.run_id,
+  executionId: row.execution_id,
+  attemptId: row.attempt_id,
+  invocationId: row.invocation_id,
+  agentSessionId: row.agent_session_id,
+  createdAt: row.created_at,
+});
 
 const parse = <T>(text: string | null): T | null =>
   text === null ? null : (JSON.parse(text) as T);
@@ -608,6 +660,108 @@ export class RunRepository {
         },
       ]),
     );
+  }
+
+  // Publishes an invocation's report once its bytes are stored. A report already published for the
+  // invocation and role is kept: bytes are immutable per invocation, and collecting again after a
+  // restart changes nothing. Returns the published artifact's ID.
+  publishArtifact(
+    claim: Claim,
+    artifact: {
+      invocationId: string;
+      role: ArtifactRole;
+      filename: string;
+      mediaType: string;
+      sha256: string;
+      sizeBytes: number;
+      storageKey: string;
+    },
+  ): string {
+    return this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        const existing = this.db
+          .prepare('SELECT id FROM artifacts WHERE invocation_id = ? AND role = ?')
+          .get(artifact.invocationId, artifact.role) as { id: string } | undefined;
+        if (existing) return existing.id;
+        const owner = this.db
+          .prepare(
+            'SELECT i.agent_session_id, r.project_id FROM agent_invocations i JOIN runs r ON r.id = ? WHERE i.id = ? AND i.attempt_id = ?',
+          )
+          .get(claim.runId, artifact.invocationId, claim.attemptId) as
+          { agent_session_id: string; project_id: string | null } | undefined;
+        if (!owner) throw new ShiftError('INTERNAL_ERROR', 'The invocation is not this attempt’s.');
+        const id = randomUUID();
+        this.db
+          .prepare(
+            'INSERT INTO artifacts (id, project_id, run_id, execution_id, attempt_id, invocation_id, agent_session_id, role, filename, media_type, sha256, size_bytes, storage_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(
+            id,
+            owner.project_id,
+            claim.runId,
+            claim.executionId,
+            claim.attemptId,
+            artifact.invocationId,
+            owner.agent_session_id,
+            artifact.role,
+            artifact.filename,
+            artifact.mediaType,
+            artifact.sha256,
+            artifact.sizeBytes,
+            artifact.storageKey,
+            this.clock.now(),
+          );
+        this.#event(
+          'artifact.published',
+          { runId: claim.runId, executionId: claim.executionId, sessionId: owner.agent_session_id },
+          {
+            artifactId: id,
+            invocationId: artifact.invocationId,
+            role: artifact.role,
+            filename: artifact.filename,
+            sizeBytes: artifact.sizeBytes,
+          },
+        );
+        return id;
+      })
+      .immediate();
+  }
+
+  // Artifacts of a run, an execution or an invocation, oldest first.
+  artifacts(
+    scope: { runId: string } | { executionId: string } | { invocationId: string },
+  ): ArtifactView[] {
+    if ('runId' in scope && !this.db.prepare('SELECT 1 FROM runs WHERE id = ?').get(scope.runId))
+      throw new ShiftError('RUN_NOT_FOUND', 'Run not found.', 404);
+    const [column, value] =
+      'runId' in scope
+        ? ['run_id', scope.runId]
+        : 'executionId' in scope
+          ? ['execution_id', scope.executionId]
+          : ['invocation_id', scope.invocationId];
+    const rows = this.db
+      .prepare(`SELECT * FROM artifacts WHERE ${column} = ? ORDER BY created_at, rowid`)
+      .all(value) as ArtifactRow[];
+    return rows.map(artifactView);
+  }
+
+  artifact(id: string): ArtifactView & { storageKey: string } {
+    const row = this.db.prepare('SELECT * FROM artifacts WHERE id = ?').get(id) as
+      ArtifactRow | undefined;
+    if (!row) throw new ShiftError('ARTIFACT_NOT_FOUND', 'Artifact not found.', 404);
+    return { ...artifactView(row), storageKey: row.storage_key };
+  }
+
+  // Every published artifact's blob, for the startup storage check.
+  artifactBlobs(): { id: string; storageKey: string; sizeBytes: number }[] {
+    return (
+      this.db.prepare('SELECT id, storage_key, size_bytes FROM artifacts').all() as Array<{
+        id: string;
+        storage_key: string;
+        size_bytes: number;
+      }>
+    ).map((row) => ({ id: row.id, storageKey: row.storage_key, sizeBytes: row.size_bytes }));
   }
 
   // Current values and every revision, oldest first, with the execution that wrote each.

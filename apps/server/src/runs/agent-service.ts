@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Logger } from 'pino';
+import type { BlobStore } from '../artifacts/store.js';
 import { ShiftError } from '../domain/errors.js';
 import type {
   HarnessAdapter,
@@ -22,6 +23,7 @@ import {
 } from './prompts.js';
 import {
   StaleClaim,
+  type ArtifactRole,
   type Claim,
   type InvocationRow,
   type AgentConfig,
@@ -45,7 +47,10 @@ export interface AgentServiceOptions {
   repository: RunRepository;
   adapter: HarnessAdapter;
   artifactRoot: string;
+  blobs: BlobStore;
   logger: Logger;
+  // The largest report Shift stores.
+  reportLimitBytes?: number;
   // Creates the run's worktree before its first session needs it.
   workspaces?: { ensureReady(id: string): Promise<unknown> };
   pollIntervalMs?: number;
@@ -56,6 +61,20 @@ export interface AgentServiceOptions {
 }
 
 const active: readonly InvocationState[] = ['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN'];
+
+// The default report names in every invocation's directory (specification 6.5). They are display
+// labels; the bytes are stored by hash.
+export const reportFiles: Record<ArtifactRole, string> = {
+  handoff: 'tothenextagent.md',
+  human_report: 'toahumanreader.md',
+};
+
+// Turns whose files are final: nothing in the harness still writes to their directory.
+const settled: readonly InvocationState[] = ['COMPLETED', 'FAILED', 'INTERRUPTED'];
+
+export type Collected = Partial<
+  Record<ArtifactRole, { kind: 'published'; id: string } | { kind: 'refused'; reason: string }>
+>;
 
 // Owns goal construction, session binding, correction, continuation and result validation for
 // agent node executions (specification 9). Workflow routing stays in the run repository.
@@ -68,6 +87,7 @@ export class AgentService {
       pollIntervalMs: 1_000,
       queuedResubmitMs: 5_000,
       inspectionFailures: 10,
+      reportLimitBytes: 1024 * 1024,
       ...options,
     };
   }
@@ -181,6 +201,7 @@ export class AgentService {
         await this.#invoke(claim, handle, last, config, signal);
         continue;
       }
+      if (last && settled.includes(last.state)) await this.#collect(claim, last.id);
       const next = this.#decide(claim, config, invocations);
       if (!next) return;
       const id = randomUUID();
@@ -258,7 +279,7 @@ export class AgentService {
       case 'COMPLETED': {
         const envelope = last.result!;
         if (envelope.status === 'completed') {
-          this.#finish(claim, { kind: 'completed', data: envelope.data });
+          this.#finish(claim, { kind: 'completed', data: envelope.data, invocationId: last.id });
         } else {
           const problem = envelope.status === 'blocked' ? envelope.blocker : envelope.error;
           this.#finish(claim, {
@@ -487,7 +508,9 @@ export class AgentService {
   // The agent publishes new data with its session reference and keeps the incoming context.
   #finish(
     claim: Claim,
-    outcome: { kind: 'completed'; data: Json } | { kind: 'failed'; error: ExecutionError },
+    outcome:
+      | { kind: 'completed'; data: Json; invocationId: string }
+      | { kind: 'failed'; error: ExecutionError },
   ): void {
     const { repository } = this.#options;
     if (outcome.kind === 'failed') {
@@ -496,6 +519,17 @@ export class AgentService {
     }
     const context = repository.execution(claim.executionId);
     const output = envelope(outcome.data, context.input);
+    // The successful turn's reports are the node's (specification 6.5); earlier ones stay in history.
+    output.references.artifacts = repository
+      .artifacts({ invocationId: outcome.invocationId })
+      .map((artifact) => ({
+        kind: 'artifact',
+        id: artifact.id,
+        role: artifact.role,
+        filename: artifact.filename,
+        sha256: artifact.sha256,
+        sizeBytes: artifact.sizeBytes,
+      }));
     const session = repository.session(claim.executionId);
     if (session && context.snapshot.project.id) {
       output.references.agentSession = {
@@ -505,6 +539,38 @@ export class AgentService {
       };
     }
     repository.completeExecution(claim, { kind: 'completed', output, port: 'success' });
+  }
+
+  // Stores the default reports a finished turn left in its directory. Collecting again publishes
+  // nothing new, so a restart between storing and publishing only leaves an unreferenced blob.
+  async #collect(claim: Claim, invocationId: string): Promise<Collected> {
+    const { repository, blobs, artifactRoot, reportLimitBytes, logger } = this.#options;
+    const collected: Collected = {};
+    for (const [role, filename] of Object.entries(reportFiles) as [ArtifactRole, string][]) {
+      const stored = await blobs.ingest(
+        artifactRoot,
+        this.#artifactDirectory(claim, invocationId),
+        filename,
+        reportLimitBytes,
+      );
+      if (stored.kind === 'missing') continue;
+      if (stored.kind === 'refused') {
+        logger.warn({ runId: claim.runId, invocationId, role }, stored.reason);
+        collected[role] = stored;
+        continue;
+      }
+      const id = repository.publishArtifact(claim, {
+        invocationId,
+        role,
+        filename,
+        mediaType: 'text/markdown; charset=utf-8',
+        sha256: stored.sha256,
+        sizeBytes: stored.sizeBytes,
+        storageKey: stored.storageKey,
+      });
+      collected[role] = { kind: 'published', id };
+    }
+    return collected;
   }
 
   #artifactDirectory(claim: Claim, invocationId: string): string {

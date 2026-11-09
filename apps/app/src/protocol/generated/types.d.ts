@@ -32,6 +32,8 @@ export type FoundationPayload =
   | WorkspaceList
   | ExecutionPage
   | RunVariables
+  | ArtifactList
+  | ArtifactResponse
   | Event
   | EventPage
   | Snapshot;
@@ -503,6 +505,34 @@ export interface RunVariables {
     executionId: Uuid;
     createdAt: number;
   }[];
+}
+export interface ArtifactList {
+  schemaVersion: 1;
+  requestId: Uuid;
+  /**
+   * @maxItems 10000
+   */
+  artifacts: Artifact[];
+}
+export interface Artifact {
+  id: Uuid;
+  role: 'handoff' | 'human_report';
+  filename: string;
+  mediaType: string;
+  sha256: string;
+  sizeBytes: number;
+  projectId: Uuid | null;
+  runId: Uuid | null;
+  executionId: Uuid | null;
+  attemptId: Uuid | null;
+  invocationId: Uuid | null;
+  agentSessionId: Uuid | null;
+  createdAt: number;
+}
+export interface ArtifactResponse {
+  schemaVersion: 1;
+  requestId: Uuid;
+  artifact: Artifact;
 }
 export interface Event {
   cursor: EventCursor;

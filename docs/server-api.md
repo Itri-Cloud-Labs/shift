@@ -89,6 +89,9 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `GET /api/v0/admin/runs/{id}`                           | `shift run show`            | Run with executions and invocations               |
 | `GET /api/v0/admin/runs/{id}/executions`                | `shift run executions`      | A page of a run's execution history               |
 | `GET /api/v0/admin/runs/{id}/variables`                 | `shift run variables`       | A run's variables and every revision              |
+| `GET /api/v0/admin/runs/{id}/artifacts`                 | `shift artifact list`       | A run's reports, oldest first                     |
+| `GET /api/v0/admin/artifacts/{id}`                      | `shift artifact show`       | One artifact's metadata                           |
+| `GET /api/v0/admin/artifacts/{id}/content`              | `shift artifact get`        | An artifact's bytes                               |
 | `POST /api/v0/admin/runs/{id}/cancel`                   | `shift run cancel`          | Cancel a run                                      |
 | `POST /api/v0/admin/runs/{id}/retry`                    | `shift run retry`           | Retry a stuck step                                |
 | `POST /api/v0/admin/runs/{id}/fail`                     | `shift run fail`            | Abandon a stuck step                              |
@@ -297,6 +300,12 @@ A `Run`, abridged from a completed run:
 
 `GET /api/v0/admin/runs/{id}/variables` returns a run's [variables](workflows.md#run-variables): `{"variables": [{"key", "value", "revision", "executionId", "updatedAt"}], "revisions": [{"key", "revision", "value", "executionId", "createdAt"}]}`, ordered by key and revision. `executionId` is the execution whose completion wrote that revision. An unknown run is `404 RUN_NOT_FOUND`. The CLI form is `shift run variables <run-id>`.
 
+### Artifacts
+
+Each agent prompt gets its own report directory. When the turn has finished (`COMPLETED`, `FAILED` or `INTERRUPTED`), Shift stores the two default reports it finds there: `tothenextagent.md` (role `handoff`) and `toahumanreader.md` (role `human_report`). A report must be a regular file of at most 1 MiB; a link, a directory or a larger file is refused and not stored. Bytes are copied, hashed with SHA-256 and flushed before the artifact is published, so a published artifact always has its bytes; an interrupted import leaves only an unreferenced blob. Reports are immutable and kept per invocation: a correction's `toahumanreader.md` is a different artifact from the first turn's. The successful turn's reports are listed in the node's `output.references.artifacts` as `{"kind": "artifact", "id", "role", "filename", "sha256", "sizeBytes"}`.
+
+`GET /api/v0/admin/runs/{id}/artifacts` returns `{"artifacts": [Artifact]}`, oldest first. An Artifact is `{"id", "role", "filename", "mediaType", "sha256", "sizeBytes", "projectId", "runId", "executionId", "attemptId", "invocationId", "agentSessionId", "createdAt"}`; `filename` is a label, not a location. `GET /api/v0/admin/artifacts/{id}` returns `{"artifact": Artifact}`, or `404 ARTIFACT_NOT_FOUND`. `GET /api/v0/admin/artifacts/{id}/content` returns the bytes with the artifact's media type, `Content-Disposition: attachment`, `ETag` of its hash and `Cache-Control: private, no-store`; bytes lost outside Shift answer `410 ARTIFACT_BYTES_MISSING`, and startup logs `artifacts.missing`. The CLI forms are `shift artifact list <run-id>`, `shift artifact show <artifact-id>` and `shift artifact get <artifact-id>`, which writes the bytes to standard output. Publishing one emits `artifact.published`.
+
 `GET /api/v0/admin/runs` lists the 100 newest runs, newest first, each as `{id, state, workflowId, createdAt, finishedAt}`.
 
 ### Run controls
@@ -462,7 +471,7 @@ Every state change commits a durable event in the same transaction, numbered by 
 }
 ```
 
-Payloads are small and name the resources that changed; read the resource for its current state. Event types include `run.created`, `execution.started`, `execution.completed`, `execution.failed`, `run.completed`, `run.cancelled`, `interaction.requested`, `interaction.responded`, `variable.written` (with `{"key", "revision"}`), `workflow.published` and `device.revoked`. All events are kept.
+Payloads are small and name the resources that changed; read the resource for its current state. Event types include `run.created`, `execution.started`, `execution.completed`, `execution.failed`, `run.completed`, `run.cancelled`, `interaction.requested`, `interaction.responded`, `variable.written` (with `{"key", "revision"}`), `artifact.published` (with `{"artifactId", "invocationId", "role", "filename", "sizeBytes"}`), `workflow.published` and `device.revoked`. All events are kept.
 
 | Request                                     | Answer                                                                                                                                                                                                   |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

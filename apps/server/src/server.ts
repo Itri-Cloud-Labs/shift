@@ -265,6 +265,16 @@ export async function startServer(
     const address = tcp.address() as AddressInfo;
     const host = address.family === 'IPv6' ? `[${address.address}]` : address.address;
     const url = `http://${host}:${address.port}`;
+    // A published artifact always had its bytes stored first; one missing now was lost outside
+    // Shift. It is reported, and downloading it says so, rather than blocking every other run.
+    const lost: string[] = [];
+    for (const blob of engine.repository.artifactBlobs())
+      if (!(await engine.blobs.present(blob.storageKey, blob.sizeBytes))) lost.push(blob.id);
+    if (lost.length)
+      logger.error(
+        { event: 'artifacts.missing', artifactIds: lost.slice(0, 20), count: lost.length },
+        'Artifact bytes are missing.',
+      );
     readiness.ready();
     // Recovery inspects harness state outside any transaction; it runs after the server is ready.
     engine.start();

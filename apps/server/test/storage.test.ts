@@ -45,6 +45,7 @@ test('real SQLite verifies runtime/pragmas and persists identity independently o
       'agent_invocations',
       'agent_result_submissions',
       'agent_sessions',
+      'artifacts',
       'command_receipts',
       'devices',
       'events',
