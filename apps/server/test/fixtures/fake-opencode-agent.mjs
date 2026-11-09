@@ -8,6 +8,7 @@
 //   [fake-no-result]  end the turn without submitting
 //   [fake-hang-interrupt] never answer an interrupt request, and ignore SIGTERM, during this turn
 //   [fake-provider-error N] fail the session's first N turns with a provider error (HTTP 503)
+//   [fake-report NAME TEXT] write TEXT to NAME in the invocation's report directory
 // A turn interrupted by a crash keeps its running tool and no idle record, as OpenCode does.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -86,6 +87,10 @@ async function runTurn(session, prompt) {
     part.state = { status: exit === 0 ? 'completed' : 'error' };
     save();
   }
+  // The report directory is named in Shift's prompt.
+  const reports = /(?:Put any reports under|write files only under) (\/\S+)\./.exec(text)?.[1];
+  for (const [, name, body] of text.matchAll(/\[fake-report ([\w.-]+) ([^\]]*)\]/g))
+    if (reports) writeFileSync(join(reports, name), body);
   if (!/\[fake-no-result\]/.test(text)) {
     const call = { type: 'tool', name: 'shift_submit_result', state: { status: 'running' } };
     assistant.content.push(call);

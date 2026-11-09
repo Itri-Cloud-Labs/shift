@@ -23,7 +23,7 @@ export async function administrativeRequest(
 export async function administrativeCall(
   stateDirectory: string,
   call: { method: 'GET' | 'POST' | 'PUT'; path: string; body?: unknown },
-): Promise<{ status: number; payload: unknown }> {
+): Promise<{ status: number; payload: unknown; bytes?: Buffer }> {
   const directory = await realpath(stateDirectory);
   const metadata = await stat(directory);
   if (metadata.uid !== process.getuid!() || (metadata.mode & 0o077) !== 0) {
@@ -42,7 +42,7 @@ export async function administrativeCall(
       'The administrative socket is missing or does not have mode 0600.',
     );
   }
-  return new Promise<{ status: number; payload: unknown }>((resolve, reject) => {
+  return new Promise<{ status: number; payload: unknown; bytes?: Buffer }>((resolve, reject) => {
     const body = call.body === undefined ? undefined : JSON.stringify(call.body);
     const req = request(
       {
@@ -79,6 +79,14 @@ export async function administrativeCall(
         );
         res.on('end', () => {
           clearTimeout(timeout);
+          // A download answers with its own bytes; errors are still JSON.
+          if (
+            res.statusCode === 200 &&
+            !/^application\/json/.test(res.headers['content-type'] ?? '')
+          ) {
+            resolve({ status: 200, payload: null, bytes: Buffer.concat(chunks) });
+            return;
+          }
           try {
             const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
             resolve({ status: res.statusCode ?? 0, payload });

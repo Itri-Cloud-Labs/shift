@@ -234,6 +234,28 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
     }
     case 'run list':
       return print((await get('/api/v0/admin/runs'))['runs']);
+    case 'artifact list':
+      return print(
+        (await get(`/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/artifacts`))[
+          'artifacts'
+        ],
+      );
+    case 'artifact show':
+      return print(
+        (await get(`/api/v0/admin/artifacts/${encodeURIComponent(need(target, 'ARTIFACT_ID'))}`))[
+          'artifact'
+        ],
+      );
+    case 'artifact get': {
+      // The bytes as stored, to standard output.
+      const call = await administrativeCall(stateDirectory, {
+        method: 'GET',
+        path: `/api/v0/admin/artifacts/${encodeURIComponent(need(target, 'ARTIFACT_ID'))}/content`,
+      });
+      if (!call.bytes) payloadOf(call);
+      process.stdout.write(call.bytes ?? '');
+      return;
+    }
     case 'run cancel':
     case 'run retry':
     case 'run fail':

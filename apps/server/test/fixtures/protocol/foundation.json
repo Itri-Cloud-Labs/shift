@@ -427,5 +427,45 @@
         "createdAt": 1792972800000
       }
     ]
+  },
+  "artifactList": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000067",
+    "artifacts": [
+      {
+        "id": "00000000-0000-4000-8000-000000000060",
+        "role": "human_report",
+        "filename": "toahumanreader.md",
+        "mediaType": "text/markdown; charset=utf-8",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 42,
+        "projectId": "00000000-0000-4000-8000-000000000061",
+        "runId": "00000000-0000-4000-8000-000000000062",
+        "executionId": "00000000-0000-4000-8000-000000000063",
+        "attemptId": "00000000-0000-4000-8000-000000000064",
+        "invocationId": "00000000-0000-4000-8000-000000000065",
+        "agentSessionId": "00000000-0000-4000-8000-000000000066",
+        "createdAt": 1793059200000
+      }
+    ]
+  },
+  "artifactResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000068",
+    "artifact": {
+      "id": "00000000-0000-4000-8000-000000000060",
+      "role": "human_report",
+      "filename": "toahumanreader.md",
+      "mediaType": "text/markdown; charset=utf-8",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sizeBytes": 42,
+      "projectId": "00000000-0000-4000-8000-000000000061",
+      "runId": "00000000-0000-4000-8000-000000000062",
+      "executionId": "00000000-0000-4000-8000-000000000063",
+      "attemptId": "00000000-0000-4000-8000-000000000064",
+      "invocationId": "00000000-0000-4000-8000-000000000065",
+      "agentSessionId": "00000000-0000-4000-8000-000000000066",
+      "createdAt": 1793059200000
+    }
   }
 }

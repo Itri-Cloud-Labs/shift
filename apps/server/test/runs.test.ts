@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,6 +34,7 @@ import { FakeClock, eventually, temporaryState } from './helpers.js';
 interface Turn {
   messageId: string;
   prompt: string;
+  artifactDirectory: string;
   handle: HarnessSessionHandle;
   status: 'queued' | 'running' | 'prompt' | 'ended' | 'interrupted' | 'unknown';
   outcome?: 'succeeded' | 'failed';
@@ -102,6 +103,7 @@ class FakeHarness implements HarnessAdapter {
       turn = {
         messageId: correlation.providerMessageId,
         prompt: request.goal,
+        artifactDirectory: request.artifactDirectory,
         handle,
         status: 'running',
       };
@@ -626,6 +628,118 @@ test('a turn interrupted without effects is continued in the same session', asyn
   }
 });
 
+type Artifact = {
+  id: string;
+  role: string;
+  filename: string;
+  sha256: string;
+  invocationId: string;
+};
+
+const report = (turn: Turn, name: string, text: string) =>
+  writeFile(join(turn.artifactDirectory, name), text);
+
+test('reports are stored per invocation, and the successful turn’s become the node’s', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    const correction = /ended without a result/.test(turn.prompt);
+    await report(turn, 'toahumanreader.md', correction ? '# Counted\n' : '# Draft\n');
+    await report(turn, 'tothenextagent.md', correction ? 'Count is 3.' : 'Unsure.');
+    if (correction) await complete({ count: 3 })(turn, fake);
+    else turn.status = 'ended';
+  });
+  try {
+    const runId = await start(harnessed);
+    const run = await settled(harnessed, runId);
+    assert.equal(run.state, 'COMPLETED');
+    const artifacts = harnessed.engine.repository.artifacts({ runId }) as unknown as Artifact[];
+    assert.deepEqual(
+      artifacts.map((artifact) => [artifact.role, artifact.filename]),
+      [
+        ['handoff', 'tothenextagent.md'],
+        ['human_report', 'toahumanreader.md'],
+        ['handoff', 'tothenextagent.md'],
+        ['human_report', 'toahumanreader.md'],
+      ],
+    );
+    // Same names, different invocations: distinct artifacts with their own bytes.
+    assert.notEqual(artifacts[0]!.invocationId, artifacts[2]!.invocationId);
+    assert.notEqual(artifacts[1]!.sha256, artifacts[3]!.sha256);
+    const output = run.executions[1]!.output as {
+      references: { artifacts: Array<{ id: string }> };
+    };
+    assert.deepEqual(
+      output.references.artifacts.map((artifact) => artifact.id),
+      [artifacts[2]!.id, artifacts[3]!.id],
+    );
+    const stream = await harnessed.engine.blobs.read(
+      harnessed.engine.repository.artifact(artifacts[3]!.id).storageKey,
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream!) chunks.push(chunk as Buffer);
+    assert.equal(Buffer.concat(chunks).toString(), '# Counted\n');
+    assert.equal(
+      harnessed.store.db
+        .prepare(
+          "SELECT count(*) AS n FROM events WHERE type = 'artifact.published' AND run_id = ?",
+        )
+        .get(runId)!['n' as never],
+      4,
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a report that is a link is refused and never published', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    await symlink('/etc/hostname', join(turn.artifactDirectory, 'toahumanreader.md'));
+    await complete({ count: 3 })(turn, fake);
+  });
+  try {
+    const runId = await start(harnessed);
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+    assert.deepEqual(harnessed.engine.repository.artifacts({ runId }), []);
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a report stored but not published before a crash is published once after restart', async () => {
+  let reached!: () => void;
+  const stored = new Promise<void>((resolve) => (reached = resolve));
+  const first = await engineFor(async (turn, fake) => {
+    await report(turn, 'toahumanreader.md', '# Counted\n');
+    await complete({ count: 3 })(turn, fake);
+  });
+  // The process dies after the blob is renamed and before the row is written.
+  first.engine.repository.publishArtifact = () => {
+    reached();
+    throw new StaleClaim();
+  };
+  const runId = await start(first);
+  await stored;
+  void first.engine.stop(5_000);
+  first.store.close();
+  const blobs = join(first.state, 'blobs', 'sha256');
+  const [prefix] = await readdir(blobs);
+  assert.equal((await readdir(join(blobs, prefix!))).length, 1, 'an unreferenced blob');
+  const restarted = await engineFor(() => {}, { state: first.state, fake: first.fake });
+  try {
+    const run = await settled(restarted, runId);
+    assert.equal(run.state, 'COMPLETED');
+    const artifacts = restarted.engine.repository.artifacts({ runId }) as unknown as Artifact[];
+    assert.equal(artifacts.length, 1);
+    assert.equal(
+      restarted.engine.repository.artifact(artifacts[0]!.id).storageKey.split('/').at(-1),
+      artifacts[0]!.sha256,
+    );
+    assert.equal((await readdir(join(blobs, prefix!))).length, 1, 'still one blob');
+    assert.deepEqual(first.fake.submits.length, 1, 'nothing was resubmitted');
+  } finally {
+    await restarted.close();
+  }
+});
+
 test('the same tool call delivered twice is recorded once', async () => {
   const verdicts: unknown[] = [];
   const harnessed = await engineFor(async (turn, fake) => {
@@ -710,6 +824,7 @@ test('after a restart, an accepted but undelivered prompt is woken with the same
   fake.turns.set(correlation, {
     messageId: correlation,
     prompt: 'queued before the crash',
+    artifactDirectory: '',
     handle: { shiftSessionId: '', harnessSessionId: '', storageNamespace: '', cwd: '' },
     status: 'queued',
   });

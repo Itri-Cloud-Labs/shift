@@ -59,6 +59,8 @@ export {
   validateWorkspaceList,
   validateExecutionPage,
   validateRunVariables,
+  validateArtifactList,
+  validateArtifactResponse,
   validateEvent,
   validateEventPage,
   validateSnapshot,

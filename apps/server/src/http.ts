@@ -24,6 +24,8 @@ import {
   validateRunList,
   validateExecutionPage,
   validateRunVariables,
+  validateArtifactList,
+  validateArtifactResponse,
   validateInteractionResponse,
   validateInteractionList,
   validateWorkspaceResponse,
@@ -275,6 +277,38 @@ export function createHttpServer(options: {
         engine.repository.variableHistory(id(req)) as Record<string, unknown>,
         validateRunVariables,
       );
+    });
+    // Reports and other immutable artifacts: metadata by run or ID, bytes by authenticated download.
+    router.get('/runs/:id/artifacts', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { artifacts: engine.repository.artifacts({ runId: id(req) }) },
+        validateArtifactList,
+      );
+    });
+    router.get('/artifacts/:id', guard, (req, res) => {
+      const { storageKey: _key, ...artifact } = engine.repository.artifact(id(req));
+      reply(res, 200, { artifact }, validateArtifactResponse);
+    });
+    router.get('/artifacts/:id/content', guard, async (req, res) => {
+      const artifact = engine.repository.artifact(id(req));
+      const stream = await engine.blobs.read(artifact.storageKey);
+      if (!stream)
+        throw new ShiftError('ARTIFACT_BYTES_MISSING', 'The artifact’s bytes are missing.', 410);
+      res.status(200);
+      res.setHeader('Content-Type', artifact.mediaType);
+      res.setHeader('Content-Length', String(artifact.sizeBytes));
+      res.setHeader('ETag', `"${artifact.sha256}"`);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${artifact.filename.replace(/[^\w.-]/g, '_')}"`,
+      );
+      stream.on('error', () => res.destroy());
+      stream.pipe(res);
     });
     for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
       router.post(`/runs/:id/${kind}`, guard, json, (req, res) => {

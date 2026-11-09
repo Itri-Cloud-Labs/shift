@@ -161,6 +161,45 @@ async function stopped(server: OwnedProcess) {
   await server.terminate();
 }
 
+test('reports are listed and downloaded from the CLI', { skip, timeout: 120_000 }, async () => {
+  const env = await setup();
+  const server = await env.serve();
+  try {
+    const run = await env.start(
+      'Count. [fake-report toahumanreader.md Counted three words.] [fake-result {"status":"completed","data":{"count":3}}]',
+    );
+    const finished = await env.until(run.id, (candidate) => candidate.state !== 'RUNNING');
+    assert.equal(finished.state, 'COMPLETED');
+    const listed = (await env.shift('artifact', 'list', run.id)) as Array<{
+      id: string;
+      role: string;
+      filename: string;
+      sizeBytes: number;
+    }>;
+    assert.deepEqual(
+      listed.map((artifact) => [artifact.role, artifact.filename, artifact.sizeBytes]),
+      [['human_report', 'toahumanreader.md', 20]],
+    );
+    const shown = (await env.shift('artifact', 'show', listed[0]!.id)) as { id: string };
+    assert.equal(shown.id, listed[0]!.id);
+    const bytes = await runCli(['artifact', 'get', listed[0]!.id, '--state-dir', env.state.path]);
+    assert.equal(bytes.code, 0);
+    assert.equal(bytes.output, 'Counted three words.');
+    const missing = await runCli([
+      'artifact',
+      'show',
+      '00000000-0000-4000-8000-000000000000',
+      '--state-dir',
+      env.state.path,
+    ]);
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.errors, /ARTIFACT_NOT_FOUND/);
+  } finally {
+    await stopped(server);
+    await env.state.remove();
+  }
+});
+
 test('a manual run completes with the agent result', { skip, timeout: 120_000 }, async () => {
   const env = await setup();
   const server = await env.serve();
