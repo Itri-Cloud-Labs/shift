@@ -361,3 +361,83 @@ test('a start still preparing when the runtime stops never spawns OpenCode', { s
     await state.remove();
   }
 });
+
+test(
+  'an unsupported OpenCode version or a foreign process is refused and killed',
+  { skip },
+  async () => {
+    const state = await temporaryState();
+    const runtime = runtimeFor(state.path);
+    await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+    const control = join(runtime.layout.root, 'fake-control.json');
+    try {
+      await writeFile(control, JSON.stringify({ version: '3.0.0' }));
+      await assert.rejects(runtime.ensure(), { code: 'HARNESS_VERSION_UNSUPPORTED' });
+      let refused = await report(runtime);
+      await eventually(() => (alive(refused.pid) ? undefined : true));
+      // Another process answering the endpoint: its PID is outside the scope Shift started.
+      await writeFile(control, JSON.stringify({ reportedPid: process.pid }));
+      await assert.rejects(runtime.ensure(), { code: 'HARNESS_IDENTITY_MISMATCH' });
+      refused = await report(runtime);
+      await eventually(() => (alive(refused.pid) ? undefined : true));
+      assert.equal(runtime.current, null);
+      await rm(control);
+      const accepted = await runtime.ensure();
+      assert.equal(accepted.version, '2.2.6');
+    } finally {
+      await runtime.stop();
+      await state.remove();
+    }
+  },
+);
+
+test(
+  'an idle runtime stops only without active sessions, and starts again on use',
+  { skip },
+  async () => {
+    const state = await temporaryState();
+    const runtime = runtimeFor(state.path, { idleStopMs: 300 });
+    await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+    const control = join(runtime.layout.root, 'fake-control.json');
+    try {
+      // OpenCode reports a session still working: the runtime stays, however long unused.
+      await writeFile(control, JSON.stringify({ activeSessions: [{ id: 'ses_busy' }] }));
+      const busy = await runtime.ensure();
+      await new Promise((done) => setTimeout(done, 1_200));
+      assert.equal(runtime.current?.generation, busy.generation);
+      await runtime.stop();
+      const quiet = runtimeFor(state.path, { idleStopMs: 300 });
+      await rm(control);
+      const first = await quiet.ensure();
+      // The idle generation is dropped first, then exits with its scope.
+      await eventually(() => (quiet.current === null && !alive(first.pid) ? true : undefined));
+      const second = await quiet.ensure();
+      assert.equal(second.generation, first.generation + 1);
+      assert.ok(alive(second.pid));
+      await quiet.stop();
+    } finally {
+      await runtime.stop();
+      await state.remove();
+    }
+  },
+);
+
+test('a request still in flight keeps the idle runtime running', { skip }, async () => {
+  const state = await temporaryState();
+  const runtime = runtimeFor(state.path, { idleStopMs: 300 });
+  await mkdir(runtime.layout.root, { recursive: true, mode: 0o700 });
+  await writeFile(
+    join(runtime.layout.root, 'fake-control.json'),
+    JSON.stringify({ slowMs: 1_500 }),
+  );
+  try {
+    const started = await runtime.ensure();
+    const answered = await started.client.request('GET', '/api/slow');
+    assert.equal(answered.status, 200, 'the runtime answered instead of stopping mid-request');
+    assert.equal(runtime.current?.generation, started.generation);
+    await eventually(() => (runtime.current === null ? true : undefined));
+  } finally {
+    await runtime.stop();
+    await state.remove();
+  }
+});

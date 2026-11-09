@@ -128,4 +128,18 @@ export interface HarnessAdapter {
     correlation: InvocationCorrelation,
   ): Promise<CancellationObservation>;
   archive(handle: HarnessSessionHandle): Promise<void>;
+  // The conversation as normalized entries, oldest first (specification 4.3). Text is bounded and
+  // tool input and output are left out; an inspection, never a replay of live events.
+  transcript(handle: HarnessSessionHandle): Promise<TranscriptEntry[]>;
+}
+
+export interface TranscriptEntry {
+  // Stable across inspections: a message ID, or a message ID and part index.
+  sourceKey: string;
+  // The user message that started the turn the entry belongs to.
+  turnMessageId: string | null;
+  kind: 'user' | 'assistant' | 'tool' | 'status';
+  text?: string;
+  tool?: string;
+  status?: string;
 }

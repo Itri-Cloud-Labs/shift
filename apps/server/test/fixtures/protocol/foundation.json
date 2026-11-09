@@ -528,5 +528,56 @@
         }
       ]
     }
+  },
+  "invocationResponse": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000080",
+    "invocation": {
+      "id": "00000000-0000-4000-8000-000000000081",
+      "sessionId": "00000000-0000-4000-8000-000000000082",
+      "executionId": null,
+      "runId": null,
+      "kind": "goal",
+      "manual": true,
+      "state": "COMPLETED",
+      "correlationId": "msg_shift_00000000000000000000000081",
+      "prompt": "Summarize the open TODOs.",
+      "result": null,
+      "error": null,
+      "createdAt": 1793232000000,
+      "submittedAt": 1793232000100,
+      "finishedAt": 1793232030000,
+      "artifacts": []
+    }
+  },
+  "transcriptPage": {
+    "schemaVersion": 1,
+    "requestId": "00000000-0000-4000-8000-000000000083",
+    "entries": [
+      {
+        "id": "00000000-0000-4000-8000-000000000084",
+        "invocationId": "00000000-0000-4000-8000-000000000081",
+        "sourceKey": "msg_a:0",
+        "revision": 2,
+        "position": 1,
+        "kind": "assistant",
+        "text": "Three TODOs remain.",
+        "createdAt": 1793232010000,
+        "updatedAt": 1793232020000
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000085",
+        "invocationId": "00000000-0000-4000-8000-000000000081",
+        "sourceKey": "msg_a:1",
+        "revision": 1,
+        "position": 2,
+        "kind": "tool",
+        "tool": "shell",
+        "status": "completed",
+        "createdAt": 1793232015000,
+        "updatedAt": 1793232015000
+      }
+    ],
+    "next": null
   }
 }

@@ -52,7 +52,18 @@ const server = createServer((request, response) => {
         1,
       );
       save();
-    } else if (path !== '/api/info') {
+    } else if (path === '/api/info') {
+      // A wrong version or another process's PID tests the supervisor's identity checks.
+      result = { version: control.version ?? '2.2.6', pid: control.reportedPid ?? process.pid };
+    } else if (path === '/api/session/active') {
+      result = { data: control.activeSessions ?? [] };
+    } else if (path === '/api/slow') {
+      // A request that takes its time, like a location booting.
+      setTimeout(() => {
+        response.writeHead(200, { 'content-type': 'application/json' }).end('{"data":null}');
+      }, control.slowMs ?? 2_000);
+      return;
+    } else {
       response.writeHead(404).end();
       return;
     }

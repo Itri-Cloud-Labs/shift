@@ -28,6 +28,8 @@ import {
   validateArtifactResponse,
   validateSessionList,
   validateSessionResponse,
+  validateInvocationResponse,
+  validateTranscriptPage,
   validateInteractionResponse,
   validateInteractionList,
   validateWorkspaceResponse,
@@ -308,6 +310,34 @@ export function createHttpServer(options: {
         200,
         { session: engine.repository.sessionDetail(id(req)) },
         validateSessionResponse,
+      );
+    });
+    // An owner's goal for a session: answered once recorded, then run by the server.
+    router.post('/sessions/:id/goals', guard, json, (req, res) => {
+      command(res, engine.sendGoal(id(req), body(req), actorOf(res)), validateInvocationResponse);
+    });
+    // A session's normalized conversation: `after` is a position, `limit` at most 500.
+    router.get('/sessions/:id/transcript', guard, (req, res) => {
+      const after = query(req, 'after') ?? '0';
+      const limit = query(req, 'limit') ?? '200';
+      if (!/^\d+$/.test(after) || !/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > 500)
+        throw new ShiftError('INVALID_REQUEST', 'Invalid after or limit.', 422);
+      reply(
+        res,
+        200,
+        engine.repository.transcript(id(req), Number(after), Number(limit)) as Record<
+          string,
+          unknown
+        >,
+        validateTranscriptPage,
+      );
+    });
+    router.get('/invocations/:id', guard, (req, res) => {
+      reply(
+        res,
+        200,
+        { invocation: engine.repository.invocationDetail(id(req)) },
+        validateInvocationResponse,
       );
     });
     router.get('/artifacts/:id/content', guard, async (req, res) => {

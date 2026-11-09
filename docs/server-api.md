@@ -91,6 +91,9 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | `GET /api/v0/admin/runs/{id}/variables`                 | `shift run variables`       | A run's variables and every revision              |
 | `GET /api/v0/admin/sessions[?projectId=]`               | `shift session list`        | Agent sessions, newest first                      |
 | `GET /api/v0/admin/sessions/{id}`                       | `shift session show`        | A session with its executions and invocations     |
+| `POST /api/v0/admin/sessions/{id}/goals`                | `shift session send`        | Send the owner's goal to a session                |
+| `GET /api/v0/admin/sessions/{id}/transcript`            | `shift session transcript`  | A session's normalized conversation               |
+| `GET /api/v0/admin/invocations/{id}`                    | `shift invocation show`     | One prompt with its outcome and reports           |
 | `GET /api/v0/admin/runs/{id}/artifacts`                 | `shift artifact list`       | A run's reports, oldest first                     |
 | `GET /api/v0/admin/artifacts/{id}`                      | `shift artifact show`       | One artifact's metadata                           |
 | `GET /api/v0/admin/artifacts/{id}/content`              | `shift artifact get`        | An artifact's bytes                               |
@@ -305,6 +308,14 @@ A `Run`, abridged from a completed run:
 ### Sessions
 
 `GET /api/v0/admin/sessions[?projectId=]` returns `{"sessions": [Session]}`, at most 500, newest first. A Session is `{"id", "projectId", "workspaceId", "nodeId", "createdByRunId", "harness", "harnessSessionId", "mapping", "cwd", "lifetime", "state", "heldBy", "createdAt", "archivedAt"}`. `mapping` is the OpenCode conversation's state: `CREATING` until OpenCode confirmed it, then `READY`. `state` is `CREATING`, `BUSY`, `IDLE` or `ARCHIVED`. `heldBy` is the execution that owns the session now, if any. `GET /api/v0/admin/sessions/{id}` adds `executions` (`{"id", "runId", "nodeId", "sequence", "state"}`) and `invocations` (`{"id", "executionId", "kind", "state", "createdAt", "finishedAt"}`), oldest first, or answers `404 SESSION_NOT_FOUND`. Use a session's `id` as an agent's `session.reference` ([sessions](workflows.md#sessions)). The CLI forms are `shift session list [--project <id>]` and `shift session show <id>`.
+
+### Owner goals and transcripts
+
+`POST /api/v0/admin/sessions/{id}/goals` with `{"goal": "<text, 1 to 20000 characters>", "commandId"?}` sends your own goal to a session outside any run. It answers `202 {"invocation": Invocation}` once the goal is recorded; the server then submits it and follows the turn whatever happens to the client, also across a restart. The session must have its conversation (`mapping` `READY`), not be archived, and have no other owner: a run's agent holding it, or another active turn, answers `409 SESSION_BUSY`, and a run that wants the session meanwhile waits for the goal's turn to end. There is no result contract: the turn's own end is the outcome (`COMPLETED`, `FAILED` with the harness cause, `INTERRUPTED` or `UNKNOWN`), and a result-tool call during it is refused. The CLI form is `shift session send <id> --goal <text> [--wait]`.
+
+`GET /api/v0/admin/invocations/{id}` returns `{"invocation": {"id", "sessionId", "executionId", "runId", "kind", "manual", "state", "correlationId", "prompt", "result", "error", "createdAt", "submittedAt", "finishedAt", "artifacts"}}`; `manual` is true for an owner goal. The CLI form is `shift invocation show <id>`.
+
+`GET /api/v0/admin/sessions/{id}/transcript[?after=POSITION&limit=N]` pages through the conversation Shift recorded after each turn: `{"entries": [{"id", "invocationId", "sourceKey", "revision", "position", "kind", "text"?, "tool"?, "status"?, "createdAt", "updatedAt"}], "next": POSITION | null}`. `kind` is `user`, `assistant`, `tool` or `status`. `sourceKey` is OpenCode's message or part identity; an entry whose content changed keeps its `position` and takes the next `revision`. Text is kept up to 8 KiB; a tool entry keeps only its name and status, never its input or output. Positions start at 1, `limit` is 1 to 500 (default 200). The CLI form is `shift session transcript <id> [--after POSITION]`.
 
 ### Artifacts
 

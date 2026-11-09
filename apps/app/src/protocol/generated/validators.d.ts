@@ -29,6 +29,8 @@ import type {
   ArtifactResponse,
   SessionList,
   SessionResponse,
+  InvocationResponse,
+  TranscriptPage,
   Event,
   EventPage,
   Snapshot,
@@ -74,6 +76,8 @@ export const validateArtifactList: Validator<ArtifactList>;
 export const validateArtifactResponse: Validator<ArtifactResponse>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
+export const validateInvocationResponse: Validator<InvocationResponse>;
+export const validateTranscriptPage: Validator<TranscriptPage>;
 export const validateEvent: Validator<Event>;
 export const validateEventPage: Validator<EventPage>;
 export const validateSnapshot: Validator<Snapshot>;

@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
-import { runCli, startChild, temporaryState } from '../helpers.js';
+import { eventually, runCli, startChild, temporaryState } from '../helpers.js';
 import { environment, key, model, skip } from './opencode-setup.js';
 
 // `shift serve` driving real OpenCode, with paid model calls; see opencode-setup.ts.
@@ -219,5 +219,139 @@ test(
       await server.terminate();
       await state.remove();
     }
+  },
+);
+
+test(
+  'an owner goal runs in a real session, which survives the idle runtime stopping',
+  { skip, timeout: 600_000 },
+  async (t) => {
+    const state = await temporaryState();
+    t.after(() => state.remove());
+    const repo = join(state.path, 'repo');
+    await mkdir(repo);
+    await writeFile(join(repo, 'notes.txt'), 'alpha beta\n');
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync('git', ['add', '.'], { cwd: repo });
+    execFileSync(
+      'git',
+      ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init'],
+      {
+        cwd: repo,
+      },
+    );
+    const server = await startChild(
+      state.path,
+      ['--opencode-model', model, '--opencode-environment', environment],
+      {
+        SHIFT_OPENCODE_IDLE_MS: '4000',
+        ...(key === undefined ? {} : { SHIFT_OPENCODE_API_KEY: key }),
+      },
+    );
+    t.after(() => server.terminate());
+    const shift = async (...args: string[]): Promise<any> => {
+      const result = await runCli([...args, '--state-dir', state.path]);
+      if (result.code !== 0) throw new Error(`${result.errors}${result.output}`);
+      return JSON.parse(result.output);
+    };
+    const project = await shift('project', 'add', '--path', repo);
+    const file = join(state.path, 'workflow.json');
+    await writeFile(
+      file,
+      JSON.stringify({
+        nodes: [
+          { id: 'start', type: 'manual_trigger' },
+          {
+            id: 'agent',
+            type: 'agent',
+            config: {
+              goal: 'Count the words in notes.txt.',
+              readOnly: true,
+              reports: { handoff: 'off', humanReport: 'off' },
+            },
+          },
+        ],
+        connections: [
+          {
+            id: 'c1',
+            fromNodeId: 'start',
+            fromPort: 'success',
+            toNodeId: 'agent',
+            toPort: 'input',
+          },
+        ],
+      }),
+    );
+    const workflow = await shift(
+      'workflow',
+      'create',
+      '--project',
+      project.id,
+      '--name',
+      'w',
+      '--file',
+      file,
+    );
+    await shift('workflow', 'publish', workflow.id);
+    // The CLI helper has a short deadline, so long waits poll here instead of using --wait.
+    let run = await shift('run', 'start', '--workflow', workflow.id);
+    while (run.state === 'RUNNING') {
+      await delay(1_000);
+      run = await shift('run', 'show', run.id);
+    }
+    assert.equal(run.state, 'COMPLETED', JSON.stringify(run));
+    const until = async (invocation: { id: string; state: string }) => {
+      while (['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN'].includes(invocation.state)) {
+        await delay(1_000);
+        invocation = await shift('invocation', 'show', invocation.id);
+      }
+      return invocation as any;
+    };
+    const [session] = await shift('session', 'list');
+    const remembered = await until(
+      await shift(
+        'session',
+        'send',
+        session.id,
+        '--goal',
+        'Remember the word "heliotrope" for my next message. Reply with only: ok',
+      ),
+    );
+    assert.equal(remembered.state, 'COMPLETED', JSON.stringify(remembered));
+    assert.equal(remembered.manual, true);
+    // The runtime stops once idle, and the next goal starts it again.
+    const started = () => server.output().split('OpenCode runtime started').length - 1;
+    const runtimes = started();
+    await eventually(
+      () => (server.output().includes('Stopping the idle OpenCode runtime') ? true : undefined),
+      30_000,
+    );
+    const recalled = await until(
+      await shift(
+        'session',
+        'send',
+        session.id,
+        '--goal',
+        'Which word did I ask you to remember? Reply with only that word.',
+      ),
+    );
+    assert.equal(recalled.state, 'COMPLETED', JSON.stringify(recalled));
+    assert.equal(started(), runtimes + 1, 'a new runtime generation');
+    const shown = await shift('session', 'show', session.id);
+    assert.equal(shown.harnessSessionId, session.harnessSessionId, 'the same conversation');
+    const { entries } = await shift('session', 'transcript', session.id);
+    const replies = entries.filter(
+      (entry: { invocationId: string; kind: string }) =>
+        entry.invocationId === recalled.id && entry.kind === 'assistant',
+    );
+    assert.match(replies.map((entry: { text: string }) => entry.text).join(' '), /heliotrope/i);
+    assert.ok(
+      entries.some(
+        (entry: { invocationId: string; kind: string; text?: string }) =>
+          entry.invocationId === remembered.id &&
+          entry.kind === 'user' &&
+          entry.text?.includes('heliotrope'),
+      ),
+    );
   },
 );

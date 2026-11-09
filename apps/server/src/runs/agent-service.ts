@@ -7,6 +7,7 @@ import type { BlobStore } from '../artifacts/store.js';
 import { ShiftError } from '../domain/errors.js';
 import type {
   HarnessAdapter,
+  HarnessCapabilities,
   HarnessSessionHandle,
   InvocationObservation,
   Json,
@@ -72,6 +73,28 @@ export const reportFiles: Record<ArtifactRole, string> = {
 
 // Turns whose files are final: nothing in the harness still writes to their directory.
 const settled: readonly InvocationState[] = ['COMPLETED', 'FAILED', 'INTERRUPTED'];
+
+// What the node needs from its harness, by what it would otherwise lose (specification 9). Each
+// entry names the missing capability; any one fails the node before a session or prompt exists.
+export function missingCapabilities(
+  capabilities: HarnessCapabilities,
+  config: Pick<AgentConfig, 'toolPolicy' | 'session'>,
+): string[] {
+  const missing: string[] = [];
+  if (capabilities.structuredSchemaDialect === 'unsupported')
+    missing.push('structured results checked against the result schema');
+  if (capabilities.invocationInspection !== 'durable_correlated')
+    missing.push('durable inspection of a submitted turn, needed to recover without resending it');
+  if (config.toolPolicy.mode === 'read_only' && capabilities.toolPolicy !== 'enforced')
+    missing.push('enforced read-only tool policy');
+  if (
+    config.session !== undefined &&
+    config.session.strategy !== 'fresh' &&
+    !capabilities.persistedSessionResume
+  )
+    missing.push('resuming a persisted conversation, needed to reuse a session');
+  return missing;
+}
 
 // A handoff larger than this is given to the agent as a file to read instead of inline.
 const inlineHandoffBytes = 64 * 1024;
@@ -196,6 +219,14 @@ export class AgentService {
       reports: config.reports ?? { handoff: 'off', humanReport: 'off' },
       handoffs: [],
     };
+    const missing = missingCapabilities(adapter.capabilities(), config);
+    if (missing.length) {
+      throw new ShiftError(
+        'HARNESS_CAPABILITY_UNSUPPORTED',
+        `The ${adapter.id} harness cannot give this node: ${missing.join('; ')}.`,
+        422,
+      );
+    }
     if (config.workspaceId !== undefined) {
       if (!this.#options.workspaces) {
         throw new ShiftError('WORKSPACE_UNAVAILABLE', 'Run workspaces are not configured.', 503);
@@ -212,7 +243,10 @@ export class AgentService {
         await this.#invoke(claim, handle, last, config, signal);
         continue;
       }
-      if (last && settled.includes(last.state)) await this.#collect(claim, last.id);
+      if (last && settled.includes(last.state)) {
+        await this.#record(handle);
+        await this.#collect(claim, last.id);
+      }
       const next = this.#decide(claim, config, invocations);
       if (!next) return;
       const id = randomUUID();
@@ -599,6 +633,120 @@ export class AgentService {
       };
     }
     repository.completeExecution(claim, { kind: 'completed', output, port: 'success' });
+  }
+
+  // Drives an owner's goal to the end of its turn (specification 4.3). It follows the same rules
+  // as a node's turn: durable intent before the submit, inspection before any resubmission, and a
+  // harness prompt stopped rather than answered. There is no result contract: the turn's own end
+  // is the outcome. The goal owns its session until the harness shows the turn no longer runs:
+  // an inspection, a submit or a stop that fails is tried again, with the goal still active, for
+  // as long as the server runs, and an aborted driver leaves it for the next start to continue.
+  async driveManual(invocation: InvocationRow, signal: AbortSignal): Promise<void> {
+    const { repository, adapter, artifactRoot, logger } = this.#options;
+    const handle = repository.sessionHandle(invocation.agentSessionId);
+    const correlation = adapter.correlate(invocation.id);
+    const move = (
+      from: readonly InvocationState[],
+      to: InvocationState,
+      error?: { code: string; message: string },
+    ) => repository.transitionManualGoal(invocation.id, from, to, error);
+    const directory = join(artifactRoot, 'sessions', invocation.agentSessionId, invocation.id);
+    let state = invocation.state;
+    if (state === 'PREPARING') {
+      move(['PREPARING'], 'SUBMITTING');
+      state = 'SUBMITTING';
+    }
+    // A prompt found queued after a restart may have been accepted moments before it, so it gets
+    // a whole interval before it is woken with the same ID.
+    let submittedAt = Date.now();
+    const submit = async () => {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      const receipt = await adapter.submit(handle, {
+        invocationId: invocation.id,
+        goal: invocation.prompt,
+        artifactDirectory: directory,
+        toolPolicy: { mode: 'workspace_write' },
+      });
+      submittedAt = Date.now();
+      return receipt.kind === 'accepted' ? ('RUNNING' as const) : ('UNCERTAIN' as const);
+    };
+    // The turn stopped for good: the session is free again.
+    const settle = (to: InvocationState, error?: { code: string; message: string }) =>
+      move(['RUNNING'], to, error);
+    for (;;) {
+      if (signal.aborted) return;
+      try {
+        const observation = await adapter.inspectInvocation(handle, correlation);
+        if (state === 'SUBMITTING' || state === 'UNCERTAIN') {
+          // Only a prompt the harness does not hold is sent; any other answer proves it has it.
+          const next = observation.kind === 'not_accepted' ? await submit() : 'RUNNING';
+          if (next !== state) move([state], next);
+          state = next;
+          if (observation.kind === 'not_accepted') continue;
+        }
+        if (observation.kind === 'queued') {
+          if (Date.now() - submittedAt >= this.#options.queuedResubmitMs) await submit();
+        } else if (observation.kind === 'not_accepted') {
+          // The harness has no such prompt, so nothing of it runs.
+          settle('UNKNOWN', {
+            code: 'HARNESS_LOST_PROMPT',
+            message: 'The harness no longer holds a prompt it had accepted.',
+          });
+          break;
+        } else if (observation.kind === 'awaiting_harness_prompt') {
+          // Only a confirmed stop frees the session; otherwise the next pass asks again.
+          const stopped = await adapter.cancel(handle, correlation);
+          if (stopped.kind === 'stopped') {
+            settle('FAILED', {
+              code: 'HARNESS_PROMPT',
+              message: 'The agent asked for a permission or an answer, which Shift does not give.',
+            });
+            break;
+          }
+          logger.warn(
+            { invocationId: invocation.id },
+            'An owner goal waits on a harness prompt and did not confirm it stopped.',
+          );
+        } else if (observation.kind === 'ended') {
+          if (observation.outcome === 'succeeded') settle('COMPLETED');
+          else
+            settle(
+              'FAILED',
+              observation.failure ?? { code: 'HARNESS_TURN_FAILED', message: 'The turn failed.' },
+            );
+          break;
+        } else if (observation.kind === 'interrupted') {
+          settle('INTERRUPTED', { code: 'INTERRUPTED', message: observation.explanation });
+          break;
+        } else if (observation.kind === 'unknown') {
+          // The runtime was lost mid-turn and its scope, with every tool process, was killed:
+          // nothing runs any more, though what the turn changed is unknown.
+          settle('UNKNOWN', { code: 'HARNESS_OUTCOME_UNKNOWN', message: observation.explanation });
+          break;
+        }
+      } catch (error) {
+        logger.warn(
+          { invocationId: invocation.id, code: (error as { code?: string }).code },
+          'An owner goal could not reach the harness; trying again.',
+        );
+      }
+      await this.#sleep(signal);
+    }
+    await this.#record(handle);
+  }
+
+  // Stores the conversation as the harness has it now. A transcript is for people to read, so a
+  // failed inspection is logged and never changes the node's outcome.
+  async #record(handle: HarnessSessionHandle): Promise<void> {
+    const { adapter, repository, logger } = this.#options;
+    try {
+      repository.recordTranscript(handle.shiftSessionId, await adapter.transcript(handle));
+    } catch (error) {
+      logger.warn(
+        { sessionId: handle.shiftSessionId, code: (error as { code?: string }).code },
+        'The session transcript could not be read.',
+      );
+    }
   }
 
   // Required reports a turn did not leave, by file name.
