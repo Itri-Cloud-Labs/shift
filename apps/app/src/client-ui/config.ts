@@ -527,3 +527,15 @@ export function unknownConfig(type: string, config: Raw): Raw {
   if (!known) return {};
   return Object.fromEntries(Object.entries(config).filter(([key]) => !known.includes(key)));
 }
+
+// An HTTP node's config with another method. A read (GET, the default, HEAD or OPTIONS) has no
+// body, so choosing one drops the body in the same edit instead of leaving a hidden one behind.
+export function withMethod(config: Raw, method: string | undefined): Raw {
+  const { method: _method, body, ...rest } = config;
+  const reads = method === undefined || ['GET', 'HEAD', 'OPTIONS'].includes(method);
+  return {
+    ...rest,
+    ...(method === undefined || method === 'GET' ? {} : { method }),
+    ...(body === undefined || reads ? {} : { body }),
+  };
+}

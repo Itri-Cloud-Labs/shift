@@ -12,7 +12,7 @@ import {
   VariableKey,
   type BindingEditing,
 } from './Builders.js';
-import { unknownConfig } from './config.js';
+import { unknownConfig, withMethod } from './config.js';
 import { addableTypes, advancedTypes, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
@@ -734,7 +734,7 @@ function ConfigFields({
           <MethodSelect
             id={`${id}-method`}
             value={config['method']}
-            set={(value) => set('method', value)}
+            set={(value) => replace(withMethod(config, value))}
           />
           {field('url', 'URL', false, 'A full address. Use {{name}} for a value.')}
           <PairsField
