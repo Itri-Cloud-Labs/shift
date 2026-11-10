@@ -113,11 +113,13 @@ export async function readChecks(
       422,
       false,
     );
+  // Keyed by source and name: a check run and a commit status may share a name, and each counts,
+  // so a passing one can never hide a failing one.
   const entries = new Map<string, CheckEntry>();
   // The newest run of each name decides; GitHub lists newer runs first.
   for (const run of runs) {
-    if (entries.has(run.name)) continue;
-    entries.set(run.name, {
+    if (entries.has(`check_run:${run.name}`)) continue;
+    entries.set(`check_run:${run.name}`, {
       name: run.name,
       source: 'check_run',
       state:
@@ -132,8 +134,8 @@ export async function readChecks(
   }
   // The combined status already holds only the latest state per context.
   for (const status of combined.statuses) {
-    if (entries.has(status.context)) continue;
-    entries.set(status.context, {
+    if (entries.has(`status:${status.context}`)) continue;
+    entries.set(`status:${status.context}`, {
       name: status.context,
       source: 'status',
       state:
@@ -142,9 +144,11 @@ export async function readChecks(
       url: status.target_url ?? null,
     });
   }
-  const all = [...entries.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const all = [...entries.values()].sort(
+    (a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source),
+  );
   const watched = required.length ? all.filter((entry) => required.includes(entry.name)) : all;
-  const missing = required.filter((name) => !entries.has(name));
+  const missing = required.filter((name) => !all.some((entry) => entry.name === name));
   const counts = { success: 0, failure: 0, pending: missing.length };
   for (const entry of watched) counts[entry.state]++;
   const state: CheckSummary['state'] =

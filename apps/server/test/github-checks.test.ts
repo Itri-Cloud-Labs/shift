@@ -131,6 +131,23 @@ test('verify reads check runs and statuses of one commit, and the graph routes o
     const named = step(env, required.id, 'act').output!.data;
     assert.equal(named['state'], 'pending');
     assert.deepEqual(named['missing'], ['e2e']);
+    // A check run and a status with one name both count: a pass cannot hide a failure.
+    const shared = 'd'.repeat(40);
+    fake.checkRuns.push({
+      id: 50,
+      name: 'build',
+      head_sha: shared,
+      status: 'completed',
+      conclusion: 'success',
+    });
+    fake.statuses.push({ context: 'build', state: 'failure', sha: shared });
+    const collided = await settled(
+      env,
+      await run(env, actionWorkflow('github_verify_checks', { commit: shared, checks: ['build'] })),
+    );
+    const both = step(env, collided.id, 'act').output!.data;
+    assert.equal(both['state'], 'failure');
+    assert.deepEqual(both['counts'], { success: 1, failure: 1, pending: 0 });
     // More check runs than Shift reads is an error, never a partial summary.
     const crowded = 'c'.repeat(40);
     for (let index = 0; index < 1001; index++)
