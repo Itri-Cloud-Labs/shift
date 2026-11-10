@@ -103,6 +103,8 @@ export function outputPorts(node: DocumentNode): string[] {
     }
     case 'human_input':
       return ['success', 'timeout', 'error'];
+    case 'github_wait_checks':
+      return ['success', 'failure', 'timeout', 'error'];
     case 'approval': {
       const outcomes = Array.isArray(node.config['outcomes'])
         ? node.config['outcomes'].filter((item): item is string => typeof item === 'string')
@@ -139,6 +141,12 @@ export const typeLabels: Record<string, string> = {
   git_create_branch: 'Create branch',
   git_commit: 'Commit',
   git_push: 'Push',
+  github_get_pr: 'Get pull request',
+  github_create_pr: 'Create pull request',
+  github_update_pr: 'Update pull request',
+  github_verify_checks: 'Verify checks',
+  github_wait_checks: 'Wait for checks',
+  github_merge: 'Merge pull request',
   end: 'End',
 };
 
@@ -181,7 +189,26 @@ export function summary(node: DocumentNode): string {
     case 'git_commit':
       return text(node.config['message']);
     case 'git_push':
-      return `To ${text(node.config['remote']) || 'origin'}`;
+      return node.config['transport'] === 'github_app'
+        ? 'To GitHub with the App'
+        : `To ${text(node.config['remote']) || 'origin'}`;
+    case 'github_get_pr':
+      return text(node.config['number'])
+        ? `#${text(node.config['number'])}`
+        : text(node.config['head'])
+          ? `From ${text(node.config['head'])}`
+          : '';
+    case 'github_create_pr':
+      return text(node.config['title']);
+    case 'github_update_pr':
+      return text(node.config['number']) ? `Updates #${text(node.config['number'])}` : '';
+    case 'github_verify_checks':
+    case 'github_wait_checks':
+      return text(node.config['commit']) ? `Checks of ${text(node.config['commit'])}` : '';
+    case 'github_merge':
+      return text(node.config['number'])
+        ? `${text(node.config['method']) || 'merge'} #${text(node.config['number'])}`
+        : '';
     case 'git_diff':
       return node.config['against'] === 'head' ? 'Against HEAD' : 'Against the run’s start';
     case 'end':
@@ -329,6 +356,11 @@ export function runReason(run: Run, now: number): string | null {
     if (wait['kind'] === 'timer') return `${node ?? 'A wait'} continues${until}`;
     if (wait['kind'] === 'retry')
       return `${node ?? 'A step'} retries${until} (attempt ${String(wait['attempt'] ?? '')})`;
+    if (wait['kind'] === 'poll') {
+      const deadline = typeof wait['deadline'] === 'number' ? wait['deadline'] : null;
+      const state = wait['state'] === 'none' ? 'none reported' : String(wait['state'] ?? '');
+      return `${node ?? 'A step'} reads the checks again${until}: ${state} so far${deadline !== null && deadline > now ? `, gives up in ${duration(deadline - now)}` : ''}`;
+    }
   }
   if (run.state === 'NEEDS_HUMAN' && run.attention) {
     const explanation = run.attention['explanation'];

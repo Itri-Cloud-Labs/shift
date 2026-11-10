@@ -10,6 +10,8 @@ import { createShell } from './fixtures.js';
 import {
   validateArtifactList,
   validateCredentialList,
+  validateGitHubAppList,
+  validateGitHubConnectionResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -58,6 +60,8 @@ const validators: Record<ResourceKind, (value: unknown) => boolean> = {
   artifacts: validateArtifactList,
   credentials: validateCredentialList,
   permissions: validateProjectPermissionsResponse,
+  github: validateGitHubConnectionResponse,
+  githubApps: validateGitHubAppList,
 };
 
 // The largest report the server stores.

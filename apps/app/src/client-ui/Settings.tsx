@@ -8,6 +8,7 @@ import type {
   SyncView,
 } from '../shared/contracts.js';
 import { health, healthLabels } from './Bars.js';
+import { GitHubSettings } from './GitHub.js';
 import { ask, bridge, useLive } from './bridge.js';
 import { problems } from './Pairing.js';
 import { relativeTime } from './time.js';
@@ -126,7 +127,12 @@ export function Settings({
             <X />
           </button>
           {section === 'connection' && <ConnectionSection connection={connection} sync={sync} />}
-          {section === 'projects' && <ProjectsSection sync={sync} />}
+          {section === 'projects' && (
+            <ProjectsSection
+              sync={sync}
+              serverUrl={connection.profiles.find((profile) => profile.active)?.url ?? null}
+            />
+          )}
           {section === 'devices' && <DevicesSection sync={sync} />}
           {section === 'appearance' && <AppearanceSection preferences={preferences} />}
         </div>
@@ -288,11 +294,12 @@ const actionLabels: Record<string, string> = {
   script: 'Run scripts',
   git: 'Change the workspace with Git',
   git_push: 'Push to remotes',
+  github: 'Use GitHub',
 };
 
 // A project's credentials and the actions it allows. Credential values are written here once and
 // never shown again: the server only ever returns their names.
-function ProjectsSection({ sync }: { sync: SyncView }) {
+function ProjectsSection({ sync, serverUrl }: { sync: SyncView; serverUrl: string | null }) {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -420,6 +427,14 @@ function ProjectsSection({ sync }: { sync: SyncView }) {
             <p className="field-error">{command.message ?? 'The server did not accept this.'}</p>
           )}
           {failed && <p className="field-error">{failed}</p>}
+          <h4>GitHub</h4>
+          <GitHubSettings
+            project={project!}
+            live={live}
+            settled={settled}
+            serverUrl={serverUrl}
+            send={send}
+          />
           <h4>Actions</h4>
           <p className="note">
             What workflows in this project may do. A change applies to runs already going.

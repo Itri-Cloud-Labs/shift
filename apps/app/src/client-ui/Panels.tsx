@@ -25,6 +25,12 @@ const actionTypes = new Set([
   'git_create_branch',
   'git_commit',
   'git_push',
+  'github_get_pr',
+  'github_create_pr',
+  'github_update_pr',
+  'github_verify_checks',
+  'github_wait_checks',
+  'github_merge',
 ]);
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -43,6 +49,7 @@ export function Inspector({
   editor = null,
   runId = null,
   openSession,
+  wait = null,
 }: {
   document: GraphDocument;
   nodeId: string;
@@ -60,6 +67,8 @@ export function Inspector({
   // The run shown, for an agent step's reports and session.
   runId?: string | null;
   openSession?: (sessionId: string) => void;
+  // The run's current wait, for a step that is polling.
+  wait?: Record<string, unknown> | null;
 }) {
   const node = document.nodes.find((item) => item.id === nodeId);
   const inRun = run !== undefined;
@@ -146,7 +155,19 @@ export function Inspector({
                   ),
                 }
               : execution && actionTypes.has(node.type)
-                ? { readable: <ActionResult type={node.type} execution={execution} /> }
+                ? {
+                    readable: (
+                      <ActionResult
+                        type={node.type}
+                        execution={execution}
+                        poll={
+                          wait?.['kind'] === 'poll' && wait['executionId'] === execution.id
+                            ? wait
+                            : null
+                        }
+                      />
+                    ),
+                  }
                 : {})}
           />
         )}

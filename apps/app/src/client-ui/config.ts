@@ -519,7 +519,13 @@ export const configKeys: Record<string, readonly string[]> = {
   git_diff: ['against', 'paths', 'maxBytes'],
   git_create_branch: ['name'],
   git_commit: ['message', 'allowEmpty'],
-  git_push: ['remote', 'branch', 'remoteBranch', 'timeoutMs'],
+  git_push: ['remote', 'branch', 'remoteBranch', 'transport', 'timeoutMs'],
+  github_get_pr: ['number', 'head'],
+  github_create_pr: ['head', 'base', 'title', 'body', 'draft'],
+  github_update_pr: ['number', 'title', 'body', 'base', 'state'],
+  github_verify_checks: ['commit', 'checks'],
+  github_wait_checks: ['commit', 'checks', 'timeoutMs', 'intervalMs'],
+  github_merge: ['number', 'method', 'expectedCommit', 'commitTitle', 'commitMessage'],
 };
 
 export function unknownConfig(type: string, config: Raw): Raw {
