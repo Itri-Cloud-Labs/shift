@@ -295,7 +295,16 @@ function AppCard({
             >
               Replace
             </button>
-            <button className="button" type="button" onClick={() => setRotating(false)}>
+            <button
+              className="button"
+              type="button"
+              onClick={() => {
+                // Nothing pasted outlives the form.
+                setPrivateKey('');
+                setSecret('');
+                setRotating(false);
+              }}
+            >
               Cancel
             </button>
           </div>

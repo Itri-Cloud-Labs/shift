@@ -304,6 +304,13 @@ test('action and Git nodes start valid where they can and diagnose what the serv
   assert.deepEqual(fields('github_get_pr', { number: 'x7' }), ['number']);
   assert.deepEqual(fields('github_get_pr', { number: '42' }), []);
   assert.deepEqual(fields('github_wait_checks', { commit: 'main' }), ['commit']);
+  assert.deepEqual(
+    fields('github_wait_checks', { commit: 'a'.repeat(40), intervalMs: 1000, timeoutMs: 30_000 }),
+    ['intervalMs', 'timeoutMs'],
+  );
+  // An update that only closes the pull request is valid; one that changes nothing is not.
+  assert.deepEqual(fields('github_update_pr', { number: '3', state: 'closed' }), []);
+  assert.deepEqual(fields('github_update_pr', { number: '3' }), [null]);
   assert.deepEqual(fields('github_verify_checks', { commit: 'a'.repeat(40) }), []);
   assert.deepEqual(fields('github_merge', { number: '7', expectedCommit: 'abc' }), [
     'expectedCommit',

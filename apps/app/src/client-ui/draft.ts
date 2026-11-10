@@ -110,7 +110,7 @@ const startingConfig: Record<string, Raw> = {
   git_commit: { message: '' },
   github_get_pr: { number: '' },
   github_create_pr: { head: '', title: '' },
-  github_update_pr: { number: '', title: '' },
+  github_update_pr: { number: '' },
   github_verify_checks: { commit: '' },
   github_wait_checks: { commit: '' },
   github_merge: { number: '' },
@@ -663,6 +663,20 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
       !/^[0-9a-fA-F]{40}$/.test((node.config[key] as string).trim())
     )
       add(key, `${node.id}: use a full 40-character commit SHA or a {{value}}, not a branch.`);
+  // The server's bounds for a wait's timing (apps/server/src/workflows/nodes.ts).
+  if (node.type === 'github_wait_checks') {
+    const interval = node.config['intervalMs'];
+    if (typeof interval === 'number' && (interval < 5_000 || interval > 3_600_000))
+      add('intervalMs', `${node.id}: check every 5 seconds to 1 hour.`);
+    const timeout = node.config['timeoutMs'];
+    if (typeof timeout === 'number' && (timeout < 60_000 || timeout > 7 * 24 * 3_600_000))
+      add('timeoutMs', `${node.id}: give up after 1 minute to 7 days.`);
+  }
+  if (
+    node.type === 'github_update_pr' &&
+    Object.keys(node.config).every((key) => key === 'number' || blank(node.config[key]))
+  )
+    add(null, `${node.id} needs something to change: a title, description, base branch or state.`);
   if (node.type === 'github_get_pr' && blank(node.config['number']) && blank(node.config['head']))
     add('number', `${node.id} needs a pull request number or branch.`);
   if (

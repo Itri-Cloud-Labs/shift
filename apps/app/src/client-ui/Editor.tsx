@@ -1054,7 +1054,8 @@ function ConfigFields({
                 label="Check every (seconds)"
                 value={config['intervalMs']}
                 scale={1000}
-                note="30 seconds when empty."
+                note="From 5 seconds to an hour; 30 seconds when empty."
+                problem={problem('intervalMs')}
                 set={(value) => set('intervalMs', value)}
               />
               <NumberField
@@ -1062,7 +1063,8 @@ function ConfigFields({
                 label="Give up after (minutes)"
                 value={config['timeoutMs']}
                 scale={60_000}
-                note="One hour when empty. The run follows the timeout port then."
+                note="From 1 minute to 7 days; one hour when empty. The run follows the timeout port then."
+                problem={problem('timeoutMs')}
                 set={(value) => set('timeoutMs', value)}
               />
               <p className="note">

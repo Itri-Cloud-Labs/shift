@@ -284,6 +284,7 @@ export function NumberField({
   value,
   scale = 1,
   note,
+  problem,
   set,
 }: {
   id: string;
@@ -292,6 +293,7 @@ export function NumberField({
   // Stored value per shown unit, such as 1000 for seconds stored as milliseconds.
   scale?: number;
   note?: string;
+  problem?: string | undefined;
   set: (value: number | undefined) => void;
 }) {
   return (
@@ -300,6 +302,7 @@ export function NumberField({
       label={label}
       numeric
       note={note}
+      problem={problem}
       value={typeof value === 'number' ? String(value / scale) : ''}
       commit={(text) => {
         const number = Number(text);
@@ -493,8 +496,11 @@ export function ActionResult({
           <h3 className="section-title">Checks</h3>
           <ul className="attempts">
             {checks.map((check) => (
-              <li key={str(check['name'])}>
-                <span className="mono">{str(check['name'])}</span>
+              <li key={`${str(check['source'])}:${str(check['name'])}`}>
+                <span className="mono">
+                  {str(check['name'])}
+                  {check['source'] === 'status' ? ' (status)' : ''}
+                </span>
                 <span className="note">
                   {str(check['state'])}
                   {check['conclusion'] && check['conclusion'] !== check['state']
