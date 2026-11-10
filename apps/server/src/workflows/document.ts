@@ -570,6 +570,9 @@ export function diagnose(document: unknown): Diagnostic[] {
       'message',
       'branch',
       'remoteBranch',
+      'number',
+      'head',
+      'base',
     ]
       .map((field) => config[field])
       .filter((value) => value !== undefined);
