@@ -2401,3 +2401,56 @@ textarea {
   cursor: pointer;
   font-weight: 500;
 }
+
+/* Action forms (prompts 20 and 21): a credential row is name, credential, prefix and remove. */
+.credential-ref {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+}
+
+.credential-ref:has(> :nth-child(4)) {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr) auto;
+}
+
+.credential-ref > .button {
+  margin-bottom: var(--space-3);
+}
+
+.warning-note {
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--hairline);
+}
+
+.advanced-types {
+  margin-top: var(--space-2);
+  padding: 0 var(--space-2);
+}
+
+.advanced-types summary {
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  font-weight: 500;
+}
+
+.advanced-types > .note {
+  margin: 0 0 var(--space-1);
+}
+
+.credential-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+  margin-top: var(--space-3);
+}
+
+.credential-form > .button {
+  margin-bottom: var(--space-3);
+}
+
+.settings-panel h4 {
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--text-md);
+}

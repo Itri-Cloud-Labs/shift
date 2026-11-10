@@ -22,6 +22,7 @@ import {
   setRequired,
   valueKind,
   withKind,
+  withMethod,
   withOperation,
   withOperator,
   writtenKeys,
@@ -505,4 +506,14 @@ test('a node field is set without touching the rest', () => {
   const pick = (edited['nodes'] as Record<string, unknown>[])[1]!;
   assert.deepEqual(pick['retry'], retry);
   assert.deepEqual(pick['config'], (draft['nodes'] as Record<string, unknown>[])[1]!['config']);
+});
+
+test('choosing a read method drops an HTTP body; a write keeps it', () => {
+  const posted = { url: 'https://example.com', method: 'POST', body: { kind: 'text', text: 'x' } };
+  for (const read of [undefined, 'GET', 'HEAD', 'OPTIONS'])
+    assert.deepEqual(withMethod(posted, read), {
+      url: 'https://example.com',
+      ...(read === undefined || read === 'GET' ? {} : { method: read }),
+    });
+  assert.deepEqual(withMethod(posted, 'PUT'), { ...posted, method: 'PUT' });
 });

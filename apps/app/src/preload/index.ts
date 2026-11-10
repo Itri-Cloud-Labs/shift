@@ -14,6 +14,8 @@ import {
 import { validInteractions } from '../shared/interactions.js';
 import {
   validateArtifactList,
+  validateCredentialList,
+  validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
   validateRunResponse,
@@ -34,6 +36,8 @@ const resourceValidators = {
   session: validateSessionResponse,
   transcript: validateTranscriptPage,
   artifacts: validateArtifactList,
+  credentials: validateCredentialList,
+  permissions: validateProjectPermissionsResponse,
 };
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
@@ -97,6 +101,14 @@ const bridge: DesktopBridge = {
       } as DesktopRequest),
     artifacts: (runId: string) => invoke({ kind: 'data.artifacts', runId }),
     report: (artifactId: string) => invoke({ kind: 'data.report', artifactId }),
+    credentials: (projectId: string) => invoke({ kind: 'data.credentials', projectId }),
+    permissions: (projectId: string) => invoke({ kind: 'data.permissions', projectId }),
+  }),
+  credential: Object.freeze({
+    put: (projectId: string, name: string, value: string) =>
+      invoke({ kind: 'credential.put', projectId, name, value }),
+    revoke: (projectId: string, credentialId: string) =>
+      invoke({ kind: 'credential.revoke', projectId, credentialId }),
   }),
   session: Object.freeze({
     goal: (sessionId: string, goal: string) => invoke({ kind: 'session.goal', sessionId, goal }),
@@ -134,6 +146,8 @@ const bridge: DesktopBridge = {
   }),
   project: Object.freeze({
     create: (path: string) => invoke({ kind: 'project.create', path }),
+    permissions: (projectId: string, allow: string[], deny: string[]) =>
+      invoke({ kind: 'project.permissions', projectId, allow, deny } as DesktopRequest),
   }),
   device: Object.freeze({
     revoke: (deviceId: string) => invoke({ kind: 'device.revoke', deviceId }),

@@ -13,6 +13,7 @@ export const RESOURCE_LIMIT = 8 * 1024 * 1024;
 export const querySchema = v.picklist(['info', 'health', 'ready']);
 export type FoundationQuery = v.InferOutput<typeof querySchema>;
 const profileId = v.pipe(v.string(), v.regex(/^[0-9a-f-]{36}$/));
+const actionPermission = v.picklist(['command', 'http', 'script', 'git', 'git_push']);
 const serverUrl = v.pipe(v.string(), v.minLength(1), v.maxLength(2048));
 // This computer's own choices: they never reach the server.
 export const preferencesSchema = v.strictObject({
@@ -51,6 +52,27 @@ export const requestSchema = v.variant('kind', [
   }),
   v.strictObject({ kind: v.literal('data.artifacts'), runId: profileId }),
   v.strictObject({ kind: v.literal('data.report'), artifactId: profileId }),
+  // A project's credentials by name, and the actions it denies.
+  v.strictObject({ kind: v.literal('data.credentials'), projectId: profileId }),
+  v.strictObject({ kind: v.literal('data.permissions'), projectId: profileId }),
+  // A credential value crosses IPC once, from its field to main, and is never sent back.
+  v.strictObject({
+    kind: v.literal('credential.put'),
+    projectId: profileId,
+    name: v.pipe(v.string(), v.regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/)),
+    value: v.pipe(v.string(), v.minLength(1), v.maxLength(16 * 1024)),
+  }),
+  v.strictObject({
+    kind: v.literal('credential.revoke'),
+    projectId: profileId,
+    credentialId: profileId,
+  }),
+  v.strictObject({
+    kind: v.literal('project.permissions'),
+    projectId: profileId,
+    allow: v.array(actionPermission),
+    deny: v.array(actionPermission),
+  }),
   // The owner's own goal for a session, outside any run.
   v.strictObject({
     kind: v.literal('session.goal'),
@@ -232,6 +254,8 @@ export const resourceKindSchema = v.picklist([
   'session',
   'transcript',
   'artifacts',
+  'credentials',
+  'permissions',
 ]);
 export type ResourceKind = v.InferOutput<typeof resourceKindSchema>;
 export const commandViewSchema = v.strictObject({
@@ -371,6 +395,13 @@ export interface DesktopBridge {
     transcript(sessionId: string, after?: number): Promise<DesktopResponse>;
     artifacts(runId: string): Promise<DesktopResponse>;
     report(artifactId: string): Promise<DesktopResponse>;
+    credentials(projectId: string): Promise<DesktopResponse>;
+    permissions(projectId: string): Promise<DesktopResponse>;
+  };
+  credential: {
+    // Creates the named credential or replaces its value. The value is never read back.
+    put(projectId: string, name: string, value: string): Promise<DesktopResponse>;
+    revoke(projectId: string, credentialId: string): Promise<DesktopResponse>;
   };
   session: {
     // Sends the owner's own goal to a session outside any run.
@@ -398,6 +429,7 @@ export interface DesktopBridge {
   };
   project: {
     create(path: string): Promise<DesktopResponse>;
+    permissions(projectId: string, allow: string[], deny: string[]): Promise<DesktopResponse>;
   };
   recovery: {
     list(): Promise<DesktopResponse>;
@@ -455,7 +487,10 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
   const limit =
     kind === 'workflow.save' || kind === 'recovery.keep'
       ? SAVE_LIMIT
-      : kind === 'interaction.respond' || kind === 'run.control' || kind === 'session.goal'
+      : kind === 'interaction.respond' ||
+          kind === 'run.control' ||
+          kind === 'session.goal' ||
+          kind === 'credential.put'
         ? ANSWER_LIMIT
         : REQUEST_LIMIT;
   // A draft may nest 32 levels below its envelope.

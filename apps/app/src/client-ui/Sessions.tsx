@@ -537,7 +537,7 @@ const requirements: Array<[string, string]> = [
   ['off', 'Not asked for'],
 ];
 
-function Select({
+export function Select({
   id,
   label,
   value,

@@ -131,6 +131,14 @@ export const typeLabels: Record<string, string> = {
   approval: 'Approval',
   set_variable: 'Set variable',
   get_variable: 'Get variable',
+  command: 'Command',
+  http: 'HTTP request',
+  script: 'Script',
+  git_status: 'Git status',
+  git_diff: 'Git diff',
+  git_create_branch: 'Create branch',
+  git_commit: 'Commit',
+  git_push: 'Push',
   end: 'End',
 };
 
@@ -156,6 +164,26 @@ export function summary(node: DocumentNode): string {
       return text(node.config['key']) ? `Writes ${text(node.config['key'])}` : '';
     case 'get_variable':
       return text(node.config['key']) ? `Reads ${text(node.config['key'])}` : '';
+    case 'command':
+      return node.config['mode'] === 'shell'
+        ? text(node.config['script'])
+        : [
+            node.config['executable'],
+            ...(Array.isArray(node.config['args']) ? node.config['args'] : []),
+          ]
+            .map(text)
+            .join(' ')
+            .trim();
+    case 'http':
+      return `${text(node.config['method']) || 'GET'} ${text(node.config['url'])}`.trim();
+    case 'git_create_branch':
+      return text(node.config['name']);
+    case 'git_commit':
+      return text(node.config['message']);
+    case 'git_push':
+      return `To ${text(node.config['remote']) || 'origin'}`;
+    case 'git_diff':
+      return node.config['against'] === 'head' ? 'Against HEAD' : 'Against the run’s start';
     case 'end':
       return node.config['outcome'] === 'FAILED' ? 'Ends as failed' : 'Ends as completed';
     case 'manual_trigger':

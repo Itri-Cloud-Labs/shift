@@ -12,12 +12,21 @@ import {
   VariableKey,
   type BindingEditing,
 } from './Builders.js';
-import { unknownConfig } from './config.js';
-import { addableTypes, type DraftProblem } from './draft.js';
+import { unknownConfig, withMethod } from './config.js';
+import { addableTypes, advancedTypes, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
 import { TypeIcon } from './icons.js';
-import { AgentSessionFields } from './Sessions.js';
+import {
+  Check,
+  CredentialRefs,
+  LinesField,
+  MethodSelect,
+  NumberField,
+  PairsField,
+  SafeToRetry,
+} from './Actions.js';
+import { AgentSessionFields, Select } from './Sessions.js';
 
 // The draft editor's islands: choosing a node type, the problems list, a save conflict, and the
 // form for the selected node.
@@ -33,6 +42,14 @@ const typeHints: Record<string, string> = {
   approval: 'Asks you to decide',
   set_variable: 'Remembers a value for this run',
   get_variable: 'Reads a value this run remembered',
+  command: 'Runs a program in the workspace',
+  http: 'Sends a web request',
+  script: 'Computes data with JavaScript',
+  git_status: 'Looks at the workspace’s changes',
+  git_diff: 'Shows what changed',
+  git_create_branch: 'Names the work as a branch',
+  git_commit: 'Records the changes',
+  git_push: 'Publishes the branch',
   end: 'Finishes the run',
 };
 
@@ -69,6 +86,21 @@ export function NodePicker({
             </li>
           ))}
         </ul>
+        <details className="advanced-types">
+          <summary>Advanced</summary>
+          <p className="note">Code you write, run on the server as your account.</p>
+          <ul>
+            {advancedTypes.map((type) => (
+              <li key={type}>
+                <button className="option" onClick={() => choose(type)}>
+                  <TypeIcon type={type} />
+                  <span className="name">{typeLabels[type]}</span>
+                  <span className="note">{typeHints[type]}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       </section>
     </>
   );
@@ -182,7 +214,17 @@ export function ConflictIsland({
 }
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
-const templated = new Set(['goal', 'title', 'instructions', 'until']);
+const templated = new Set([
+  'goal',
+  'title',
+  'instructions',
+  'until',
+  'url',
+  'name',
+  'message',
+  'branch',
+  'remoteBranch',
+]);
 
 function TokenPicker({
   id,
@@ -573,6 +615,303 @@ function ConfigFields({
           />
           <Fallback id={id} source={config} set={replace} />
           <p className="note">Its result is the variable’s value when it starts.</p>
+        </>
+      );
+    case 'command': {
+      const shell = config['mode'] === 'shell';
+      return (
+        <>
+          <Select
+            id={`${id}-mode`}
+            label="Runs"
+            value={shell ? 'shell' : 'exec'}
+            options={[
+              ['exec', 'A program with arguments'],
+              ['shell', 'A shell script (/bin/sh)'],
+            ]}
+            change={(next) =>
+              replace(
+                next === 'shell'
+                  ? {
+                      ...Object.fromEntries(
+                        Object.entries(config).filter(
+                          ([key]) => !['executable', 'args'].includes(key),
+                        ),
+                      ),
+                      mode: 'shell',
+                      script: text(config['script']) || '',
+                    }
+                  : {
+                      ...Object.fromEntries(
+                        Object.entries(config).filter(([key]) => !['mode', 'script'].includes(key)),
+                      ),
+                      executable: text(config['executable']),
+                    },
+              )
+            }
+          />
+          {shell ? (
+            <TextField
+              id={`${id}-script`}
+              label="Script"
+              multiline
+              value={text(config['script'])}
+              problem={problem('script')}
+              note="Read values as environment variables, such as $NAME. Values never fill the script itself."
+              commit={(value) => string('script', value)}
+            />
+          ) : (
+            <>
+              <TextField
+                id={`${id}-executable`}
+                label="Program"
+                value={text(config['executable'])}
+                placeholder="pnpm"
+                problem={problem('executable')}
+                commit={(value) => set('executable', value)}
+              />
+              <LinesField
+                id={`${id}-args`}
+                label="Arguments, one per line"
+                value={config['args']}
+                note="Each line is one argument, never split or read by a shell. Use {{name}} for a value."
+                commit={(args) => set('args', args)}
+              />
+            </>
+          )}
+          <TextField
+            id={`${id}-cwd`}
+            label="Folder (optional)"
+            value={text(config['cwd'])}
+            placeholder="."
+            problem={problem('cwd')}
+            note="Inside the run’s workspace."
+            commit={(value) => string('cwd', value)}
+          />
+          <PairsField
+            id={`${id}-env`}
+            label="Environment, one NAME=value per line"
+            separator="="
+            value={config['env']}
+            note="Values can use {{name}}."
+            commit={(env) => set('env', env)}
+          />
+          <CredentialRefs
+            id={`${id}-credentials`}
+            legend="Credentials as environment variables"
+            target="Variable"
+            projectId={projectId}
+            value={config['credentials']}
+            commit={(refs) => set('credentials', refs)}
+          />
+          {timeout}
+          <NumberField
+            id={`${id}-output`}
+            label="Output kept per stream (KiB, optional)"
+            value={config['maxOutputBytes']}
+            scale={1024}
+            note="The end of the output is kept. Default 64, at most 256."
+            set={(value) => set('maxOutputBytes', value)}
+          />
+          <Check
+            label="Read the output as JSON"
+            checked={config['parseJson'] === true}
+            change={(checked) => set('parseJson', checked ? true : undefined)}
+          />
+          <SafeToRetry config={config} set={set} />
+        </>
+      );
+    }
+    case 'http': {
+      const body = (config['body'] ?? null) as {
+        kind?: string;
+        value?: unknown;
+        text?: string;
+      } | null;
+      const method = typeof config['method'] === 'string' ? config['method'] : 'GET';
+      return (
+        <>
+          <MethodSelect
+            id={`${id}-method`}
+            value={config['method']}
+            set={(value) => replace(withMethod(config, value))}
+          />
+          {field('url', 'URL', false, 'A full address. Use {{name}} for a value.')}
+          <PairsField
+            id={`${id}-headers`}
+            label="Headers, one Name: value per line"
+            separator=":"
+            value={config['headers']}
+            commit={(headers) => set('headers', headers)}
+          />
+          <CredentialRefs
+            id={`${id}-credential-headers`}
+            legend="Credentials as headers"
+            target="Header"
+            prefix
+            projectId={projectId}
+            value={config['credentialHeaders']}
+            commit={(refs) => set('credentialHeaders', refs)}
+          />
+          {!['GET', 'HEAD', 'OPTIONS'].includes(method) && (
+            <fieldset className="field-group">
+              <legend>Body</legend>
+              <Select
+                id={`${id}-body-kind`}
+                label="Sends"
+                value={body?.kind ?? 'none'}
+                options={[
+                  ['none', 'No body'],
+                  ['json', 'JSON built from values'],
+                  ['text', 'Text'],
+                ]}
+                change={(kind) =>
+                  set(
+                    'body',
+                    kind === 'json'
+                      ? { kind, value: {} }
+                      : kind === 'text'
+                        ? { kind, text: '' }
+                        : undefined,
+                  )
+                }
+              />
+              {body?.kind === 'json' && (
+                <TemplateValue
+                  id={`${id}-body`}
+                  value={body.value}
+                  bindings={bindings}
+                  set={(value) => set('body', { ...body, value })}
+                />
+              )}
+              {body?.kind === 'text' && (
+                <TextField
+                  id={`${id}-body-text`}
+                  label="Text"
+                  multiline
+                  value={text(body.text)}
+                  note="Use {{name}} for a value."
+                  commit={(value) => set('body', { ...body, text: value })}
+                />
+              )}
+            </fieldset>
+          )}
+          {problem('body') && <p className="field-error">{problem('body')}</p>}
+          <SchemaBuilder
+            id={`${id}-response`}
+            legend="Response it must return"
+            empty="Any response body is accepted."
+            schema={config['responseSchema']}
+            set={(schema) => set('responseSchema', schema)}
+          />
+          {timeout}
+          <Check
+            label="Follow redirects"
+            checked={config['followRedirects'] === true}
+            change={(checked) => set('followRedirects', checked ? true : undefined)}
+          />
+          {!['GET', 'HEAD', 'OPTIONS'].includes(method) && (
+            <SafeToRetry config={config} set={set} />
+          )}
+        </>
+      );
+    }
+    case 'script':
+      return (
+        <>
+          <p className="note warning-note">
+            Advanced: JavaScript you write, run on the server in its own process. It gets the
+            input’s data as <code>input</code> and the bindings as <code>bindings</code>, no files
+            and no credentials, and returns its result.
+          </p>
+          <TextField
+            id={`${id}-source`}
+            label="Script"
+            multiline
+            value={text(config['source'])}
+            problem={problem('source')}
+            note="The body of an async function: end it with return."
+            commit={(value) => set('source', value)}
+          />
+          <SchemaBuilder
+            id={`${id}-result`}
+            legend="Result it must return"
+            empty="The script may return anything."
+            schema={config['resultSchema']}
+            set={(schema) => set('resultSchema', schema)}
+          />
+          {timeout}
+          <SafeToRetry config={config} set={set} />
+        </>
+      );
+    case 'git_status':
+      return (
+        <p className="note">Looks at the run’s workspace: its commit, branch and changed files.</p>
+      );
+    case 'git_diff':
+      return (
+        <>
+          <Select
+            id={`${id}-against`}
+            label="Compare with"
+            value={config['against'] === 'head' ? 'head' : 'base'}
+            options={[
+              ['base', 'The commit the run started from'],
+              ['head', 'The last commit in the workspace'],
+            ]}
+            change={(next) => set('against', next === 'head' ? 'head' : undefined)}
+          />
+          <LinesField
+            id={`${id}-paths`}
+            label="Only these paths, one per line (optional)"
+            value={config['paths']}
+            commit={(paths) => set('paths', paths)}
+          />
+        </>
+      );
+    case 'git_create_branch':
+      return field(
+        'name',
+        'Branch name',
+        false,
+        'Names the work in the workspace, changes included. Use {{name}} for a value, such as an agent’s suggestion.',
+      );
+    case 'git_commit':
+      return (
+        <>
+          {field(
+            'message',
+            'Message',
+            true,
+            'Commits every change in the workspace. Use {{name}} for a value.',
+          )}
+          <Check
+            label="Commit even when nothing changed"
+            checked={config['allowEmpty'] === true}
+            change={(checked) => set('allowEmpty', checked ? true : undefined)}
+          />
+        </>
+      );
+    case 'git_push':
+      return (
+        <>
+          <TextField
+            id={`${id}-remote`}
+            label="Remote (optional)"
+            value={text(config['remote'])}
+            placeholder="origin"
+            commit={(value) => string('remote', value)}
+          />
+          {field('branch', 'Branch (optional)', false, 'The current branch when empty.')}
+          {field(
+            'remoteBranch',
+            'Branch on the remote (optional)',
+            false,
+            'The same name when empty.',
+          )}
+          <p className="note">
+            Uses your own Git credentials on the server. Shift never forces a push.
+          </p>
         </>
       );
     case 'end':

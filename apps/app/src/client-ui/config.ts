@@ -489,10 +489,53 @@ export const configKeys: Record<string, readonly string[]> = {
   set_variable: ['key', 'value'],
   get_variable: ['key', 'optional', 'fallback'],
   end: ['outcome', 'reason'],
+  command: [
+    'mode',
+    'executable',
+    'args',
+    'script',
+    'cwd',
+    'env',
+    'credentials',
+    'timeoutMs',
+    'maxOutputBytes',
+    'parseJson',
+    'safeToRetry',
+  ],
+  http: [
+    'method',
+    'url',
+    'headers',
+    'credentialHeaders',
+    'body',
+    'timeoutMs',
+    'maxResponseBytes',
+    'responseSchema',
+    'followRedirects',
+    'safeToRetry',
+  ],
+  script: ['source', 'timeoutMs', 'resultSchema', 'safeToRetry'],
+  git_status: ['maxEntries'],
+  git_diff: ['against', 'paths', 'maxBytes'],
+  git_create_branch: ['name'],
+  git_commit: ['message', 'allowEmpty'],
+  git_push: ['remote', 'branch', 'remoteBranch', 'timeoutMs'],
 };
 
 export function unknownConfig(type: string, config: Raw): Raw {
   const known = configKeys[type];
   if (!known) return {};
   return Object.fromEntries(Object.entries(config).filter(([key]) => !known.includes(key)));
+}
+
+// An HTTP node's config with another method. A read (GET, the default, HEAD or OPTIONS) has no
+// body, so choosing one drops the body in the same edit instead of leaving a hidden one behind.
+export function withMethod(config: Raw, method: string | undefined): Raw {
+  const { method: _method, body, ...rest } = config;
+  const reads = method === undefined || ['GET', 'HEAD', 'OPTIONS'].includes(method);
+  return {
+    ...rest,
+    ...(method === undefined || method === 'GET' ? {} : { method }),
+    ...(body === undefined || reads ? {} : { body }),
+  };
 }

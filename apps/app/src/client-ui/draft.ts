@@ -77,9 +77,19 @@ export const addableTypes = [
   'approval',
   'set_variable',
   'get_variable',
+  'command',
+  'http',
+  'git_status',
+  'git_diff',
+  'git_create_branch',
+  'git_commit',
+  'git_push',
   'end',
   'manual_trigger',
 ] as const;
+
+// Authored only in an explicit advanced mode: the picker lists them apart, behind a disclosure.
+export const advancedTypes = ['script'] as const;
 
 const startingConfig: Record<string, Raw> = {
   transform: { data: {} },
@@ -87,6 +97,11 @@ const startingConfig: Record<string, Raw> = {
   human_input: { form: { type: 'object', properties: {} } },
   set_variable: { key: '', value: 0 },
   get_variable: { key: '' },
+  command: { executable: '' },
+  http: { url: '' },
+  script: { source: 'return input;' },
+  git_create_branch: { name: '' },
+  git_commit: { message: '' },
 };
 
 function freeId(base: string, used: Set<string>): string {
@@ -535,10 +550,30 @@ const required: Record<string, { key: string; label: string }[]> = {
   approval: [{ key: 'title', label: 'a title' }],
   set_variable: [{ key: 'key', label: 'a variable name' }],
   get_variable: [{ key: 'key', label: 'a variable name' }],
+  http: [{ key: 'url', label: 'a URL' }],
+  script: [{ key: 'source', label: 'a script' }],
+  git_create_branch: [{ key: 'name', label: 'a branch name' }],
+  git_commit: [{ key: 'message', label: 'a commit message' }],
 };
 
 // Config fields that may name bindings (server workflows/document.ts).
-const templatedFields = ['goal', 'data', 'value', 'until', 'title', 'instructions'];
+const templatedFields = [
+  'goal',
+  'data',
+  'value',
+  'until',
+  'title',
+  'instructions',
+  'args',
+  'env',
+  'url',
+  'headers',
+  'body',
+  'name',
+  'message',
+  'branch',
+  'remoteBranch',
+];
 
 const blank = (value: unknown) =>
   value === undefined || value === '' || (Array.isArray(value) && value.length === 0);
@@ -575,6 +610,39 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
       add('session', `${node.id}: only a new session for each run of the step can be archived.`);
     if (strategy === 'reference' && typeof session['reference'] !== 'string')
       add('session', `${node.id} continues an existing session but names none.`);
+  }
+  if (node.type === 'command') {
+    // As the server checks at publish (workflows/document.ts).
+    const shell = node.config['mode'] === 'shell';
+    if (shell && blank(node.config['script'])) add('script', `${node.id} needs a script to run.`);
+    if (!shell && blank(node.config['executable']))
+      add('executable', `${node.id} needs a program to run.`);
+    if (shell && templateNames(node.config['script']).length > 0)
+      add(
+        'script',
+        `${node.id}: values never fill a shell script. Pass them as environment variables instead.`,
+      );
+    const cwd = node.config['cwd'];
+    if (typeof cwd === 'string' && (cwd.startsWith('/') || cwd.split('/').includes('..')))
+      add('cwd', `${node.id}: the folder is inside the workspace, written relative to it.`);
+  }
+  if (node.type === 'http') {
+    const method = typeof node.config['method'] === 'string' ? node.config['method'] : 'GET';
+    if (node.config['body'] !== undefined && ['GET', 'HEAD', 'OPTIONS'].includes(method))
+      add('body', `${node.id}: a ${method} request has no body.`);
+    const url = node.config['url'];
+    if (typeof url === 'string' && url !== '' && templateNames(url).length === 0) {
+      let parsed: URL | null = null;
+      try {
+        parsed = new URL(url);
+      } catch {
+        add('url', `${node.id}: the URL is not a full address such as https://example.com/api.`);
+      }
+      if (parsed && !['http:', 'https:'].includes(parsed.protocol))
+        add('url', `${node.id}: only http and https addresses work.`);
+      if (parsed && (parsed.username || parsed.password))
+        add('url', `${node.id}: put credentials in a credential header, never in the URL.`);
+    }
   }
   if (node.type === 'set_variable' || node.type === 'get_variable') {
     const key = node.config['key'];

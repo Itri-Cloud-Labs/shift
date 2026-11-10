@@ -17,14 +17,15 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const serverDirectory = fileURLToPath(new URL('../../server/', import.meta.url));
 const output = resolve(process.argv[2] ?? 'capture');
 
-function shift(args) {
+function shift(args, stdin = false) {
   return spawn(process.execPath, ['--import', 'tsx', 'src/cli.ts', ...args], {
     cwd: serverDirectory,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
 }
-async function cli(args) {
-  const child = shift(args);
+async function cli(args, input) {
+  const child = shift(args, input !== undefined);
+  if (input !== undefined) child.stdin.end(input);
   let text = '';
   let errors = '';
   child.stdout.on('data', (chunk) => (text += chunk));
@@ -303,6 +304,123 @@ try {
   }
   if (agentRun.state !== 'COMPLETED') throw new Error(`The agent run ended ${agentRun.state}`);
   const agentBase = `#/p/${project.id}/w/${agents.id}`;
+
+  // Prompts 20 and 21: a command edits the workspace with a credential, tests run, and the work
+  // is named, committed and pushed to a bare remote beside the repository.
+  const remote = join(temporaryRoot, 'payments-remote.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+  for (const args of [
+    ['config', 'user.name', 'Shift Demo'],
+    ['config', 'user.email', 'demo@example.com'],
+    ['remote', 'add', 'origin', remote],
+    ['push', '-q', 'origin', 'main'],
+  ])
+    execFileSync('git', args, { cwd: repository });
+  await cli(
+    ['credential', 'set', '--project', project.id, '--name', 'registry_token', ...admin],
+    'demo-token-123\n',
+  );
+  const shipFile = join(temporaryRoot, 'ship.json');
+  await writeFile(
+    shipFile,
+    JSON.stringify({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'fix',
+          type: 'command',
+          config: {
+            mode: 'shell',
+            script:
+              'printf "export const rounding = %s;\\n" "$MODE" > rounding.ts && echo "token is $TOKEN"',
+            env: { MODE: '"bankers"' },
+            credentials: { TOKEN: 'registry_token' },
+          },
+        },
+        {
+          id: 'test',
+          type: 'command',
+          config: {
+            executable: 'sh',
+            args: ['-c', 'echo "3 tests passed"; echo "1 skipped" >&2'],
+            safeToRetry: true,
+          },
+        },
+        { id: 'branch', type: 'git_create_branch', config: { name: 'shift/rounding' } },
+        { id: 'commit', type: 'git_commit', config: { message: 'Use bankers rounding' } },
+        { id: 'push', type: 'git_push', config: {} },
+        { id: 'done', type: 'end' },
+      ],
+      connections: ['start', 'fix', 'test', 'branch', 'commit', 'push', 'done']
+        .slice(1)
+        .map((to, index, all) => ({
+          id: `s${index}`,
+          fromNodeId: index === 0 ? 'start' : all[index - 1],
+          fromPort: 'success',
+          toNodeId: to,
+          toPort: 'input',
+        })),
+    }),
+  );
+  const ship = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Ship a fix',
+    '--file',
+    shipFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', ship.id, ...admin]);
+  let shipRun = await cli(['run', 'start', '--workflow', ship.id, ...admin]);
+  for (let tries = 0; shipRun.state === 'RUNNING' && tries < 120; tries++) {
+    await delay(500);
+    shipRun = await cli(['run', 'show', shipRun.id, ...admin]);
+  }
+  if (shipRun.state !== 'COMPLETED') throw new Error(`The ship run ended ${shipRun.state}`);
+  const shipBase = `#/p/${project.id}/w/${ship.id}`;
+  // A request with a credential header, authored but never run.
+  const notifyFile = join(temporaryRoot, 'notify.json');
+  await writeFile(
+    notifyFile,
+    JSON.stringify({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'notify',
+          type: 'http',
+          config: {
+            method: 'POST',
+            url: 'https://chat.example.com/api/messages',
+            headers: { 'X-Source': 'shift' },
+            credentialHeaders: {
+              Authorization: { credential: 'registry_token', prefix: 'Bearer ' },
+            },
+            body: { kind: 'json', value: { text: 'Shipped the rounding fix' } },
+          },
+        },
+        { id: 'done', type: 'end' },
+      ],
+      connections: [
+        { id: 'n1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'notify', toPort: 'input' },
+        { id: 'n2', fromNodeId: 'notify', fromPort: 'success', toNodeId: 'done', toPort: 'input' },
+      ],
+    }),
+  );
+  const notify = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Notify chat',
+    '--file',
+    notifyFile,
+    ...admin,
+  ]);
+  const notifyBase = `#/p/${project.id}/w/${notify.id}`;
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   // Added through the app in step j01.
@@ -839,6 +957,66 @@ try {
       wait: 2200,
       expect:
         "document.querySelector('#review-session-strategy')?.value === 'fresh' && document.querySelector('#review-reports-handoff')?.value === 'off'",
+    },
+    // Prompts 20 and 21: what the actions recorded, then their forms and the project's secrets.
+    {
+      name: 'x1-command-output',
+      script: `window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))`,
+      hash: `${shipBase}/r/${shipRun.id}/n/fix`,
+      wait: 2500,
+      expect:
+        "document.querySelector('.inspector')?.textContent.includes('token is [redacted]') && !document.body.textContent.includes('demo-token-123')",
+    },
+    {
+      name: 'x2-commit-evidence',
+      hash: `${shipBase}/r/${shipRun.id}/n/commit`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.inspector')?.textContent.includes('shift/rounding') && document.querySelector('.inspector').textContent.includes('Operations')",
+    },
+    {
+      name: 'x3-push-evidence',
+      hash: `${shipBase}/r/${shipRun.id}/n/push`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.inspector')?.textContent.includes('refs/heads/shift/rounding')",
+    },
+    {
+      name: 'x4-command-form',
+      hash: `${shipBase}/n/fix`,
+      wait: 2000,
+      expect:
+        "document.querySelector('#fix-mode')?.value === 'shell' && document.querySelector('#fix-credentials-0-credential')?.value === 'registry_token'",
+    },
+    {
+      name: 'x5-http-form',
+      hash: `${notifyBase}/n/notify`,
+      wait: 2000,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
+      expect:
+        "document.querySelector('#notify-method')?.value === 'POST' && document.querySelector('#notify-credential-headers-0-prefix')?.value === 'Bearer '",
+    },
+    {
+      name: 'x6-picker-advanced',
+      script:
+        "document.querySelector('[aria-label=\"Add a node\"]').click(); setTimeout(() => { const more = document.querySelector('.advanced-types'); if (more) more.open = true; }, 300)",
+      wait: 900,
+      expect:
+        "[...document.querySelectorAll('.node-picker .name')].some((n) => n.textContent === 'Commit') && document.querySelector('.advanced-types')?.textContent.includes('Script')",
+    },
+    {
+      name: 'x7-settings-projects',
+      script:
+        "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); setTimeout(() => document.querySelector('[aria-label=Settings]').click(), 300); setTimeout(() => document.querySelector('#settings-tab-projects').click(), 900)",
+      wait: 2200,
+      expect:
+        "document.querySelector('.settings-panel')?.textContent.includes('registry_token') && document.querySelector('#credential-value')?.type === 'password'",
+    },
+    {
+      name: 'x8-closed',
+      script:
+        "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); document.querySelector('.scrim')?.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))",
+      wait: 600,
     },
     // What needs the owner: a request in the inspector, the inbox, a toast and a stuck run.
     { name: '16-request-form', hash: `${base}/r/${run.id}/n/review`, wait: 1500 },

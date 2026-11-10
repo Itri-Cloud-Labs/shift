@@ -1,16 +1,22 @@
 import { CircleAlert, LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { DeviceList, ServerInfo } from '../protocol/generated/types.js';
-import type { ConnectionView, Preferences, SyncView } from '../shared/contracts.js';
+import type {
+  ConnectionView,
+  DesktopResponse,
+  Preferences,
+  SyncView,
+} from '../shared/contracts.js';
 import { health, healthLabels } from './Bars.js';
 import { ask, bridge, useLive } from './bridge.js';
 import { problems } from './Pairing.js';
 import { relativeTime } from './time.js';
 
-export type SettingsSection = 'connection' | 'devices' | 'appearance';
+export type SettingsSection = 'connection' | 'projects' | 'devices' | 'appearance';
 
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'connection', label: 'Connection' },
+  { id: 'projects', label: 'Projects' },
   { id: 'devices', label: 'Devices' },
   { id: 'appearance', label: 'Appearance' },
 ];
@@ -120,6 +126,7 @@ export function Settings({
             <X />
           </button>
           {section === 'connection' && <ConnectionSection connection={connection} sync={sync} />}
+          {section === 'projects' && <ProjectsSection sync={sync} />}
           {section === 'devices' && <DevicesSection sync={sync} />}
           {section === 'appearance' && <AppearanceSection preferences={preferences} />}
         </div>
@@ -270,6 +277,175 @@ function ConnectionSection({ connection, sync }: { connection: ConnectionView; s
             </button>
           </div>
         </div>
+      )}
+    </>
+  );
+}
+
+const actionLabels: Record<string, string> = {
+  command: 'Run commands',
+  http: 'Send HTTP requests',
+  script: 'Run scripts',
+  git: 'Change the workspace with Git',
+  git_push: 'Push to remotes',
+};
+
+// A project's credentials and the actions it allows. Credential values are written here once and
+// never shown again: the server only ever returns their names.
+function ProjectsSection({ sync }: { sync: SyncView }) {
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [value, setValue] = useState('');
+  const [failed, setFailed] = useState<string | null>(null);
+  const command = sync.commands.find((item) => item.commandId === sent);
+  const projects = useLive(async () => {
+    const answer = await ask(bridge().data.overview());
+    return answer.kind === 'overview' ? answer.overview.projects : [];
+  }, []);
+  const project = projectId ?? projects?.[0]?.id ?? null;
+  const settled = command?.state === 'accepted' ? sent : null;
+  const credentials = useLive(async () => {
+    if (!project) return null;
+    const answer = await ask(bridge().data.credentials(project));
+    return answer.kind === 'resource'
+      ? (answer.value as { credentials: Array<{ id: string; name: string; updatedAt: number }> })
+          .credentials
+      : null;
+  }, [project, settled]);
+  const permissions = useLive(async () => {
+    if (!project) return null;
+    const answer = await ask(bridge().data.permissions(project));
+    return answer.kind === 'resource'
+      ? (answer.value as { permissions: { denied: string[] } }).permissions.denied
+      : null;
+  }, [project, settled]);
+  const send = async (call: Promise<DesktopResponse>) => {
+    setFailed(null);
+    const answer = await ask(call);
+    if (answer.kind === 'command') setSent(answer.command.commandId);
+    else setFailed(answer.kind === 'error' ? answer.message : 'The request could not be sent.');
+    return answer.kind === 'command';
+  };
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!project) return;
+    // The field is cleared as soon as the value has left for main.
+    const secret = value;
+    setValue('');
+    if (await send(bridge().credential.put(project, name.trim(), secret))) setName('');
+  };
+  const validName = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name.trim());
+  const live = sync.status === 'live';
+  return (
+    <>
+      <h3>Projects</h3>
+      {(projects?.length ?? 0) === 0 ? (
+        <p className="note">No projects yet.</p>
+      ) : (
+        <>
+          {(projects?.length ?? 0) > 1 && (
+            <div className="field">
+              <label htmlFor="settings-project">Project</label>
+              <select
+                id="settings-project"
+                value={project ?? ''}
+                onChange={(event) => setProjectId(event.target.value)}
+              >
+                {projects!.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <h4>Credentials</h4>
+          <p className="note">
+            Secrets that commands and requests use by name. A value is sent to the server once and
+            never shown again; saving a name that exists replaces its value.
+          </p>
+          {credentials === null && (
+            <p className="settings-unavailable" role="status">
+              <CircleAlert aria-hidden="true" />
+              Credentials can be listed once the server is connected.
+            </p>
+          )}
+          <ul className="settings-devices">
+            {(credentials ?? []).map((credential) => (
+              <li key={credential.id}>
+                <div className="settings-device">
+                  <span className="inbox-text">
+                    <strong>{credential.name}</strong>
+                    <span>Changed {relativeTime(credential.updatedAt)}</span>
+                  </span>
+                  <button
+                    className="button"
+                    disabled={!live}
+                    onClick={() => void send(bridge().credential.revoke(project!, credential.id))}
+                  >
+                    Revoke
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <form className="credential-form" onSubmit={(event) => void save(event)}>
+            <div className="field">
+              <label htmlFor="credential-name">Name</label>
+              <input
+                id="credential-name"
+                value={name}
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="github_token"
+                onChange={(event) => setName(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="credential-value">Value</label>
+              <input
+                id="credential-value"
+                type="password"
+                value={value}
+                autoComplete="new-password"
+                onChange={(event) => setValue(event.target.value)}
+              />
+            </div>
+            <button className="button" type="submit" disabled={!live || !validName || value === ''}>
+              Save credential
+            </button>
+          </form>
+          {command?.state === 'rejected' && (
+            <p className="field-error">{command.message ?? 'The server did not accept this.'}</p>
+          )}
+          {failed && <p className="field-error">{failed}</p>}
+          <h4>Actions</h4>
+          <p className="note">
+            What workflows in this project may do. A change applies to runs already going.
+          </p>
+          {Object.entries(actionLabels).map(([action, label]) => (
+            <div className="field" key={action}>
+              <label className="field-check">
+                <input
+                  type="checkbox"
+                  disabled={!live || permissions === null}
+                  checked={!(permissions ?? []).includes(action)}
+                  onChange={(event) =>
+                    void send(
+                      bridge().project.permissions(
+                        project!,
+                        event.target.checked ? [action] : [],
+                        event.target.checked ? [] : [action],
+                      ),
+                    )
+                  }
+                />
+                {label}
+              </label>
+            </div>
+          ))}
+        </>
       )}
     </>
   );
