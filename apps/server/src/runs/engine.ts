@@ -207,6 +207,7 @@ export class RunEngine {
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.github ? { github: options.github } : {}),
+      clock: options.clock,
     });
   }
 
@@ -539,7 +540,8 @@ export class RunEngine {
     this.#pumping = true;
     try {
       // Due wake-ups reopen their executions first, so they are admitted in this pass.
-      this.repository.fireDueWakeups();
+      for (const claim of this.repository.fireDueWakeups(this.#options.store.workerGeneration))
+        this.#dispatch(claim);
       const limit = this.#options.maxActiveAgents ?? 2;
       // Inline nodes can schedule more inline work; repeat until nothing more can start now.
       for (let progressed = true; progressed && !this.#stopping;) {
@@ -773,13 +775,17 @@ export class RunEngine {
               baseCommit,
             })
           : undefined;
-      config = freezeAction(
+      const action = freezeAction(
         node.type,
         node.config as Record<string, Json>,
         bindings,
         context.input.data,
         workspace?.id,
-      ) as unknown as Json;
+      );
+      // A wait's deadline is fixed once, so polls and restarts never extend it.
+      if (action.action === 'github_wait_checks')
+        action.deadline = this.#options.clock.now() + (action.timeoutMs ?? 60 * 60 * 1000);
+      config = action as unknown as Json;
     }
     if (node.type === 'agent') {
       const authored = node.config as {

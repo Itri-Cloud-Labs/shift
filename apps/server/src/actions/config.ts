@@ -237,16 +237,42 @@ export function freezeAction(
   }
   if (githubTypes.has(type)) {
     const config: GitHubConfig = { action: type as GitHubConfig['action'], safeToRetry: false };
-    for (const field of ['head', 'base', 'title', 'body'] as const) {
+    for (const field of [
+      'head',
+      'base',
+      'title',
+      'body',
+      'commitTitle',
+      'commitMessage',
+    ] as const) {
       const value = authored[field];
       if (typeof value !== 'string') continue;
       const rendered = renderText(value, bindings);
       if (rendered.includes('\0'))
         throw new ShiftError('INVALID_ARGUMENT', `${field} contains NUL.`, 422);
-      if (field !== 'body' && !rendered.trim())
+      const multiline = field === 'body' || field === 'commitMessage';
+      if (!multiline && !rendered.trim())
         throw new ShiftError('INVALID_ARGUMENT', `${field} is empty.`, 422);
-      config[field] = field === 'body' ? rendered : rendered.trim();
+      config[field] = multiline ? rendered : rendered.trim();
     }
+    // Commits are explicit: a full SHA, never a branch that could move under the step.
+    for (const field of ['commit', 'expectedCommit'] as const) {
+      const value = authored[field];
+      if (typeof value !== 'string') continue;
+      const rendered = renderText(value, bindings).trim().toLowerCase();
+      if (!/^[0-9a-f]{40}$/.test(rendered))
+        throw new ShiftError(
+          'INVALID_COMMIT',
+          `${field} ${JSON.stringify(rendered.slice(0, 60))} is not a full commit SHA.`,
+          422,
+        );
+      config[field] = rendered;
+    }
+    if (Array.isArray(authored['checks'])) config.checks = authored['checks'] as string[];
+    for (const field of ['intervalMs', 'timeoutMs'] as const)
+      if (typeof authored[field] === 'number') config[field] = authored[field] as number;
+    if (type === 'github_merge')
+      config.method = (authored['method'] as GitHubConfig['method'] | undefined) ?? 'merge';
     if (typeof authored['number'] === 'string') {
       const rendered = renderText(authored['number'], bindings).trim();
       if (!/^[1-9][0-9]{0,9}$/.test(rendered))

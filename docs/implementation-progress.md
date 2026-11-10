@@ -709,3 +709,17 @@ Status: prompt 22's server work (M11). The desktop onboarding and forms follow w
   - Create, get by branch and update by bound number. Rolled back to a submitted create: an existing marked pull request completes it without a second; a missing one is created again with the same marker; two marked ones need the owner. A lost create response completes from GitHub; someone else's open pull request is `GITHUB_REJECTED`. A submitted update is recognized when it landed and sent again when it did not. A 403 is `GITHUB_FORBIDDEN`, a denied `github` permission `ACTION_NOT_PERMITTED`, an HTTP node naming `github` `CREDENTIAL_UNAVAILABLE`.
   - Edit, branch, commit, App-backed push and create: the fake's bare repository holds the commit, Git authenticated with HTTP Basic, and no minted token appears in the repository or worktree configuration, operations, events, snapshots or executions; an owner `credential.helper=store` stored nothing.
 - **Not verified:** a real GitHub App, installation and disposable repository. This is a release prerequisite: it needs the owner's App credentials, and no integration check against GitHub has passed. The desktop onboarding and forms are not built yet.
+
+## Checks and merge (23)
+
+Status: prompt 23's server work (M11a). The desktop forms for 22 and 23 follow. Date: 2026-11-10.
+
+- **Changed:** node types `github_verify_checks`, `github_wait_checks` (ports `success`, `failure`, `timeout`, `error`) and `github_merge`. Migration `0016_check_waits` rebuilds `wakeups` with a `poll` reason and adds `check_observations`. The repository gains `startPoll`, poll resumption in `fireDueWakeups` (it now returns resumed claims, which the engine runs), `observe` and `expeditePolls`. The run's `wait` shows a poll's commit, ordinal, deadline and last state. Owner `complete` accepts Create/Update Pull Request and Merge steps. `shift run … --wait` follows polls.
+- **Verified** (`test/github-checks.test.ts`, against the fake GitHub):
+  - Verify merges check runs and statuses, counts skipped as passing, and reports a required name nothing reported as missing. It refuses a branch name.
+  - A graph of Verify, a Condition on `state` and Merge holds the merge while a status is pending and merges once it passes.
+  - Wait reads again on every poll: four reads for four observations, ordinals 1 to 4, across a server restart while waiting. It takes `success` once the check completes, `failure` on a failed check, and `timeout` after the deadline (three polls in two minutes). `none` keeps waiting.
+  - An expedited poll fired twice resumes once. A cancelled wait stays cancelled, and later wake-ups do nothing.
+  - A reached Merge makes one `PUT` with the configured method and reads no checks, statuses or reviews, even with a failing check. A protection refusal is `GITHUB_NOT_ALLOWED` with GitHub's message and is not retried. A wrong expected commit is `GITHUB_CONFLICT`.
+  - Rolled back to a submitted merge: a landed merge completes without another request; an unlanded one is sent once more; a moved head needs the owner. A lost merge response completes from GitHub.
+- **Not verified:** real GitHub checks and merges (the release prerequisite from 22), and GitHub events that expedite polls (prompt 24).

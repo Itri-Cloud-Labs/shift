@@ -38,6 +38,14 @@ const credentialRef = { type: 'string', pattern: credentialName.source };
 // A pull request number, or a `{{binding}}` that resolves to one when the step runs.
 const prNumber = { type: 'string', minLength: 1, maxLength: 200 };
 const branchText = { type: 'string', minLength: 1, maxLength: 250 };
+// A full commit SHA, or a `{{binding}}` that resolves to one.
+const commitText = { type: 'string', minLength: 1, maxLength: 200 };
+const checkNames = {
+  type: 'array',
+  maxItems: 50,
+  uniqueItems: true,
+  items: { type: 'string', minLength: 1, maxLength: 200 },
+};
 const variableKey = { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' };
 const requirement = { enum: ['required', 'optional', 'off'] };
 const interaction = {
@@ -501,6 +509,57 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
         body: { type: 'string', maxLength: 60000 },
         base: branchText,
         state: { enum: ['open', 'closed'] },
+      },
+    },
+  },
+  {
+    // Reads the checks of one commit now; the author routes on `state` with a Condition or Switch.
+    type: 'github_verify_checks',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['commit'],
+      properties: { commit: commitText, checks: checkNames },
+    },
+  },
+  {
+    // Polls the checks of one commit durably until they pass, one fails, or the deadline.
+    type: 'github_wait_checks',
+    version: 1,
+    ports: ['success', 'failure', 'timeout', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['commit'],
+      properties: {
+        commit: commitText,
+        checks: checkNames,
+        timeoutMs: { type: 'integer', minimum: 60_000, maximum: 7 * 24 * 60 * 60 * 1000 },
+        intervalMs: { type: 'integer', minimum: 5_000, maximum: 60 * 60 * 1000 },
+      },
+    },
+  },
+  {
+    // Merges when reached. Checks, reviews and waits are the author's own nodes before it.
+    type: 'github_merge',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['number'],
+      properties: {
+        number: prNumber,
+        method: { enum: ['merge', 'squash', 'rebase'] },
+        // Only when set: GitHub refuses the merge if the head is another commit.
+        expectedCommit: commitText,
+        commitTitle: { type: 'string', minLength: 1, maxLength: 1000 },
+        commitMessage: { type: 'string', maxLength: 60000 },
       },
     },
   },

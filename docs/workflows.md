@@ -313,6 +313,16 @@ Create and Update are operations like any [action](#actions). After a crash, or 
 
 HTTP nodes cannot use the App's keys or tokens: they are not project credentials.
 
+### Checks and merging
+
+Shift never decides on its own whether a pull request is ready. The graph does, with the nodes you put before Merge.
+
+- **Verify Checks** reads the checks of `commit` once and returns them. `commit` must resolve to a full 40-character SHA, such as `{{headSha}}` from a pull request; a branch name fails with `INVALID_COMMIT`, since a branch can move. Check runs and commit statuses both count, the newest of each per name; a check run and a status with the same name are two entries. The data is `commit`, `state` (`success`, `failure`, `pending`, or `none` when nothing reported), `checks` (`name`, `source`, `state`, GitHub's `conclusion`, `url`), `missing` and `counts`. With `checks`, only those names count, and a name nothing reported keeps it pending. Route on `state` with a Condition or Switch.
+- **Wait for Checks** reads the same way every `intervalMs` (default 30 seconds, at least 5) until the checks pass (`success` port), one fails (`failure`), or `timeoutMs` (default one hour, up to seven days) passes (`timeout`). `none` keeps waiting. The deadline is fixed when the step starts; restarts and retries never extend it. Each read is a new observation with an ordinal, stored with the step's decision, and the data adds `polls` and `deadline`. Between reads the run is `WAITING` with `wait.kind: "poll"`, its `commit`, `ordinal`, `deadline`, last `state` and next `dueAt`, and no active time is used. If GitHub cannot be reached, the next read tries again; a read GitHub refuses fails the step. To watch a newer commit, run the step again with it, for example through a loop back from a later node.
+- **Merge** merges `number` with `method` (`merge`, `squash` or `rebase`; default `merge`) as soon as the run reaches it, with an optional `commitTitle` and `commitMessage`. With `expectedCommit`, GitHub refuses the merge if the pull request's head is another commit (`GITHUB_CONFLICT`); without it, no such condition is added. GitHub's branch protections still apply: a refusal, such as a failing required check, fails the step with `GITHUB_NOT_ALLOWED` and GitHub's message. Shift never retries around it or bypasses it. The data is `repositoryId`, `number`, `merged`, `method`, `mergeCommitSha` and `headSha`.
+
+A merge is an operation. Shift reads the pull request first only to record its head for recovery. After a crash or a lost response, a pull request merged since then with that head is the step's result. One still open with the same head is merged again with the same request, and GitHub decides again. Anything else, such as a head that moved, puts the run in `NEEDS_HUMAN`.
+
 ## Workspaces
 
 When a run starts, Shift resolves the project's base ref to a commit and records it as the run's `baseCommit`. Before the first agent node runs, Shift creates a detached worktree at that commit under `<state>/workspaces/<id>`. All of the run's agents work there.
@@ -491,4 +501,4 @@ Publishing refuses these, so a document never silently ignores them:
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 
-Checks, merges, GitHub event triggers, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
+GitHub event triggers, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).

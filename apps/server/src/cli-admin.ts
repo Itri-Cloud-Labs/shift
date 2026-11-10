@@ -146,7 +146,7 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       state === 'RUNNING' ||
       state === 'CANCEL_REQUESTED' ||
       (state === 'WAITING' &&
-        ['retry', 'timer'].includes((wait as { kind?: string } | null)?.kind ?? ''));
+        ['retry', 'timer', 'poll'].includes((wait as { kind?: string } | null)?.kind ?? ''));
     while (busy(run['state'], run['wait'])) {
       await new Promise((done) => setTimeout(done, 1_000));
       run = (await get(`/api/v0/admin/runs/${String(run['id'])}`))['run'] as Record<

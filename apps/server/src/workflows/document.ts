@@ -573,6 +573,10 @@ export function diagnose(document: unknown): Diagnostic[] {
       'number',
       'head',
       'base',
+      'commit',
+      'expectedCommit',
+      'commitTitle',
+      'commitMessage',
     ]
       .map((field) => config[field])
       .filter((value) => value !== undefined);

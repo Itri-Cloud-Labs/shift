@@ -19,59 +19,13 @@ import {
   type Env,
 } from './action-helpers.js';
 import { FakeGitHub } from './github-fake.js';
+import { connected, type AppBody } from './github-helpers.js';
 import { FakeClock } from './helpers.js';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
-type AppBody = {
-  app: {
-    id: string;
-    webhookPath: string;
-    privateKey: string;
-    webhookSecret: string;
-    installations: Array<{
-      id: string;
-      installationId: number;
-      repositories: Array<{ id: number }>;
-    }>;
-  };
-};
-
 const webhookSecret = 'whsec-0123456789abcdef';
-
-// A project bound to the fake's acme/widgets (repository 9001) through its one installation.
-async function connected(
-  options: { fake?: FakeGitHub; env?: Env } = {},
-): Promise<{ env: Env; fake: FakeGitHub; appRowId: string; close(): Promise<void> }> {
-  const env = options.env ?? (await setup());
-  const fake = options.fake ?? new FakeGitHub(env.clock);
-  if (!options.fake) await fake.start();
-  const registered = (
-    await env.github.register(
-      { appId: fake.appId, host: fake.origin, privateKey: fake.privateKey, webhookSecret },
-      local,
-    )
-  ).body as AppBody;
-  const installation = registered.app.installations[0]!;
-  await env.github.connect(
-    env.projectId,
-    { installationId: installation.id, repositoryId: 9001 },
-    local,
-  );
-  return {
-    env,
-    fake,
-    appRowId: registered.app.id,
-    async close() {
-      try {
-        await env.close();
-      } finally {
-        await fake.stop();
-      }
-    },
-  };
-}
 
 test('registering the App verifies its key and lists installations without echoing secrets', async () => {
   const env = await setup();
@@ -562,7 +516,7 @@ test('provider refusals, revoked permissions and removed connections are structu
     } as Json);
     await env.github.disconnect(env.projectId, {}, local);
     env.clock.advance(61_000);
-    env.engine.repository.fireDueWakeups();
+    env.engine.repository.fireDueWakeups('test');
     const removed = await settled(env, waiting);
     assert.equal(step(env, removed.id, 'act').error!.code, 'GITHUB_NOT_CONNECTED');
     // An HTTP node cannot reach the App's keys: they are not project credentials.

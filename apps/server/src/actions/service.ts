@@ -57,6 +57,13 @@ import {
   type GitHubContext,
   type Repo,
 } from '../github/actions.js';
+import {
+  planMerge,
+  performMerge,
+  readChecks,
+  reconcileMerge,
+  type CheckSummary,
+} from '../github/checks.js';
 import type { GitHubIntegration } from '../github/integration.js';
 import { githubTypes, nodePermissions } from '../github/permissions.js';
 import { redact, type Outcome } from './outcome.js';
@@ -78,6 +85,7 @@ export interface ActionServiceOptions {
   logger: Logger;
   fetch?: typeof fetch;
   github?: GitHubIntegration;
+  clock?: { now(): number };
 }
 
 // The parts of the server's environment a command inherits: enough to find the owner's tools and
@@ -156,6 +164,10 @@ export class ActionService {
 
   constructor(options: ActionServiceOptions) {
     this.#options = options;
+  }
+
+  #now(): number {
+    return this.#options.clock?.now() ?? Date.now();
   }
 
   async run(claim: Claim, signal: AbortSignal): Promise<void> {
@@ -492,7 +504,46 @@ export class ActionService {
     const resolved = repo!;
     if (config.action === 'github_get_pr')
       return finish(await guarded(() => getPr(config, target, resolved)));
+    if (config.action === 'github_verify_checks')
+      return finish(
+        await guarded(async () => ({
+          kind: 'succeeded',
+          data: (await readChecks(
+            target,
+            resolved,
+            config.commit!,
+            config.checks,
+          )) as unknown as Json,
+        })),
+      );
+    if (config.action === 'github_wait_checks') return this.#poll(claim, config, target, resolved);
     const identity = githubIdentity(config);
+    if (config.action === 'github_merge') {
+      const merge = {
+        number: config.number!,
+        method: config.method ?? 'merge',
+        ...(config.expectedCommit ? { expectedCommit: config.expectedCommit } : {}),
+        ...(config.commitTitle !== undefined ? { title: config.commitTitle } : {}),
+        ...(config.commitMessage !== undefined ? { message: config.commitMessage } : {}),
+      } as const;
+      return this.#mutate(claim, config.action, identity, guarded, finish, {
+        plan: () => planMerge(merge, target, resolved),
+        perform: (operation) =>
+          performMerge(
+            target,
+            resolved,
+            operation.args as Record<string, Json>,
+            operation.evidence,
+          ),
+        reconcile: (operation) =>
+          reconcileMerge(
+            target,
+            resolved,
+            operation.args as Record<string, Json>,
+            operation.evidence,
+          ),
+      });
+    }
     return this.#mutate(claim, config.action, identity, guarded, finish, {
       plan: async () => planPr(config, resolved),
       perform: (operation) =>
@@ -502,6 +553,69 @@ export class ActionService {
           ? reconcileCreate(target, resolved, operation.args as Record<string, Json>, operation.id)
           : reconcileUpdate(target, resolved, operation.args as Record<string, Json>),
     });
+  }
+
+  // One poll of Wait for Checks. Each is a fresh read stored as the next observation, never a
+  // reused result: then the step succeeds, fails or times out, or waits for the next poll, in the
+  // same transaction. A read GitHub refuses is the step's error; one that cannot reach GitHub is
+  // tried again at the next poll until the deadline.
+  async #poll(
+    claim: Claim,
+    config: GitHubConfig,
+    target: GitHubContext,
+    repo: Repo,
+  ): Promise<void> {
+    const { repository, db } = this.#options;
+    const commit = config.commit!;
+    const deadline = config.deadline!;
+    let summary: CheckSummary | null = null;
+    let unreachable: GitHubError | null = null;
+    try {
+      summary = await readChecks(target, repo, commit, config.checks);
+    } catch (error) {
+      if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+      if (!(error instanceof GitHubError)) throw error;
+      if (error.providerStatus !== null && error.providerStatus < 500) {
+        const failed = githubFailure(error);
+        if (failed.kind === 'failed')
+          repository.completeExecution(claim, { kind: 'failed', error: failed.error });
+        return;
+      }
+      unreachable = error;
+    }
+    if (target.signal.aborted) return;
+    const now = this.#now();
+    const observed: Json = summary
+      ? (summary as unknown as Json)
+      : { commit, state: 'unreachable', message: unreachable!.message };
+    try {
+      db.transaction(() => {
+        const ordinal = repository.observe(claim, commit, observed);
+        const data = { ...(observed as Record<string, Json>), polls: ordinal, deadline };
+        const { input } = repository.execution(claim.executionId);
+        if (summary && (summary.state === 'success' || summary.state === 'failure'))
+          return repository.completeExecution(claim, {
+            kind: 'completed',
+            output: envelope(data, input),
+            port: summary.state,
+          });
+        if (now >= deadline)
+          return repository.completeExecution(claim, {
+            kind: 'completed',
+            output: envelope(data, input),
+            port: 'timeout',
+          });
+        repository.startPoll(claim, Math.min(now + (config.intervalMs ?? 30_000), deadline), {
+          commit,
+          ordinal,
+          deadline,
+          state: summary?.state ?? 'unreachable',
+        });
+      })();
+    } catch (error) {
+      if (error instanceof StaleClaim) return;
+      throw error;
+    }
   }
 
   // Settles an operation an earlier process or attempt left after submitting it. Its processes are

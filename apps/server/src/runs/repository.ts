@@ -144,6 +144,15 @@ export type RunWait =
       error: { code: string; message: string };
     }
   | { kind: 'timer'; executionId: string; dueAt: number }
+  | {
+      kind: 'poll';
+      executionId: string;
+      dueAt: number;
+      commit: string;
+      ordinal: number;
+      deadline: number;
+      state: string;
+    }
   | { kind: 'human'; executionId: string; interactionId: string; expiresAt: number | null }
   // An agent waits, queued, for the session or workspace another execution holds.
   | {
@@ -297,6 +306,9 @@ const completable = new Set([
   'git_create_branch',
   'git_commit',
   'git_push',
+  'github_create_pr',
+  'github_update_pr',
+  'github_merge',
 ]);
 const activeStates = new Set<InvocationState>(['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN']);
 
@@ -2028,9 +2040,12 @@ export class RunRepository {
 
   // Fires every wake-up that is due. A retry wake-up reopens its execution for the next attempt;
   // one whose run moved on, for example because it was cancelled, settles without effect.
-  fireDueWakeups(): number {
+  // A poll wake-up resumes its waiting attempt under a new fence; those claims are returned for the
+  // engine to run, as `workerGeneration`.
+  fireDueWakeups(workerGeneration = 'local'): Claim[] {
     return this.db
       .transaction(() => {
+        const polls: Claim[] = [];
         const now = this.clock.now();
         const due = this.db
           .prepare(
@@ -2049,6 +2064,11 @@ export class RunRepository {
             this.#expireInteraction(wakeup.execution_id);
             continue;
           }
+          if (wakeup.reason === 'poll') {
+            const claim = this.#resumePoll(wakeup.run_id, wakeup.execution_id, workerGeneration);
+            if (claim) polls.push(claim);
+            continue;
+          }
           const reopened = this.db
             .prepare(
               "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ? AND state = 'WAITING' AND run_id IN (SELECT id FROM runs WHERE state = 'WAITING')",
@@ -2062,9 +2082,104 @@ export class RunRepository {
             {},
           );
         }
-        return due.length;
+        return polls;
       })
       .immediate();
+  }
+
+  // Holds a polling step until its next read: the attempt, execution and run wait, accruing no
+  // active time, and a poll wake-up is due at `dueAt`. Shown as the run's wait with its progress.
+  startPoll(claim: Claim, dueAt: number, progress: Record<string, Json>): void {
+    this.db
+      .transaction(() => {
+        this.#fenced(claim);
+        const now = this.clock.now();
+        this.#charge(claim.runId, claim.attemptId);
+        this.db
+          .prepare("UPDATE node_attempts SET state = 'WAITING' WHERE id = ?")
+          .run(claim.attemptId);
+        this.db
+          .prepare(
+            "UPDATE node_executions SET state = 'WAITING', revision = revision + 1 WHERE id = ?",
+          )
+          .run(claim.executionId);
+        this.db
+          .prepare("UPDATE runs SET state = 'WAITING', revision = revision + 1 WHERE id = ?")
+          .run(claim.runId);
+        this.db
+          .prepare(
+            "INSERT INTO wakeups (id, run_id, execution_id, reason, due_at, state, payload_json, created_at) VALUES (?, ?, ?, 'poll', ?, 'PENDING', ?, ?)",
+          )
+          .run(randomUUID(), claim.runId, claim.executionId, dueAt, JSON.stringify(progress), now);
+        this.#event(
+          'execution.waiting',
+          { runId: claim.runId, executionId: claim.executionId },
+          { kind: 'poll', dueAt, ...progress },
+        );
+      })
+      .immediate();
+  }
+
+  // Moves the next read of polls watching `commit` to now, for example on a verified GitHub
+  // event. The polls still decide from their own fresh read; this only makes it sooner.
+  expeditePolls(commit: string): number {
+    return this.db
+      .prepare(
+        "UPDATE wakeups SET due_at = MIN(due_at, ?) WHERE reason = 'poll' AND state = 'PENDING' AND json_extract(payload_json, '$.commit') = ?",
+      )
+      .run(this.clock.now(), commit).changes;
+  }
+
+  // Called inside the firing transaction: only an attempt, execution and run that all still wait
+  // resume, so a wake-up racing a cancellation or a duplicate wake-up resumes nothing.
+  #resumePoll(runId: string, executionId: string, workerGeneration: string): Claim | null {
+    const waiting = this.db
+      .prepare(
+        "SELECT a.id FROM node_attempts a JOIN node_executions e ON e.id = a.execution_id JOIN runs r ON r.id = e.run_id WHERE a.execution_id = ? AND a.state = 'WAITING' AND e.state = 'WAITING' AND r.state = 'WAITING'",
+      )
+      .get(executionId) as { id: string } | undefined;
+    if (!waiting) return null;
+    const now = this.clock.now();
+    this.db
+      .prepare(
+        "UPDATE node_attempts SET state = 'RUNNING', fence = fence + 1, worker_generation = ?, checkpoint_at = ? WHERE id = ?",
+      )
+      .run(workerGeneration, now, waiting.id);
+    this.db
+      .prepare("UPDATE node_executions SET state = 'RUNNING', revision = revision + 1 WHERE id = ?")
+      .run(executionId);
+    this.#resume(runId);
+    const { fence } = this.db
+      .prepare('SELECT fence FROM node_attempts WHERE id = ?')
+      .get(waiting.id) as { fence: number };
+    this.#event('execution.polling', { runId, executionId }, { attemptId: waiting.id });
+    return { attemptId: waiting.id, executionId, runId, fence };
+  }
+
+  // Stores one fresh read of a polling step under the next ordinal. Fenced, so a stale attempt
+  // cannot add one; called in the transaction that also completes or holds the step.
+  observe(claim: Claim, commit: string, summary: Json): number {
+    this.#fenced(claim);
+    const { next } = this.db
+      .prepare(
+        'SELECT COALESCE(MAX(ordinal), 0) + 1 AS next FROM check_observations WHERE execution_id = ?',
+      )
+      .get(claim.executionId) as { next: number };
+    this.db
+      .prepare(
+        'INSERT INTO check_observations (id, run_id, execution_id, attempt_id, ordinal, commit_sha, summary_json, observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run(
+        randomUUID(),
+        claim.runId,
+        claim.executionId,
+        claim.attemptId,
+        next,
+        commit,
+        JSON.stringify(summary),
+        this.clock.now(),
+      );
+    return next;
   }
 
   // A Wait node holds its execution and run in WAITING until its deadline. Its attempt waits too,
@@ -3205,7 +3320,19 @@ export class RunRepository {
                   error: { code: string; message: string };
                 }),
               }
-            : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
+            : wakeup.reason === 'poll'
+              ? {
+                  kind: 'poll',
+                  executionId: wakeup.execution_id,
+                  dueAt: wakeup.due_at,
+                  ...(JSON.parse(wakeup.payload_json) as {
+                    commit: string;
+                    ordinal: number;
+                    deadline: number;
+                    state: string;
+                  }),
+                }
+              : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
     return {
       id: run.id,
