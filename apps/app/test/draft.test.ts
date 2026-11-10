@@ -235,3 +235,67 @@ test('the first edit keeps the computed layout instead of the server row', () =>
   const { draft } = addNode(withLayout(row), 'agent', { x: 5, y: 5 });
   assert.deepEqual(readDocument(draft).nodes[1]!.position, laid[1]!.position);
 });
+
+test('action and Git nodes start valid where they can and diagnose what the server refuses', () => {
+  const problemsOf = (draft: Draft, nodeId: string) =>
+    errors(draft).filter((item) => item.nodeId === nodeId);
+  const command = addNode(base, 'command', { x: 0, y: 0 });
+  assert.deepEqual(
+    problemsOf(command.draft, command.nodeId).map((item) => item.field),
+    ['executable'],
+  );
+  let edited = setConfig(command.draft, command.nodeId, 'executable', 'pnpm');
+  assert.deepEqual(problemsOf(edited, command.nodeId), []);
+  edited = setConfig(edited, command.nodeId, 'cwd', '../elsewhere');
+  assert.deepEqual(
+    problemsOf(edited, command.nodeId).map((item) => item.field),
+    ['cwd'],
+  );
+  const shell = setConfig(
+    setConfig(command.draft, command.nodeId, 'mode', 'shell'),
+    command.nodeId,
+    'script',
+    'echo {{a}}',
+  );
+  assert.match(
+    problemsOf(shell, command.nodeId).find((item) => item.field === 'script')!.message,
+    /never fill a shell script/,
+  );
+  const http = addNode(base, 'http', { x: 0, y: 0 });
+  assert.deepEqual(
+    problemsOf(
+      setConfig(http.draft, http.nodeId, 'url', 'https://u:p@example.com'),
+      http.nodeId,
+    ).map((item) => item.field),
+    ['url'],
+  );
+  assert.deepEqual(
+    problemsOf(
+      setConfig(
+        setConfig(http.draft, http.nodeId, 'url', 'https://example.com/api'),
+        http.nodeId,
+        'body',
+        { kind: 'text', text: 'x' },
+      ),
+      http.nodeId,
+    ).map((item) => item.field),
+    ['body'],
+  );
+  for (const type of ['git_status', 'git_diff', 'git_push']) {
+    const git = addNode(base, type, { x: 0, y: 0 });
+    assert.deepEqual(problemsOf(git.draft, git.nodeId), [], type);
+  }
+  const commitNode = addNode(base, 'git_commit', { x: 0, y: 0 });
+  assert.deepEqual(
+    problemsOf(commitNode.draft, commitNode.nodeId).map((item) => item.field),
+    ['message'],
+  );
+  // A script's source and settings are kept exactly through edits of other fields.
+  const script = addNode(base, 'script', { x: 0, y: 0 });
+  const source = 'const n = input.count;\nreturn { doubled: n * 2 };';
+  let scripted = setConfig(script.draft, script.nodeId, 'source', source);
+  scripted = setConfig(scripted, script.nodeId, 'timeoutMs', 2000);
+  const node = readDocument(scripted).nodes.find((item) => item.id === script.nodeId)!;
+  assert.deepEqual(node.config, { source, timeoutMs: 2000 });
+  assert.deepEqual(problemsOf(scripted, script.nodeId), []);
+});

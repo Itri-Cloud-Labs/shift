@@ -12,7 +12,20 @@ import {
   type NodeRun,
 } from './graph.js';
 import { StatusLabel, TypeIcon } from './icons.js';
+import { ActionResult } from './Actions.js';
 import { AgentReports } from './Sessions.js';
+
+// Steps whose output is shown readably, with what they recorded.
+const actionTypes = new Set([
+  'command',
+  'http',
+  'script',
+  'git_status',
+  'git_diff',
+  'git_create_branch',
+  'git_commit',
+  'git_push',
+]);
 
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 
@@ -132,7 +145,9 @@ export function Inspector({
                     <AgentReports runId={runId} execution={execution} openSession={openSession} />
                   ),
                 }
-              : {})}
+              : execution && actionTypes.has(node.type)
+                ? { readable: <ActionResult type={node.type} execution={execution} /> }
+                : {})}
           />
         )}
         {tab === 'overview' && (

@@ -1,6 +1,8 @@
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
   validateArtifactList,
+  validateCredentialList,
+  validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
   validateRunResponse,
@@ -85,6 +87,10 @@ export function validResource(kind: ResourceKind, value: unknown): boolean {
       return validateTranscriptPage(value);
     case 'artifacts':
       return validateArtifactList(value);
+    case 'credentials':
+      return validateCredentialList(value);
+    case 'permissions':
+      return validateProjectPermissionsResponse(value);
   }
 }
 
@@ -181,6 +187,35 @@ export async function dispatch(
                 : (['artifacts', `/api/v0/runs/${request.runId}/artifacts`] as const);
         const read = await core.resource(kind, path);
         response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'data.credentials':
+      case 'data.permissions': {
+        const kind = request.kind === 'data.credentials' ? 'credentials' : 'permissions';
+        const read = await core.resource(kind, `/api/v0/projects/${request.projectId}/${kind}`);
+        response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'credential.put':
+      case 'credential.revoke':
+      case 'project.permissions': {
+        const { command } =
+          request.kind === 'credential.put'
+            ? await core.command('POST', `/api/v0/projects/${request.projectId}/credentials`, {
+                name: request.name,
+                value: request.value,
+              })
+            : request.kind === 'credential.revoke'
+              ? await core.command(
+                  'POST',
+                  `/api/v0/projects/${request.projectId}/credentials/${request.credentialId}/revoke`,
+                  {},
+                )
+              : await core.command('POST', `/api/v0/projects/${request.projectId}/permissions`, {
+                  allow: request.allow,
+                  deny: request.deny,
+                });
+        response = { kind: 'command', command, runId: null };
         break;
       }
       case 'data.report':
