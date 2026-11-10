@@ -281,16 +281,19 @@ export class FakeGitHub {
         return send(401, { message: 'A JSON web token could not be decoded' });
       if (route === 'GET /app')
         return send(200, { id: this.appId, slug: 'shift-test', name: 'Shift Test' });
-      if (route === 'GET /app/installations')
+      if (route === 'GET /app/installations') {
+        const page = Number(url.searchParams.get('page') ?? '1');
+        const perPage = Number(url.searchParams.get('per_page') ?? '30');
         return send(
           200,
-          this.installations.map((item) => ({
+          this.installations.slice((page - 1) * perPage, page * perPage).map((item) => ({
             id: item.id,
             account: item.account,
             permissions: item.permissions,
             suspended_at: item.suspended_at,
           })),
         );
+      }
       if ((match = /^POST \/app\/installations\/(\d+)\/access_tokens$/.exec(route))) {
         const installation = this.installations.find((item) => item.id === Number(match![1]));
         if (!installation) return send(404, { message: 'Not Found' });

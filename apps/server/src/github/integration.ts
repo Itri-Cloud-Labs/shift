@@ -300,7 +300,17 @@ export class GitHubIntegration {
     keys: AppKeys,
   ): Promise<Array<{ installation: ApiInstallation; repositories: Repository[] }>> {
     const installations: ApiInstallation[] = [];
-    for (let page = 1; page <= 10; page++) {
+    for (let page = 1; ; page++) {
+      // Installations missing from the list are marked removed, so a partial list is refused
+      // before anything is stored.
+      if (page > 10)
+        throw new GitHubError(
+          'GITHUB_TOO_MANY_RESULTS',
+          'The App has more than 1000 installations; Shift cannot read them all.',
+          422,
+          422,
+          false,
+        );
       const batch = await this.api.asApp<ApiInstallation[]>(
         keys,
         'GET /app/installations',

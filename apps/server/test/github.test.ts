@@ -469,6 +469,24 @@ test('a branch with more pull requests than Shift reads is never treated as full
   }
 });
 
+test('an App with more installations than Shift reads keeps its stored ones', async () => {
+  const { env, fake, appRowId, close } = await connected();
+  try {
+    for (let index = 0; index < 1000; index++)
+      fake.installations.push({
+        ...fake.installations[0]!,
+        id: 10_000 + index,
+        repositoryIds: [],
+        suspended_at: '2026-01-01T00:00:00Z',
+      });
+    await assert.rejects(env.github.refresh(appRowId), { code: 'GITHUB_TOO_MANY_RESULTS' });
+    assert.equal(env.github.apps()[0]!.installations[0]!.state, 'ACTIVE');
+    assert.equal(env.github.connection(env.projectId)!.verifiedAt !== null, true);
+  } finally {
+    await close();
+  }
+});
+
 test('a connect that a disconnect overtook is refused rather than undoing it', async () => {
   const { env, close } = await connected();
   try {
