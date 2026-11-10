@@ -2,6 +2,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Fragment, type ReactNode } from 'react';
 import { ask, bridge, useLive } from './bridge.js';
 import { TextField } from './Fields.js';
+import { duration } from './graph.js';
 import { Select } from './Sessions.js';
 
 // Forms for Command, HTTP, Script and Git nodes (client specification 6.2 and 6.3). Lists are
@@ -340,7 +341,8 @@ export function MethodSelect({
 type Data = Record<string, unknown>;
 
 const short = (commit: unknown) => (typeof commit === 'string' ? commit.slice(0, 12) : '');
-const str = (value: unknown) => (typeof value === 'string' ? value : '');
+const str = (value: unknown) =>
+  typeof value === 'string' || typeof value === 'number' ? String(value) : '';
 
 const operationStates: Record<string, string> = {
   INTENDED: 'Recorded, not started',
@@ -381,7 +383,16 @@ export interface ActionExecution {
 
 // The readable part of an action step: its output, or the output its error carries, and the
 // operations Shift recorded. Nothing here reads the workspace now; it shows what was recorded.
-export function ActionResult({ type, execution }: { type: string; execution: ActionExecution }) {
+export function ActionResult({
+  type,
+  execution,
+  poll = null,
+}: {
+  type: string;
+  execution: ActionExecution;
+  // The run's wait while this step polls: how many reads, the last one, and the next.
+  poll?: Record<string, unknown> | null;
+}) {
   const output = (execution.output as { data?: unknown } | null | undefined)?.data;
   const details = (execution.error as { details?: unknown } | null | undefined)?.details;
   const data = (output ?? details ?? {}) as Data;
@@ -413,6 +424,53 @@ export function ActionResult({ type, execution }: { type: string; execution: Act
       ['To', `${str(data['remoteRef'])} on ${str(data['remote'])}`],
       ['Before', short(data['before']) || 'absent'],
     );
+  if (['github_get_pr', 'github_create_pr', 'github_update_pr'].includes(type) && data['number']) {
+    const head = (data['head'] ?? {}) as Data;
+    const base = (data['base'] ?? {}) as Data;
+    facts.push(
+      ['Pull request', `#${str(data['number'])} in ${str(data['repository'])}`],
+      [
+        'State',
+        data['merged'] === true
+          ? 'merged'
+          : `${str(data['state'])}${data['draft'] === true ? ' (draft)' : ''}`,
+      ],
+      ['From', `${str(head['ref'])} at ${short(head['sha'])}`],
+      ['Into', str(base['ref'])],
+      ['Link', str(data['url'])],
+    );
+  }
+  if ((type === 'github_verify_checks' || type === 'github_wait_checks') && data['commit']) {
+    const counts = (data['counts'] ?? {}) as Data;
+    facts.push(
+      ['Commit', short(data['commit'])],
+      ['Checks', str(data['state'])],
+      ['Passed', str(counts['success'])],
+      ['Failed', str(counts['failure'])],
+      ['Pending', str(counts['pending'])],
+    );
+    if (typeof data['polls'] === 'number') facts.push(['Reads', String(data['polls'])]);
+  }
+  if (type === 'github_merge' && data['number'])
+    facts.push(
+      ['Merged', `#${str(data['number'])} by ${str(data['method'])}`],
+      ['Merge commit', short(data['mergeCommitSha'])],
+      ['Head', short(data['headSha'])],
+    );
+  if (poll) {
+    const now = Date.now();
+    const at = (value: unknown) =>
+      typeof value === 'number' ? (value <= now ? 'now' : `in ${duration(value - now)}`) : '';
+    facts.push(
+      ['Commit', short(poll['commit'])],
+      ['Reads so far', str(poll['ordinal'])],
+      ['Last read', poll['state'] === 'none' ? 'no checks reported' : str(poll['state'])],
+      ['Next read', at(poll['dueAt'])],
+      ['Gives up', at(poll['deadline'])],
+    );
+  }
+  const checks = Array.isArray(data['checks']) ? (data['checks'] as Data[]) : [];
+  const missing = Array.isArray(data['missing']) ? (data['missing'] as string[]) : [];
   const entries = Array.isArray(data['entries']) ? (data['entries'] as Data[]) : [];
   const files = Array.isArray(data['files']) ? (data['files'] as Data[]) : [];
   const operations = execution.operations ?? [];
@@ -429,6 +487,30 @@ export function ActionResult({ type, execution }: { type: string; execution: Act
               </Fragment>
             ))}
         </dl>
+      )}
+      {(checks.length > 0 || missing.length > 0) && (
+        <>
+          <h3 className="section-title">Checks</h3>
+          <ul className="attempts">
+            {checks.map((check) => (
+              <li key={str(check['name'])}>
+                <span className="mono">{str(check['name'])}</span>
+                <span className="note">
+                  {str(check['state'])}
+                  {check['conclusion'] && check['conclusion'] !== check['state']
+                    ? ` (${str(check['conclusion'])})`
+                    : ''}
+                </span>
+              </li>
+            ))}
+            {missing.map((name) => (
+              <li key={`missing-${name}`}>
+                <span className="mono">{name}</span>
+                <span className="note">not reported yet</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {type === 'command' && (
         <>

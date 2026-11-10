@@ -34,7 +34,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,credential,data,device,interaction,onChange,openDocumentation,preferences,project,queryServer,readShell,recovery,run,session,setSamples,sync,workflow', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,credential,data,device,github,interaction,onChange,openDocumentation,preferences,project,queryServer,readShell,recovery,run,session,setSamples,sync,workflow', 'Broad bridge');
     assert(Object.keys(window.shift.workflow).sort().join(',') === 'create,publish,save', 'Broad workflow bridge');
     assert(Object.keys(window.shift.project).sort().join(',') === 'create,permissions', 'Broad project bridge');
     assert(Object.keys(window.shift.recovery).sort().join(',') === 'forget,keep,list', 'Broad recovery bridge');
@@ -42,8 +42,10 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.recovery.keep('../x', 0, {})).code === 'INVALID_REQUEST', 'Path-like workflow ID kept');
     assert((await window.shift.project.create('/repo')).code === 'DISCONNECTED', 'Project created without a connection');
     assert((await window.shift.workflow.create('../etc', 'x')).code === 'INVALID_REQUEST', 'Path-like project ID accepted');
-    assert(Object.keys(window.shift.data).sort().join(',') === 'artifacts,credentials,devices,overview,permissions,report,run,session,sessions,transcript,version,workflow', 'Broad data bridge');
+    assert(Object.keys(window.shift.data).sort().join(',') === 'artifacts,credentials,devices,github,githubApps,overview,permissions,report,run,session,sessions,transcript,version,workflow', 'Broad data bridge');
     assert(Object.keys(window.shift.credential).sort().join(',') === 'put,revoke', 'Broad credential bridge');
+    assert(Object.keys(window.shift.github).sort().join(',') === 'connect,disconnect,refresh,register,rotate,verify', 'Broad GitHub bridge');
+    assert((await window.shift.github.register({ appId: 1, privateKey: 'short' })).code === 'INVALID_REQUEST', 'Malformed App key accepted');
     assert((await window.shift.credential.put('00000000-0000-4000-8000-000000000000', '../x', 'v')).code === 'INVALID_REQUEST', 'Path-like credential name accepted');
     assert(Object.keys(window.shift.session).join(',') === 'goal', 'Broad session bridge');
     assert((await window.shift.data.report('../../admin')).code === 'INVALID_REQUEST', 'Path-like artifact ID accepted');

@@ -2,6 +2,8 @@ import { ClientCore, ClientFailure, validFoundationResponse } from '../client-co
 import {
   validateArtifactList,
   validateCredentialList,
+  validateGitHubAppList,
+  validateGitHubConnectionResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -91,6 +93,10 @@ export function validResource(kind: ResourceKind, value: unknown): boolean {
       return validateCredentialList(value);
     case 'permissions':
       return validateProjectPermissionsResponse(value);
+    case 'github':
+      return validateGitHubConnectionResponse(value);
+    case 'githubApps':
+      return validateGitHubAppList(value);
   }
 }
 
@@ -194,6 +200,63 @@ export async function dispatch(
         const kind = request.kind === 'data.credentials' ? 'credentials' : 'permissions';
         const read = await core.resource(kind, `/api/v0/projects/${request.projectId}/${kind}`);
         response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'data.githubApps': {
+        const read = await core.resource('githubApps', '/api/v0/github/apps');
+        response = { kind: 'resource', resource: 'githubApps', ...read };
+        break;
+      }
+      case 'data.github': {
+        const read = await core.resource('github', `/api/v0/projects/${request.projectId}/github`);
+        response = { kind: 'resource', resource: 'github', ...read };
+        break;
+      }
+      case 'github.register':
+      case 'github.rotate':
+      case 'github.refresh':
+      case 'github.connect':
+      case 'github.verify':
+      case 'github.disconnect': {
+        const [path, body]: [string, Record<string, unknown>] =
+          request.kind === 'github.register'
+            ? [
+                '/api/v0/github/apps',
+                {
+                  appId: request.appId,
+                  privateKey: request.privateKey,
+                  ...(request.host === undefined ? {} : { host: request.host }),
+                  ...(request.webhookSecret === undefined
+                    ? {}
+                    : { webhookSecret: request.webhookSecret }),
+                },
+              ]
+            : request.kind === 'github.rotate'
+              ? [
+                  `/api/v0/github/apps/${request.appId}/rotate`,
+                  {
+                    ...(request.privateKey === undefined ? {} : { privateKey: request.privateKey }),
+                    ...(request.webhookSecret === undefined
+                      ? {}
+                      : { webhookSecret: request.webhookSecret }),
+                  },
+                ]
+              : request.kind === 'github.refresh'
+                ? [`/api/v0/github/apps/${request.appId}/refresh`, {}]
+                : request.kind === 'github.connect'
+                  ? [
+                      `/api/v0/projects/${request.projectId}/github`,
+                      {
+                        installationId: request.installationId,
+                        repositoryId: request.repositoryId,
+                      },
+                    ]
+                  : [
+                      `/api/v0/projects/${request.projectId}/github/${request.kind === 'github.verify' ? 'verify' : 'disconnect'}`,
+                      {},
+                    ];
+        const { command } = await core.command('POST', path, body);
+        response = { kind: 'command', command, runId: null };
         break;
       }
       case 'credential.put':

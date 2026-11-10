@@ -13,7 +13,9 @@ export const RESOURCE_LIMIT = 8 * 1024 * 1024;
 export const querySchema = v.picklist(['info', 'health', 'ready']);
 export type FoundationQuery = v.InferOutput<typeof querySchema>;
 const profileId = v.pipe(v.string(), v.regex(/^[0-9a-f-]{36}$/));
-const actionPermission = v.picklist(['command', 'http', 'script', 'git', 'git_push']);
+const actionPermission = v.picklist(['command', 'http', 'script', 'git', 'git_push', 'github']);
+const privateKey = v.pipe(v.string(), v.minLength(100), v.maxLength(16384));
+const webhookSecret = v.pipe(v.string(), v.minLength(16), v.maxLength(256));
 const serverUrl = v.pipe(v.string(), v.minLength(1), v.maxLength(2048));
 // This computer's own choices: they never reach the server.
 export const preferencesSchema = v.strictObject({
@@ -73,6 +75,33 @@ export const requestSchema = v.variant('kind', [
     allow: v.array(actionPermission),
     deny: v.array(actionPermission),
   }),
+  // The owner's GitHub App and the project's repository binding.
+  v.strictObject({ kind: v.literal('data.githubApps') }),
+  v.strictObject({ kind: v.literal('data.github'), projectId: profileId }),
+  // The App's key and webhook secret cross IPC once, from their fields to main, and are never
+  // sent back: the server answers with configured or missing.
+  v.strictObject({
+    kind: v.literal('github.register'),
+    appId: v.pipe(v.number(), v.integer(), v.minValue(1)),
+    host: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
+    privateKey,
+    webhookSecret: v.optional(webhookSecret),
+  }),
+  v.strictObject({
+    kind: v.literal('github.rotate'),
+    appId: profileId,
+    privateKey: v.optional(privateKey),
+    webhookSecret: v.optional(webhookSecret),
+  }),
+  v.strictObject({ kind: v.literal('github.refresh'), appId: profileId }),
+  v.strictObject({
+    kind: v.literal('github.connect'),
+    projectId: profileId,
+    installationId: profileId,
+    repositoryId: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  }),
+  v.strictObject({ kind: v.literal('github.verify'), projectId: profileId }),
+  v.strictObject({ kind: v.literal('github.disconnect'), projectId: profileId }),
   // The owner's own goal for a session, outside any run.
   v.strictObject({
     kind: v.literal('session.goal'),
@@ -256,6 +285,8 @@ export const resourceKindSchema = v.picklist([
   'artifacts',
   'credentials',
   'permissions',
+  'github',
+  'githubApps',
 ]);
 export type ResourceKind = v.InferOutput<typeof resourceKindSchema>;
 export const commandViewSchema = v.strictObject({
@@ -397,6 +428,29 @@ export interface DesktopBridge {
     report(artifactId: string): Promise<DesktopResponse>;
     credentials(projectId: string): Promise<DesktopResponse>;
     permissions(projectId: string): Promise<DesktopResponse>;
+    github(projectId: string): Promise<DesktopResponse>;
+    githubApps(): Promise<DesktopResponse>;
+  };
+  github: {
+    // The key and secret are sent once and never read back.
+    register(input: {
+      appId: number;
+      host?: string;
+      privateKey: string;
+      webhookSecret?: string;
+    }): Promise<DesktopResponse>;
+    rotate(
+      appId: string,
+      input: { privateKey?: string; webhookSecret?: string },
+    ): Promise<DesktopResponse>;
+    refresh(appId: string): Promise<DesktopResponse>;
+    connect(
+      projectId: string,
+      installationId: string,
+      repositoryId: number,
+    ): Promise<DesktopResponse>;
+    verify(projectId: string): Promise<DesktopResponse>;
+    disconnect(projectId: string): Promise<DesktopResponse>;
   };
   credential: {
     // Creates the named credential or replaces its value. The value is never read back.
@@ -490,7 +544,9 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
       : kind === 'interaction.respond' ||
           kind === 'run.control' ||
           kind === 'session.goal' ||
-          kind === 'credential.put'
+          kind === 'credential.put' ||
+          kind === 'github.register' ||
+          kind === 'github.rotate'
         ? ANSWER_LIMIT
         : REQUEST_LIMIT;
   // A draft may nest 32 levels below its envelope.

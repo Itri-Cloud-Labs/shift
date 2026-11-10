@@ -290,6 +290,24 @@ test('action and Git nodes start valid where they can and diagnose what the serv
     problemsOf(commitNode.draft, commitNode.nodeId).map((item) => item.field),
     ['message'],
   );
+  // GitHub nodes: what each needs, commits that are SHAs or values, numbers that are numbers.
+  const fields = (type: string, config: Record<string, unknown> = {}) => {
+    const added = addNode(base, type, { x: 0, y: 0 });
+    let draft = added.draft;
+    for (const [key, value] of Object.entries(config))
+      draft = setConfig(draft, added.nodeId, key, value);
+    return problemsOf(draft, added.nodeId).map((item) => item.field);
+  };
+  assert.deepEqual(fields('github_create_pr'), ['head', 'title']);
+  assert.deepEqual(fields('github_create_pr', { head: '{{branch}}', title: 'Work' }), [null]);
+  assert.deepEqual(fields('github_get_pr'), ['number']);
+  assert.deepEqual(fields('github_get_pr', { number: 'x7' }), ['number']);
+  assert.deepEqual(fields('github_get_pr', { number: '42' }), []);
+  assert.deepEqual(fields('github_wait_checks', { commit: 'main' }), ['commit']);
+  assert.deepEqual(fields('github_verify_checks', { commit: 'a'.repeat(40) }), []);
+  assert.deepEqual(fields('github_merge', { number: '7', expectedCommit: 'abc' }), [
+    'expectedCommit',
+  ]);
   // A script's source and settings are kept exactly through edits of other fields.
   const script = addNode(base, 'script', { x: 0, y: 0 });
   const source = 'const n = input.count;\nreturn { doubled: n * 2 };';

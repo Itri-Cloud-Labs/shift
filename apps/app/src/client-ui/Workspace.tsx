@@ -961,6 +961,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           commands={sync.commands}
           runId={inRun ? (route.runId ?? null) : null}
           openSession={setSessionOpen}
+          wait={inRun ? ((runValue?.wait as Record<string, unknown> | null) ?? null) : null}
           editor={
             editable ? (
               <NodeEditor

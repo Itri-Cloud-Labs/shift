@@ -46,6 +46,7 @@ const temporaryRoot = await mkdtemp(join(tmpdir(), 'shift-capture-'));
 const stateDir = join(temporaryRoot, 'server');
 const repository = join(temporaryRoot, 'payments-service');
 let server;
+let github;
 try {
   await mkdir(repository);
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repository });
@@ -421,6 +422,113 @@ try {
     ...admin,
   ]);
   const notifyBase = `#/p/${project.id}/w/${notify.id}`;
+  // Prompts 22 and 23: the owner's App on the server tests' fake GitHub, a project bound to its
+  // repository, and a run that opened a pull request and is waiting for its checks.
+  github = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/github-fake-serve.ts'], {
+    cwd: serverDirectory,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  let githubLine = '';
+  github.stdout.on('data', (chunk) => (githubLine += chunk));
+  for (let index = 0; index < 200 && !githubLine.includes('\n'); index++) await delay(50);
+  const fakeGitHub = JSON.parse(githubLine.split('\n')[0]);
+  const keyFile = join(temporaryRoot, 'app.pem');
+  await writeFile(keyFile, fakeGitHub.privateKey, { mode: 0o600 });
+  const registered = await cli(
+    [
+      'github',
+      'register',
+      '--app-id',
+      String(fakeGitHub.appId),
+      '--host',
+      fakeGitHub.origin,
+      '--key-file',
+      keyFile,
+      '--webhook-secret',
+      ...admin,
+    ],
+    'whsec-capture-0123456789',
+  );
+  await cli([
+    'github',
+    'connect',
+    '--project',
+    project.id,
+    '--installation',
+    registered.installations[0].id,
+    '--repository',
+    '9001',
+    ...admin,
+  ]);
+  const releaseFile = join(temporaryRoot, 'release.json');
+  await writeFile(
+    releaseFile,
+    JSON.stringify({
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'open',
+          type: 'github_create_pr',
+          config: {
+            head: 'shift/rounding',
+            title: 'Fix rounding in invoices',
+            body: 'Rounds half-cents the way finance expects.',
+          },
+        },
+        {
+          id: 'checks',
+          type: 'github_wait_checks',
+          config: { commit: '{{sha}}', intervalMs: 60_000, timeoutMs: 3_600_000 },
+          bindings: {
+            sha: {
+              kind: 'node',
+              nodeId: 'open',
+              execution: 'latest',
+              path: ['data', 'head', 'sha'],
+            },
+          },
+        },
+        {
+          id: 'merge',
+          type: 'github_merge',
+          config: { number: '{{number}}', method: 'squash' },
+          bindings: {
+            number: { kind: 'node', nodeId: 'open', execution: 'latest', path: ['data', 'number'] },
+          },
+        },
+        { id: 'red', type: 'end', config: { outcome: 'FAILED', reason: 'Checks failed' } },
+        { id: 'late', type: 'end', config: { outcome: 'FAILED', reason: 'Checks took too long' } },
+      ],
+      connections: [
+        { id: 'r1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'open', toPort: 'input' },
+        { id: 'r2', fromNodeId: 'open', fromPort: 'success', toNodeId: 'checks', toPort: 'input' },
+        { id: 'r3', fromNodeId: 'checks', fromPort: 'success', toNodeId: 'merge', toPort: 'input' },
+        { id: 'r4', fromNodeId: 'checks', fromPort: 'failure', toNodeId: 'red', toPort: 'input' },
+        { id: 'r5', fromNodeId: 'checks', fromPort: 'timeout', toNodeId: 'late', toPort: 'input' },
+      ],
+    }),
+  );
+  const release = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Release fix',
+    '--file',
+    releaseFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', release.id, ...admin]);
+  const releaseRun = await cli(['run', 'start', '--workflow', release.id, ...admin]);
+  for (let index = 0; index < 100; index++) {
+    const current = await cli(['run', 'show', releaseRun.id, ...admin]);
+    if (current.wait?.kind === 'poll') break;
+    if (!['RUNNING', 'WAITING'].includes(current.state))
+      throw new Error(`The release run ended ${current.state}`);
+    await delay(200);
+  }
+  const releaseBase = `#/p/${project.id}/w/${release.id}`;
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   // Added through the app in step j01.
@@ -1013,6 +1121,44 @@ try {
         "document.querySelector('.settings-panel')?.textContent.includes('registry_token') && document.querySelector('#credential-value')?.type === 'password'",
     },
     {
+      name: 'g1-settings-github',
+      script: `setTimeout(() => document.querySelector('.github-app')?.scrollIntoView({ block: 'start' }), 300)`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.github-bound')?.textContent.includes('acme/widgets') && document.querySelector('.github-facts')?.textContent.includes('Configured') && !document.body.textContent.includes('PRIVATE KEY') && !document.body.textContent.includes('whsec-capture')",
+    },
+    {
+      name: 'g2-waiting-for-checks',
+      script:
+        "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); document.querySelector('.scrim')?.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))",
+      hash: `${releaseBase}/r/${releaseRun.id}/n/checks`,
+      wait: 2500,
+      expect:
+        "document.querySelector('.run-status')?.textContent.includes('Waiting') && document.body.textContent.includes('reads the checks again') && document.querySelector('.inspector')?.textContent.includes('Reads so far')",
+    },
+    {
+      name: 'g3-pull-request-evidence',
+      hash: `${releaseBase}/r/${releaseRun.id}/n/open`,
+      wait: 1500,
+      expect:
+        "document.querySelector('.inspector')?.textContent.includes('#1 in acme/widgets') && document.querySelector('.inspector').textContent.includes('Operations')",
+    },
+    {
+      name: 'g4-merge-form',
+      hash: `${releaseBase}/n/merge`,
+      wait: 2000,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
+      expect:
+        "document.querySelector('#merge-method')?.value === 'squash' && document.querySelector('.inspector')?.textContent.includes('Merges as soon as the run reaches it')",
+    },
+    {
+      name: 'g5-wait-form',
+      hash: `${releaseBase}/n/checks`,
+      wait: 2000,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
+      expect: "document.querySelector('#checks-commit')?.value === '{{sha}}'",
+    },
+    {
       name: 'x8-closed',
       script:
         "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); document.querySelector('.scrim')?.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))",
@@ -1168,6 +1314,7 @@ try {
   console.log(`Screenshots in ${output}`);
 } finally {
   server?.kill('SIGTERM');
+  github?.kill('SIGTERM');
   await delay(300);
   await rm(temporaryRoot, { recursive: true, force: true });
 }

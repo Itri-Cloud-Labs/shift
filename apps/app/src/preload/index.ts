@@ -15,6 +15,8 @@ import { validInteractions } from '../shared/interactions.js';
 import {
   validateArtifactList,
   validateCredentialList,
+  validateGitHubAppList,
+  validateGitHubConnectionResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -38,6 +40,8 @@ const resourceValidators = {
   artifacts: validateArtifactList,
   credentials: validateCredentialList,
   permissions: validateProjectPermissionsResponse,
+  github: validateGitHubConnectionResponse,
+  githubApps: validateGitHubAppList,
 };
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
@@ -103,6 +107,35 @@ const bridge: DesktopBridge = {
     report: (artifactId: string) => invoke({ kind: 'data.report', artifactId }),
     credentials: (projectId: string) => invoke({ kind: 'data.credentials', projectId }),
     permissions: (projectId: string) => invoke({ kind: 'data.permissions', projectId }),
+    github: (projectId: string) => invoke({ kind: 'data.github', projectId }),
+    githubApps: () => invoke({ kind: 'data.githubApps' }),
+  }),
+  github: Object.freeze({
+    register: (input: {
+      appId: number;
+      host?: string;
+      privateKey: string;
+      webhookSecret?: string;
+    }) =>
+      invoke({
+        kind: 'github.register',
+        appId: input?.appId,
+        privateKey: input?.privateKey,
+        ...(input?.host === undefined ? {} : { host: input.host }),
+        ...(input?.webhookSecret === undefined ? {} : { webhookSecret: input.webhookSecret }),
+      } as DesktopRequest),
+    rotate: (appId: string, input: { privateKey?: string; webhookSecret?: string }) =>
+      invoke({
+        kind: 'github.rotate',
+        appId,
+        ...(input?.privateKey === undefined ? {} : { privateKey: input.privateKey }),
+        ...(input?.webhookSecret === undefined ? {} : { webhookSecret: input.webhookSecret }),
+      } as DesktopRequest),
+    refresh: (appId: string) => invoke({ kind: 'github.refresh', appId }),
+    connect: (projectId: string, installationId: string, repositoryId: number) =>
+      invoke({ kind: 'github.connect', projectId, installationId, repositoryId }),
+    verify: (projectId: string) => invoke({ kind: 'github.verify', projectId }),
+    disconnect: (projectId: string) => invoke({ kind: 'github.disconnect', projectId }),
   }),
   credential: Object.freeze({
     put: (projectId: string, name: string, value: string) =>

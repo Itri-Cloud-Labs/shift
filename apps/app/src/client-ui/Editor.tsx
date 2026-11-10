@@ -50,6 +50,12 @@ const typeHints: Record<string, string> = {
   git_create_branch: 'Names the work as a branch',
   git_commit: 'Records the changes',
   git_push: 'Publishes the branch',
+  github_get_pr: 'Reads a pull request',
+  github_create_pr: 'Opens a pull request',
+  github_update_pr: 'Changes a pull request',
+  github_verify_checks: 'Reads a commit’s checks once',
+  github_wait_checks: 'Waits until a commit’s checks finish',
+  github_merge: 'Merges a pull request',
   end: 'Finishes the run',
 };
 
@@ -224,7 +230,23 @@ const templated = new Set([
   'message',
   'branch',
   'remoteBranch',
+  'number',
+  'head',
+  'base',
+  'body',
+  'commit',
+  'expectedCommit',
+  'commitTitle',
+  'commitMessage',
 ]);
+
+function GitHubNote() {
+  return (
+    <p className="note">
+      Uses the GitHub repository connected to this project in Settings › Projects.
+    </p>
+  );
+}
 
 function TokenPicker({
   id,
@@ -892,16 +914,35 @@ function ConfigFields({
           />
         </>
       );
-    case 'git_push':
+    case 'git_push': {
+      const app = config['transport'] === 'github_app';
       return (
         <>
-          <TextField
-            id={`${id}-remote`}
-            label="Remote (optional)"
-            value={text(config['remote'])}
-            placeholder="origin"
-            commit={(value) => string('remote', value)}
+          <Select
+            id={`${id}-transport`}
+            label="Push with"
+            value={app ? 'github_app' : 'host'}
+            options={[
+              ['host', 'Your own Git credentials on the server'],
+              ['github_app', 'The project’s GitHub App'],
+            ]}
+            change={(next) =>
+              replace({
+                ...config,
+                transport: next === 'github_app' ? 'github_app' : undefined,
+                remote: next === 'github_app' ? undefined : config['remote'],
+              })
+            }
           />
+          {!app && (
+            <TextField
+              id={`${id}-remote`}
+              label="Remote (optional)"
+              value={text(config['remote'])}
+              placeholder="origin"
+              commit={(value) => string('remote', value)}
+            />
+          )}
           {field('branch', 'Branch (optional)', false, 'The current branch when empty.')}
           {field(
             'remoteBranch',
@@ -910,8 +951,157 @@ function ConfigFields({
             'The same name when empty.',
           )}
           <p className="note">
-            Uses your own Git credentials on the server. Shift never forces a push.
+            {app
+              ? 'Pushes to the repository connected in Settings › Projects, with a short-lived token from the App that is never stored. Shift never forces a push.'
+              : 'Uses your own Git credentials on the server. Shift never forces a push.'}
           </p>
+        </>
+      );
+    }
+    case 'github_get_pr': {
+      const byBranch = config['head'] !== undefined && config['number'] === undefined;
+      return (
+        <>
+          <Select
+            id={`${id}-find`}
+            label="Find it by"
+            value={byBranch ? 'head' : 'number'}
+            options={[
+              ['number', 'Its number'],
+              ['head', 'Its branch'],
+            ]}
+            change={(next) =>
+              replace(
+                next === 'head'
+                  ? { ...config, number: undefined, head: '' }
+                  : { ...config, head: undefined, number: '' },
+              )
+            }
+          />
+          {byBranch
+            ? field('head', 'Branch', false, 'The pull request from this branch of the repository.')
+            : field('number', 'Number', false, 'Such as 42, or {{number}} from an earlier step.')}
+          <GitHubNote />
+        </>
+      );
+    }
+    case 'github_create_pr':
+      return (
+        <>
+          {field('head', 'From branch', false, 'The branch with the work, pushed beforehand.')}
+          {field(
+            'base',
+            'Into branch (optional)',
+            false,
+            'The repository’s default branch when empty.',
+          )}
+          {field('title', 'Title')}
+          {field('body', 'Description (optional)', true)}
+          <Check
+            label="Open as a draft"
+            checked={config['draft'] === true}
+            change={(checked) => set('draft', checked ? true : undefined)}
+          />
+          <GitHubNote />
+        </>
+      );
+    case 'github_update_pr':
+      return (
+        <>
+          {field('number', 'Number', false, 'Such as {{number}} from Create pull request.')}
+          {field('title', 'New title (optional)')}
+          {field('body', 'New description (optional)', true)}
+          {field('base', 'New base branch (optional)')}
+          <Select
+            id={`${id}-state`}
+            label="State"
+            value={text(config['state']) || 'keep'}
+            options={[
+              ['keep', 'Leave as it is'],
+              ['open', 'Open'],
+              ['closed', 'Closed'],
+            ]}
+            change={(next) => set('state', next === 'keep' ? undefined : next)}
+          />
+          <GitHubNote />
+        </>
+      );
+    case 'github_verify_checks':
+    case 'github_wait_checks':
+      return (
+        <>
+          {field(
+            'commit',
+            'Commit',
+            false,
+            'A full commit SHA, such as {{sha}} from a pull request’s head. A branch name is refused, since it can move.',
+          )}
+          <LinesField
+            id={`${id}-checks`}
+            label="Only these checks, one per line (optional)"
+            value={config['checks']}
+            commit={(checks) => set('checks', checks)}
+          />
+          {node.type === 'github_verify_checks' ? (
+            <p className="note">
+              Reads the checks once. Its result has a state of success, failure, pending or none:
+              follow it with a Condition to decide what happens next.
+            </p>
+          ) : (
+            <>
+              <NumberField
+                id={`${id}-interval`}
+                label="Check every (seconds)"
+                value={config['intervalMs']}
+                scale={1000}
+                note="30 seconds when empty."
+                set={(value) => set('intervalMs', value)}
+              />
+              <NumberField
+                id={`${id}-wait-timeout`}
+                label="Give up after (minutes)"
+                value={config['timeoutMs']}
+                scale={60_000}
+                note="One hour when empty. The run follows the timeout port then."
+                set={(value) => set('timeoutMs', value)}
+              />
+              <p className="note">
+                Ends on success when every check passed, failure when one failed. While waiting the
+                run uses no active time, and it keeps waiting across restarts.
+              </p>
+            </>
+          )}
+          <GitHubNote />
+        </>
+      );
+    case 'github_merge':
+      return (
+        <>
+          {field('number', 'Number', false, 'Such as {{number}} from Create pull request.')}
+          <Select
+            id={`${id}-method`}
+            label="Merge by"
+            value={text(config['method']) || 'merge'}
+            options={[
+              ['merge', 'A merge commit'],
+              ['squash', 'Squashing into one commit'],
+              ['rebase', 'Rebasing the commits'],
+            ]}
+            change={(next) => set('method', next === 'merge' ? undefined : next)}
+          />
+          {field(
+            'expectedCommit',
+            'Only if the head is this commit (optional)',
+            false,
+            'GitHub refuses the merge if the pull request’s head moved on.',
+          )}
+          {field('commitTitle', 'Commit title (optional)')}
+          {field('commitMessage', 'Commit message (optional)', true)}
+          <p className="note warning-note">
+            Merges as soon as the run reaches it. Put the checks, waits and approvals you want
+            before it; GitHub’s own branch protections still apply.
+          </p>
+          <GitHubNote />
         </>
       );
     case 'end':

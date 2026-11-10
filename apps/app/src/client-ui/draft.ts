@@ -84,6 +84,12 @@ export const addableTypes = [
   'git_create_branch',
   'git_commit',
   'git_push',
+  'github_get_pr',
+  'github_create_pr',
+  'github_update_pr',
+  'github_verify_checks',
+  'github_wait_checks',
+  'github_merge',
   'end',
   'manual_trigger',
 ] as const;
@@ -102,6 +108,12 @@ const startingConfig: Record<string, Raw> = {
   script: { source: 'return input;' },
   git_create_branch: { name: '' },
   git_commit: { message: '' },
+  github_get_pr: { number: '' },
+  github_create_pr: { head: '', title: '' },
+  github_update_pr: { number: '', title: '' },
+  github_verify_checks: { commit: '' },
+  github_wait_checks: { commit: '' },
+  github_merge: { number: '' },
 };
 
 function freeId(base: string, used: Set<string>): string {
@@ -554,6 +566,14 @@ const required: Record<string, { key: string; label: string }[]> = {
   script: [{ key: 'source', label: 'a script' }],
   git_create_branch: [{ key: 'name', label: 'a branch name' }],
   git_commit: [{ key: 'message', label: 'a commit message' }],
+  github_create_pr: [
+    { key: 'head', label: 'a head branch' },
+    { key: 'title', label: 'a title' },
+  ],
+  github_update_pr: [{ key: 'number', label: 'a pull request number' }],
+  github_merge: [{ key: 'number', label: 'a pull request number' }],
+  github_verify_checks: [{ key: 'commit', label: 'a commit' }],
+  github_wait_checks: [{ key: 'commit', label: 'a commit' }],
 };
 
 // Config fields that may name bindings (server workflows/document.ts).
@@ -573,6 +593,13 @@ const templatedFields = [
   'message',
   'branch',
   'remoteBranch',
+  'number',
+  'head',
+  'base',
+  'commit',
+  'expectedCommit',
+  'commitTitle',
+  'commitMessage',
 ];
 
 const blank = (value: unknown) =>
@@ -626,6 +653,26 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
     if (typeof cwd === 'string' && (cwd.startsWith('/') || cwd.split('/').includes('..')))
       add('cwd', `${node.id}: the folder is inside the workspace, written relative to it.`);
   }
+  // A commit is a full SHA or a value from a binding; the server refuses a branch name.
+  for (const key of ['commit', 'expectedCommit'])
+    if (
+      node.type.startsWith('github_') &&
+      typeof node.config[key] === 'string' &&
+      node.config[key] !== '' &&
+      templateNames(node.config[key]).length === 0 &&
+      !/^[0-9a-fA-F]{40}$/.test((node.config[key] as string).trim())
+    )
+      add(key, `${node.id}: use a full 40-character commit SHA or a {{value}}, not a branch.`);
+  if (node.type === 'github_get_pr' && blank(node.config['number']) && blank(node.config['head']))
+    add('number', `${node.id} needs a pull request number or branch.`);
+  if (
+    ['github_get_pr', 'github_update_pr', 'github_merge'].includes(node.type) &&
+    typeof node.config['number'] === 'string' &&
+    node.config['number'] !== '' &&
+    templateNames(node.config['number']).length === 0 &&
+    !/^[1-9][0-9]*$/.test(node.config['number'].trim())
+  )
+    add('number', `${node.id}: a pull request number is digits, or a {{value}}.`);
   if (node.type === 'http') {
     const method = typeof node.config['method'] === 'string' ? node.config['method'] : 'GET';
     if (node.config['body'] !== undefined && ['GET', 'HEAD', 'OPTIONS'].includes(method))

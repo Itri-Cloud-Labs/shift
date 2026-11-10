@@ -723,3 +723,25 @@ Status: prompt 23's server work (M11a). The desktop forms for 22 and 23 follow. 
   - A reached Merge makes one `PUT` with the configured method and reads no checks, statuses or reviews, even with a failing check. A protection refusal is `GITHUB_NOT_ALLOWED` with GitHub's message and is not retried. A wrong expected commit is `GITHUB_CONFLICT`.
   - Rolled back to a submitted merge: a landed merge completes without another request; an unlanded one is sent once more; a moved head needs the owner. A lost merge response completes from GitHub.
 - **Not verified:** real GitHub checks and merges (the release prerequisite from 22), and GitHub events that expedite polls (prompt 24).
+
+## GitHub in the desktop app (22 and 23)
+
+Status: the desktop part of prompts 22 and 23, which completes them, except for the real-GitHub check. Date: 2026-11-10.
+
+- **Changed:**
+  - **Settings › Projects › GitHub** walks the owner through creating and installing their own App, then registers it from the App ID, a private key in a monospace field and an optional webhook secret in a password field. A GitHub Enterprise address can be given. The secret fields clear as soon as their values leave for main.
+  - Once registered, it shows the App, when its key was last verified, the private key and webhook secret as Configured or Missing, the webhook URL on this server with a copy button and a note that every project shares it, "Check again", and replacement of the key or secret.
+  - A project picks a repository from the App's active installations and connects. The connection shows its verification, installation and default branch, with Verify and Disconnect, and lists which nodes lack which permissions. "Use GitHub" joins the action permissions.
+  - The picker and canvas gain the six GitHub nodes, each with its own form:
+    - Get finds a pull request by number or by branch.
+    - Create and Update fill in their fields, with value pickers.
+    - Verify and Wait take a commit, check names, and for Wait an interval and a deadline in minutes.
+    - Merge takes a method, an optional expected commit and the commit text, with a warning that it merges as soon as it is reached.
+  - Push chooses between your Git credentials and the project's App. Diagnostics catch a branch name given as a commit, a non-numeric pull request number, and a Get with neither number nor branch.
+  - On a run, a pull request step shows its number, repository, state, branches and link. A checks step shows the commit, the counts and each check. A merge shows its method and merge commit. A polling step shows its reads so far, last state, next read and deadline. The run bar says when the checks are read again.
+  - The bridge adds `data.github`, `data.githubApps` and `github.register|rotate|refresh|connect|verify|disconnect`, checked in main and preload; `pnpm smoke` passes with the new allow-lists.
+- **Verified:**
+  - `tools/capture.mjs` against a real server and the server tests' fake GitHub, run as `test/fixtures/github-fake-serve.ts`. The App is registered and the project connected through the CLI, and a published workflow (create pull request, wait for checks, merge) is waiting on an in-progress check.
+  - In the screenshots, Settings shows the App, Configured secrets, the webhook URL and the connected `acme/widgets` with no missing permissions; the page contains neither the key nor the webhook secret. The run is Waiting with the poll in the run bar and inspector, and the pull request step shows `#1 in acme/widgets` with its operation. The Merge and Wait forms show their values.
+  - Unit tests cover the new diagnostics.
+- **Not verified:** a real GitHub App, installation and repository (release prerequisite).
