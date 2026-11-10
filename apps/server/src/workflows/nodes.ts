@@ -35,6 +35,9 @@ const schema = { anyOf: [{ type: 'object' }, { type: 'boolean' }] };
 const envName = { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]{0,127}$' };
 const headerName = { type: 'string', pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,100}$" };
 const credentialRef = { type: 'string', pattern: credentialName.source };
+// A pull request number, or a `{{binding}}` that resolves to one when the step runs.
+const prNumber = { type: 'string', minLength: 1, maxLength: 200 };
+const branchText = { type: 'string', minLength: 1, maxLength: 250 };
 const variableKey = { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_-]{0,63}$' };
 const requirement = { enum: ['required', 'optional', 'off'] };
 const interaction = {
@@ -441,7 +444,63 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
         remote: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' },
         branch: { type: 'string', minLength: 1, maxLength: 250 },
         remoteBranch: { type: 'string', minLength: 1, maxLength: 250 },
+        // `github_app` pushes to the project's GitHub repository with the App's token.
+        transport: { enum: ['host', 'github_app'] },
         timeoutMs: { type: 'integer', minimum: 1000, maximum: 60 * 60 * 1000 },
+      },
+    },
+  },
+  {
+    // Reads a pull request of the project's GitHub repository, by number or head branch.
+    type: 'github_get_pr',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { number: prNumber, head: branchText },
+      oneOf: [
+        { required: ['number'], properties: { number: prNumber } },
+        { required: ['head'], properties: { head: branchText } },
+      ],
+    },
+  },
+  {
+    type: 'github_create_pr',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['head', 'title'],
+      properties: {
+        head: branchText,
+        // The repository's default branch when absent.
+        base: branchText,
+        title: { type: 'string', minLength: 1, maxLength: 1000 },
+        body: { type: 'string', maxLength: 60000 },
+        draft: { type: 'boolean' },
+      },
+    },
+  },
+  {
+    type: 'github_update_pr',
+    version: 1,
+    ports: ['success', 'error'],
+    permission: 'github',
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['number'],
+      minProperties: 2,
+      properties: {
+        number: prNumber,
+        title: { type: 'string', minLength: 1, maxLength: 1000 },
+        body: { type: 'string', maxLength: 60000 },
+        base: branchText,
+        state: { enum: ['open', 'closed'] },
       },
     },
   },

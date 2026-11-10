@@ -29,6 +29,12 @@ const options = {
   goal: { type: 'string' },
   allow: { type: 'string' },
   deny: { type: 'string' },
+  'app-id': { type: 'string' },
+  'key-file': { type: 'string' },
+  host: { type: 'string' },
+  'webhook-secret': { type: 'boolean' },
+  installation: { type: 'string' },
+  repository: { type: 'string' },
 } as const;
 
 // A credential value comes from standard input, so it never appears in a command line or history.
@@ -395,6 +401,82 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
             {},
           )
         )['credential'],
+      );
+    case 'github apps':
+      return print((await get('/api/v0/admin/github/apps'))['apps']);
+    case 'github register': {
+      const appId = need(values['app-id'], '--app-id');
+      if (!/^[1-9]\d*$/.test(appId)) throw invalid('--app-id must be a positive integer.');
+      const body: Record<string, unknown> = {
+        appId: Number(appId),
+        privateKey: await readFile(resolve(need(values['key-file'], '--key-file')), 'utf8'),
+      };
+      if (values.host) body['host'] = values.host;
+      if (values['webhook-secret']) body['webhookSecret'] = await readSecret();
+      return print((await send('POST', '/api/v0/admin/github/apps', body))['app']);
+    }
+    case 'github rotate': {
+      const body: Record<string, unknown> = {};
+      if (values['key-file'])
+        body['privateKey'] = await readFile(resolve(values['key-file']), 'utf8');
+      if (values['webhook-secret']) body['webhookSecret'] = await readSecret();
+      if (Object.keys(body).length === 0)
+        throw invalid('Give --key-file, --webhook-secret or both.');
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/github/apps/${encodeURIComponent(need(target, 'APP'))}/rotate`,
+            body,
+          )
+        )['app'],
+      );
+    }
+    case 'github refresh':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/github/apps/${encodeURIComponent(need(target, 'APP'))}/refresh`,
+            {},
+          )
+        )['app'],
+      );
+    case 'github connect': {
+      const repository = need(values.repository, '--repository');
+      if (!/^[1-9]\d*$/.test(repository))
+        throw invalid('--repository is the numeric repository ID.');
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/github`,
+            {
+              installationId: need(values.installation, '--installation'),
+              repositoryId: Number(repository),
+            },
+          )
+        )['connection'],
+      );
+    }
+    case 'github status':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/github`,
+          )
+        )['connection'],
+      );
+    case 'github verify':
+    case 'github disconnect':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/projects/${encodeURIComponent(need(values.project, '--project'))}/github/${action}`,
+            {},
+          )
+        )['connection'],
       );
     case 'workspace list':
       return print(

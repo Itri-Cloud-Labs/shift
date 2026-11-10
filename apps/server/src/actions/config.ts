@@ -1,6 +1,8 @@
 import { ShiftError } from '../domain/errors.js';
 import type { Json } from '../harness/types.js';
 import { renderTemplate, renderText } from '../runs/bindings.js';
+import type { GitHubConfig } from '../github/actions.js';
+import { githubTypes } from '../github/permissions.js';
 
 // Action configurations as frozen when their execution is prepared (specification 6.1): bindings
 // are applied once, so a retry or a recovery repeats exactly the recorded request. Credentials stay
@@ -66,11 +68,13 @@ export interface GitConfig {
   remote?: string;
   branch?: string;
   remoteBranch?: string;
+  // Push to the project's GitHub repository with the App's installation token.
+  transport?: 'host' | 'github_app';
   timeoutMs?: number;
   safeToRetry: false;
 }
 
-export type ActionConfig = CommandConfig | HttpConfig | ScriptConfig | GitConfig;
+export type ActionConfig = CommandConfig | HttpConfig | ScriptConfig | GitConfig | GitHubConfig;
 
 export const gitTypes = new Set([
   'git_status',
@@ -80,7 +84,7 @@ export const gitTypes = new Set([
   'git_push',
 ]);
 export const gitReads = new Set(['git_status', 'git_diff']);
-export const actionTypes = new Set(['command', 'http', 'script', ...gitTypes]);
+export const actionTypes = new Set(['command', 'http', 'script', ...gitTypes, ...githubTypes]);
 // Actions that work in the run's own worktree.
 export const workspaceTypes = new Set(['command', ...gitTypes]);
 
@@ -222,12 +226,40 @@ export function freezeAction(
     if (Array.isArray(authored['paths'])) config.paths = authored['paths'] as string[];
     if (authored['allowEmpty'] === true) config.allowEmpty = true;
     if (typeof authored['remote'] === 'string') config.remote = authored['remote'];
+    if (authored['transport'] === 'github_app') config.transport = 'github_app';
     for (const field of ['name', 'message', 'branch', 'remoteBranch'] as const) {
       const value = text(field);
       if (value !== undefined) config[field] = value;
     }
     if (type === 'git_commit' && !config.message?.trim())
       throw new ShiftError('INVALID_ARGUMENT', 'The commit message is empty.', 422);
+    return config;
+  }
+  if (githubTypes.has(type)) {
+    const config: GitHubConfig = { action: type as GitHubConfig['action'], safeToRetry: false };
+    for (const field of ['head', 'base', 'title', 'body'] as const) {
+      const value = authored[field];
+      if (typeof value !== 'string') continue;
+      const rendered = renderText(value, bindings);
+      if (rendered.includes('\0'))
+        throw new ShiftError('INVALID_ARGUMENT', `${field} contains NUL.`, 422);
+      if (field !== 'body' && !rendered.trim())
+        throw new ShiftError('INVALID_ARGUMENT', `${field} is empty.`, 422);
+      config[field] = field === 'body' ? rendered : rendered.trim();
+    }
+    if (typeof authored['number'] === 'string') {
+      const rendered = renderText(authored['number'], bindings).trim();
+      if (!/^[1-9][0-9]{0,9}$/.test(rendered))
+        throw new ShiftError(
+          'INVALID_ARGUMENT',
+          `The pull request number ${JSON.stringify(rendered.slice(0, 40))} is not a number.`,
+          422,
+        );
+      config.number = Number(rendered);
+    }
+    if (authored['draft'] === true) config.draft = true;
+    if (authored['state'] === 'open' || authored['state'] === 'closed')
+      config.state = authored['state'];
     return config;
   }
   throw new ShiftError('UNSUPPORTED_NODE', `${type} is not an action.`, 422);

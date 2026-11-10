@@ -30,6 +30,9 @@ import type {
   CredentialList,
   CredentialResponse,
   ProjectPermissionsResponse,
+  GitHubAppList,
+  GitHubAppResponse,
+  GitHubConnectionResponse,
   SessionList,
   SessionResponse,
   InvocationResponse,
@@ -80,6 +83,9 @@ export const validateArtifactResponse: Validator<ArtifactResponse>;
 export const validateCredentialList: Validator<CredentialList>;
 export const validateCredentialResponse: Validator<CredentialResponse>;
 export const validateProjectPermissionsResponse: Validator<ProjectPermissionsResponse>;
+export const validateGitHubAppList: Validator<GitHubAppList>;
+export const validateGitHubAppResponse: Validator<GitHubAppResponse>;
+export const validateGitHubConnectionResponse: Validator<GitHubConnectionResponse>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
 export const validateInvocationResponse: Validator<InvocationResponse>;

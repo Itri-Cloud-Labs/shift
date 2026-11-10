@@ -276,7 +276,7 @@ Commands and scripts run in their own systemd scope, so a timeout, a cancellatio
 
 **Credentials** are project secrets set with `shift credential set --project <id> --name <name>`, which reads the value from standard input. A command names them in `credentials` (`{"ENV_NAME": "<credential>"}`), a request in `credentialHeaders` (`{"Authorization": {"credential": "<credential>", "prefix": "Bearer "}}`). Values are injected when the action runs and are removed from captured output where they appear verbatim; they are never stored in the run, its operations, receipts or events. A run can use the credentials the project had when it started, unless they were revoked since (`CREDENTIAL_UNAVAILABLE`).
 
-**Permissions.** `shift project permissions <id> --deny command,http,script,git,git_push` stops those actions in the project, including in runs that already started (`ACTION_NOT_PERMITTED`); `--allow` lifts it. Everything is allowed until denied.
+**Permissions.** `shift project permissions <id> --deny command,http,script,git,git_push,github` stops those actions in the project, including in runs that already started (`ACTION_NOT_PERMITTED`); `--allow` lifts it. Everything is allowed until denied.
 
 **Effects and uncertainty.** Each run of an action is an operation, listed in the execution's `operations`. Its arguments are recorded with a hash before anything happens, and it is marked submitted right before the process starts or the request is sent. A known outcome is stored before the run moves on and is never repeated: after a restart it is reported again. An operation that was submitted when Shift stopped has an unknown outcome. Shift then stops whatever is left of it and puts the run in `NEEDS_HUMAN` with `EFFECT_UNCERTAIN`, unless repeating it is safe: an HTTP `GET`, `HEAD` or `OPTIONS`, or a node with `safeToRetry`, which you set when running it twice does no harm, such as a test command. Those start again as a new operation. A request that never left the machine, and a server error on a safe read, follow the node's [automatic retries](#automatic-retries). `retry` sets the uncertain operation aside, recording that you decided, and runs a new one; `complete` records the data you verified.
 
@@ -287,9 +287,31 @@ Git nodes work in the run's worktree, never in the project's own checkout. The w
 - **Status and diff** are fresh observations every time they run, and record no operation. Status returns `baseCommit`, `head`, `branch` (null while detached), `clean` and `entries` (`path`, `index` and `worktree` codes from `git status --porcelain`). Diff returns the patch up to `maxBytes` (default 256 KiB), `files` with added and deleted line counts, and `untracked` paths, which a diff does not show.
 - **Create Branch** refuses names Git rejects, names starting with `-`, and existing branches (`INVALID_BRANCH`, `BRANCH_EXISTS`). Branches live in the project repository's refs, so a name is unique across runs.
 - **Commit** stages everything (`git add --all`) and writes the commit with Git's plumbing at a recorded time, so its ID is known before the branch moves. It fails with `NOTHING_TO_COMMIT` when nothing changed, `GIT_IDENTITY_MISSING` without `user.name` and `user.email`, and `GIT_HEAD_MOVED` if HEAD changed while it ran. Commit hooks and signing do not run.
-- **Push** pushes the branch's commit with your own Git credentials: your SSH agent or credential helper. It pushes to the remote's push URL (`remote.<name>.pushurl` when set), and checks the result there; a remote with several push URLs is refused (`MULTIPLE_PUSH_URLS`). A push URL that holds a password or token is refused (`REMOTE_URL_HAS_CREDENTIALS`), and Shift never puts one there. A push the remote refuses, for example because it has commits the branch lacks, fails with `GIT_PUSH_REJECTED`; Shift never forces.
+- **Push** pushes the branch's commit with your own Git credentials: your SSH agent or credential helper. It pushes to the remote's push URL (`remote.<name>.pushurl` when set), and checks the result there; a remote with several push URLs is refused (`MULTIPLE_PUSH_URLS`). A push URL that holds a password or token is refused (`REMOTE_URL_HAS_CREDENTIALS`), and Shift never puts one there. A push the remote refuses, for example because it has commits the branch lacks, fails with `GIT_PUSH_REJECTED`; Shift never forces. With `transport: "github_app"`, Push sends to the project's [GitHub repository](#github-nodes) over HTTPS with the App's installation token instead (see below).
 
 Every Git mutation is an operation like any [action](#actions). Its arguments and what it expects are recorded before it changes anything, so after a crash Shift checks what happened instead of guessing. A commit whose recorded ID is HEAD on the recorded branch is done; one whose parent is still HEAD on that branch is made exactly as recorded. A push whose commit is on the remote is done; one whose remote branch is unchanged is pushed again. Anything else, such as a commit made by hand in the worktree or a remote branch someone else moved, puts the run in `NEEDS_HUMAN` with `EFFECT_UNCERTAIN`. The step's output keeps what Git reported then; later changes to the repository never alter it.
+
+## GitHub nodes
+
+GitHub nodes use your own GitHub App, registered once on the server and bound to the project's repository (`shift github register`, then `shift github connect`; see [GitHub](server-api.md#github)). A run records which connection it started with; the App's keys and tokens are read only when a step runs, so rotating them needs no workflow edit. A start fails with `GITHUB_NOT_CONNECTED`, `GITHUB_NOT_VERIFIED` or `GITHUB_PERMISSION_MISSING` when a node needs a connection the project lacks, and a step fails the same way if the connection was removed after the run started. Each node asks only for what it uses, and its installation token is minted for exactly the bound repository and those permissions:
+
+| Node                                    | Installation permissions           |
+| --------------------------------------- | ---------------------------------- |
+| Get Pull Request                        | metadata read, pull requests read  |
+| Create / Update Pull Request            | metadata read, pull requests write |
+| Git Push with `transport: "github_app"` | metadata read, contents write      |
+
+- **Get Pull Request** reads one by `number` (text, so it can be a `{{binding}}`) or by `head` branch. Several pull requests from one branch fail with `PR_AMBIGUOUS` and their numbers.
+- **Create Pull Request** opens one from `head` into `base` (the repository's default branch when absent), with `title`, `body` and `draft`. The body ends with a hidden marker naming the step's operation.
+- **Update Pull Request** sets any of `title`, `body`, `base` and `state` (`open` or `closed`) on `number`.
+
+Each returns the pull request: `repositoryId`, `repository`, `number`, `id`, `url`, `state`, `merged`, `draft`, `title`, `head` (`ref`, `sha`, `repositoryId`), `base` (`ref`, `sha`) and `mergeCommitSha`. The repository is addressed by its numeric ID, so a rename or transfer is followed. What GitHub refuses, such as a missing permission (`GITHUB_FORBIDDEN`) or an existing pull request for the same branches (`GITHUB_REJECTED`), is an ordinary error on the error port.
+
+Create and Update are operations like any [action](#actions). After a crash, or when GitHub's answer is lost, Shift looks for the marker among the branch's pull requests: one match is the step's result, none means it was never created and the same request is sent again (GitHub refuses a second open pull request for the same branches), and several put the run in `NEEDS_HUMAN`. An update is recognized when the pull request already has its values, and is sent again otherwise.
+
+**App-backed push.** The token reaches Git through a credential helper for that one command, read from its environment; `credential.helper=` first clears your own helpers, so none is asked or told to store it. No token enters the URL, the arguments, the repository configuration, the run, its operations or the logs. The push goes to `<host>/<owner>/<name>.git` of the bound repository.
+
+HTTP nodes cannot use the App's keys or tokens: they are not project credentials.
 
 ## Workspaces
 
@@ -469,4 +491,4 @@ Publishing refuses these, so a document never silently ignores them:
 - Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 
-GitHub nodes, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
+Checks, merges, GitHub event triggers, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).

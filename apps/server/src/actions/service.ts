@@ -35,6 +35,7 @@ import {
   gitDiff,
   gitIdentity,
   gitStatus,
+  appTransport,
   hostTransport,
   performGit,
   planGit,
@@ -42,6 +43,22 @@ import {
   type GitContext,
 } from './git.js';
 import { sendRequest } from './http.js';
+import { GitHubError } from '../github/api.js';
+import {
+  getPr,
+  githubFailure,
+  githubIdentity,
+  performPr,
+  planPr,
+  reconcileCreate,
+  reconcileUpdate,
+  resolveRepository,
+  type GitHubConfig,
+  type GitHubContext,
+  type Repo,
+} from '../github/actions.js';
+import type { GitHubIntegration } from '../github/integration.js';
+import { githubTypes, nodePermissions } from '../github/permissions.js';
 import { redact, type Outcome } from './outcome.js';
 import type { ProcessResult, ProcessRunner } from './process.js';
 
@@ -60,6 +77,7 @@ export interface ActionServiceOptions {
   workspaces?: { ensureReady(id: string): Promise<{ path: string }> };
   logger: Logger;
   fetch?: typeof fetch;
+  github?: GitHubIntegration;
 }
 
 // The parts of the server's environment a command inherits: enough to find the owner's tools and
@@ -166,7 +184,10 @@ export class ActionService {
       if (!(error instanceof ShiftError)) throw error;
       return fail(actionError(error.code, error.message, 'permission'));
     }
-    if (gitTypes.has(config.action)) return this.#git(claim, config as GitConfig, signal);
+    if (gitTypes.has(config.action))
+      return this.#git(claim, config as GitConfig, signal, projectId, authority);
+    if (githubTypes.has(config.action))
+      return this.#github(claim, config as GitHubConfig, signal, projectId, authority);
     let operation = effects.latest(claim.executionId, config.action);
     // A known outcome is final for the operation: a recovered attempt reports it, never repeats it.
     // An automatic retry after a safe failure starts a new operation.
@@ -229,8 +250,14 @@ export class ActionService {
   // are planned first: what they will change and what they expect to find becomes the
   // operation's arguments and evidence, so recovery decides from the repository and the remote
   // what an interrupted one did instead of guessing.
-  async #git(claim: Claim, config: GitConfig, signal: AbortSignal): Promise<void> {
-    const { repository, effects, runner } = this.#options;
+  async #git(
+    claim: Claim,
+    config: GitConfig,
+    signal: AbortSignal,
+    projectId: string | null,
+    authority: Authority,
+  ): Promise<void> {
+    const { repository, runner } = this.#options;
     if (!this.#options.workspaces)
       throw new ShiftError('WORKSPACE_UNAVAILABLE', 'Run workspaces are not configured.', 503);
     let context: GitContext;
@@ -247,6 +274,21 @@ export class ActionService {
         signal,
         ...(runner ? { runner } : {}),
       };
+      if (config.action === 'git_push' && config.transport === 'github_app') {
+        // The project's GitHub repository, with a token that can write only its contents.
+        const target = await this.#githubContext(projectId, authority, 'git_push', signal);
+        const repo = await resolveRepository(target);
+        const { token } = await target.api.token(
+          target.binding.keys,
+          target.binding.installationId,
+          { repositoryIds: [repo.id], permissions: target.binding.permissions },
+        );
+        context.transport = appTransport(token);
+        context.remote = {
+          name: `github:${repo.owner}/${repo.name}`,
+          url: `${target.binding.keys.host}/${repo.owner}/${repo.name}.git`,
+        };
+      }
     } catch (error) {
       if (!(error instanceof ShiftError)) throw error;
       return repository.completeExecution(claim, {
@@ -276,8 +318,48 @@ export class ActionService {
           config.action === 'git_status' ? gitStatus(config, context) : gitDiff(config, context),
         ),
       );
-    const identity = gitIdentity(config);
-    let operation = effects.latest(claim.executionId, config.action);
+    const unitOf = (operation: Operation) =>
+      config.action === 'git_push' && runner ? { unit: runner.unit(operation.id) } : {};
+    return this.#mutate(claim, config.action, gitIdentity(config), guarded, finish, {
+      plan: () => planGit(config, context),
+      perform: (operation) =>
+        performGit(config, context, operation.args as Record<string, Json>, operation.evidence),
+      reconcile: async (operation) => {
+        const unit = operation.evidence['unit'];
+        if (typeof unit === 'string' && runner) await runner.kill(unit);
+        return reconcileGit(
+          config,
+          context,
+          operation.args as Record<string, Json>,
+          operation.evidence,
+        );
+      },
+      submitted: unitOf,
+    });
+  }
+
+  // A mutation whose effect can be read back (Git, GitHub). It is planned first: what it will
+  // change and what it expects to find become the operation's arguments and evidence, so recovery
+  // decides from what the repository or the provider shows what an interrupted one did, instead of
+  // guessing. `redo` from reconciliation proves it had no effect: it is performed again as recorded.
+  async #mutate(
+    claim: Claim,
+    action: string,
+    identity: Json,
+    guarded: (work: () => Promise<Outcome>) => Promise<Outcome>,
+    finish: (outcome: Outcome, operation?: Operation) => void,
+    steps: {
+      plan(): Promise<
+        | { kind: 'ready'; args: Record<string, Json>; evidence: Record<string, Json> }
+        | { kind: 'done'; outcome: Outcome }
+      >;
+      perform(operation: Operation): Promise<Outcome>;
+      reconcile(operation: Operation): Promise<Outcome | { kind: 'redo' }>;
+      submitted?(operation: Operation): Record<string, Json>;
+    },
+  ): Promise<void> {
+    const { repository, effects } = this.#options;
+    let operation = effects.latest(claim.executionId, action);
     if (operation?.state === 'SUCCEEDED')
       return this.#complete(claim, operation, (operation.result as { data: Json }).data);
     if (operation?.state === 'FAILED') {
@@ -300,25 +382,17 @@ export class ActionService {
       return;
     }
     if (operation?.state === 'SUBMITTED' || operation?.state === 'UNKNOWN') {
-      const unit = operation.evidence['unit'];
-      if (typeof unit === 'string' && runner) await runner.kill(unit);
       const recorded = operation;
       const observed = await guarded(async () => {
-        const result = await reconcileGit(
-          config,
-          context,
-          recorded.args as Record<string, Json>,
-          recorded.evidence,
-        );
+        const result = await steps.reconcile(recorded);
         return result.kind === 'redo' ? ({ kind: 'stopped' } as Outcome) : (result as Outcome);
       });
-      // A redo performs exactly the recorded operation again; anything else settles it.
       if (observed.kind !== 'stopped') return finish(observed, operation);
       operation = effects.adopt(claim, operation, operation.args);
     }
     if (!operation) {
       const plan = await guarded(async () => {
-        const planned = await planGit(config, context);
+        const planned = await steps.plan();
         return planned.kind === 'done'
           ? planned.outcome
           : ({ kind: 'succeeded', data: planned as unknown as Json } as Outcome);
@@ -328,36 +402,106 @@ export class ActionService {
         args: Record<string, Json>;
         evidence: Record<string, Json>;
       };
-      operation = effects.intend(claim, config.action, { ...args, config: identity }, evidence);
+      operation = effects.intend(claim, action, { ...args, config: identity }, evidence);
     } else if (operation.state === 'INTENDED') {
       operation = effects.adopt(claim, operation, operation.args);
     }
-    const unit = runner ? runner.unit(operation.id) : null;
     operation = effects.submit(claim, operation.id, {
       submittedAt: Date.now(),
-      ...(config.action === 'git_push' && unit ? { unit } : {}),
+      ...(steps.submitted?.(operation) ?? {}),
     });
     const submitted = operation;
     let outcome: Outcome;
     try {
-      outcome = await performGit(
-        config,
-        context,
-        submitted.args as Record<string, Json>,
-        submitted.evidence,
-      );
+      outcome = await steps.perform(submitted);
     } catch (error) {
       if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
       this.#options.logger.error(
         { runId: claim.runId, code: (error as { code?: string }).code },
-        'A Git action failed after it was submitted.',
+        'A mutation failed after it was submitted.',
       );
       outcome = {
         kind: 'uncertain',
-        explanation: 'Shift lost track of the Git action after it started.',
+        explanation: `Shift lost track of the ${action} after it started.`,
       };
     }
     this.#settle(claim, operation, outcome);
+  }
+
+  async #githubContext(
+    projectId: string | null,
+    authority: Authority,
+    type: string,
+    signal: AbortSignal,
+  ): Promise<GitHubContext> {
+    const github = this.#options.github;
+    if (!github || projectId === null)
+      throw new ShiftError('GITHUB_NOT_CONFIGURED', 'This server has no GitHub integration.', 422);
+    const binding = github.binding(
+      projectId,
+      authority.github?.connectionId ?? null,
+      nodePermissions[type]!,
+    );
+    return { api: github.api, binding, signal };
+  }
+
+  // Pull request nodes. A read observes GitHub afresh on every attempt and records no operation;
+  // a create or update is a reconciled mutation. Failures GitHub reports, such as a missing
+  // permission or a protection rule, are ordinary structured errors.
+  async #github(
+    claim: Claim,
+    config: GitHubConfig,
+    signal: AbortSignal,
+    projectId: string | null,
+    authority: Authority,
+  ): Promise<void> {
+    const { repository } = this.#options;
+    const finish = (outcome: Outcome, operation?: Operation) => {
+      if (operation) return this.#settle(claim, operation, outcome);
+      if (outcome.kind === 'succeeded') return this.#complete(claim, null, outcome.data);
+      if (outcome.kind === 'failed')
+        return repository.completeExecution(claim, { kind: 'failed', error: outcome.error });
+    };
+    const guarded = async (work: () => Promise<Outcome>): Promise<Outcome> => {
+      try {
+        return await work();
+      } catch (error) {
+        if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+        if (error instanceof GitHubError) return githubFailure(error);
+        if (error instanceof ShiftError)
+          return {
+            kind: 'failed',
+            error: actionError(
+              error.code,
+              error.message,
+              error.status === 403 ? 'permission' : 'input',
+            ),
+          };
+        throw error;
+      }
+    };
+    let context: GitHubContext | undefined;
+    let repo: Repo | undefined;
+    const prepared = await guarded(async () => {
+      context = await this.#githubContext(projectId, authority, config.action, signal);
+      repo = await resolveRepository(context);
+      return { kind: 'succeeded', data: null };
+    });
+    if (prepared.kind !== 'succeeded') return finish(prepared);
+    const target = context!;
+    const resolved = repo!;
+    if (config.action === 'github_get_pr')
+      return finish(await guarded(() => getPr(config, target, resolved)));
+    const identity = githubIdentity(config);
+    return this.#mutate(claim, config.action, identity, guarded, finish, {
+      plan: async () => planPr(config, resolved),
+      perform: (operation) =>
+        performPr(config, target, resolved, operation.args as Record<string, Json>, operation.id),
+      reconcile: (operation) =>
+        config.action === 'github_create_pr'
+          ? reconcileCreate(target, resolved, operation.args as Record<string, Json>, operation.id)
+          : reconcileUpdate(target, resolved, operation.args as Record<string, Json>),
+    });
   }
 
   // Settles an operation an earlier process or attempt left after submitting it. Its processes are

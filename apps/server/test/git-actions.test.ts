@@ -4,9 +4,17 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { Json } from '../src/harness/types.js';
-import { openStore } from '../src/persistence/store.js';
-import { local, run, settled, setup, skip, view, type Env } from './action-helpers.js';
-import { FakeClock } from './helpers.js';
+import {
+  chain,
+  interrupt,
+  local,
+  run,
+  settled,
+  setup,
+  skip,
+  step,
+  type Env,
+} from './action-helpers.js';
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -23,30 +31,6 @@ async function gitSetup(): Promise<Env & { remote: string }> {
   return Object.assign(env, { remote });
 }
 
-// start -> each step in order -> end. Steps are [id, type, config, bindings?].
-function chain(steps: Array<[string, string, Json, Record<string, Json>?]>): Json {
-  const ids = ['start', ...steps.map(([id]) => id), 'end'];
-  return {
-    nodes: [
-      { id: 'start', type: 'manual_trigger' },
-      ...steps.map(([id, type, config, bindings]) => ({
-        id,
-        type,
-        config,
-        ...(bindings ? { bindings } : {}),
-      })),
-      { id: 'end', type: 'end' },
-    ],
-    connections: ids.slice(1).map((to, index) => ({
-      id: `c${index}`,
-      fromNodeId: ids[index]!,
-      fromPort: 'success',
-      toNodeId: to,
-      toPort: 'input',
-    })),
-  } as Json;
-}
-
 const edit: [string, string, Json] = [
   'edit',
   'command',
@@ -55,16 +39,6 @@ const edit: [string, string, Json] = [
     script: 'echo "gamma" >> notes.txt && mkdir -p docs && echo "new" > docs/added.md',
   },
 ];
-
-type Step = {
-  node: string;
-  state: string;
-  output: { data: Record<string, Json> } | null;
-  error: { code: string; message: string } | null;
-  operations: Array<{ state: string; evidence: Record<string, Json>; resolution: Json }>;
-};
-const step = (env: Env, id: string, node: string) =>
-  (view(env, id).executions as unknown as Step[]).filter((entry) => entry.node === node).at(-1)!;
 
 test(
   'edits become a named branch, a commit and a push without touching the source checkout',
@@ -267,42 +241,6 @@ test(
 
 // Rolls a finished run back to the moment its `node` step had submitted its operation and Shift
 // died, then lets `change` alter the repository as the crash left it.
-async function interrupt(
-  env: Env,
-  id: string,
-  node: string,
-  change: (workspace: string, evidence: Record<string, Json>) => void,
-): Promise<Env> {
-  const evidence = step(env, id, node).operations[0]!.evidence;
-  const workspace = (view(env, id) as unknown as { workspace: { path: string } }).workspace.path;
-  await env.close();
-  const store = await openStore({ stateDirectory: env.state, clock: new FakeClock() });
-  const db = store.db;
-  db.pragma('foreign_keys = OFF');
-  const execution = db
-    .prepare('SELECT id, sequence FROM node_executions WHERE run_id = ? AND node_id = ?')
-    .get(id, node) as { id: string; sequence: number };
-  db.prepare('DELETE FROM node_executions WHERE run_id = ? AND sequence > ?').run(
-    id,
-    execution.sequence,
-  );
-  db.prepare(
-    "UPDATE node_executions SET state = 'RUNNING', output_json = NULL, selected_port = NULL, finished_at = NULL WHERE id = ?",
-  ).run(execution.id);
-  db.prepare(
-    "UPDATE node_attempts SET state = 'RUNNING', finished_at = NULL, worker_generation = 'dead' WHERE execution_id = ?",
-  ).run(execution.id);
-  db.prepare(
-    "UPDATE effect_operations SET state = 'SUBMITTED', result_json = NULL WHERE execution_id = ?",
-  ).run(execution.id);
-  db.prepare(
-    "UPDATE runs SET state = 'RUNNING', outcome_json = NULL, finished_at = NULL WHERE id = ?",
-  ).run(id);
-  store.close();
-  change(workspace, evidence);
-  return setup(env.state);
-}
-
 const commitFlow = chain([
   edit,
   ['branch', 'git_create_branch', { name: 'work' }],

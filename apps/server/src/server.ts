@@ -13,6 +13,8 @@ import { ReadinessState } from './lifecycle/readiness.js';
 import { openStore, type Store } from './persistence/store.js';
 import { createHttpServer } from './http.js';
 import { Credentials } from './actions/credentials.js';
+import { GitHubApi } from './github/api.js';
+import { GitHubIntegration } from './github/integration.js';
 import { ProcessRunner } from './actions/process.js';
 import { SystemdScopes } from './harness/containment.js';
 import { namespaceId, namespaceLayout } from './harness/opencode/namespace.js';
@@ -206,6 +208,13 @@ export async function startServer(
     const secrets = await SecretBox.open(state.path);
     const registry = new DeviceRegistry(store.db, clock, secrets);
     const credentials = new Credentials(store.db, clock, secrets, receipts);
+    const github = new GitHubIntegration(
+      store.db,
+      clock,
+      secrets,
+      receipts,
+      new GitHubApi({ clock }),
+    );
     // Command and script processes run in scopes named after this state directory, so a start
     // stops only the ones its own earlier process left.
     const runner = new ProcessRunner(
@@ -235,6 +244,7 @@ export async function startServer(
       adapter: new OpenCodeAdapter(runtime),
       artifactRoot,
       credentials,
+      github,
       runner,
       ...(defaultModel === undefined ? {} : { defaultModel }),
     });
@@ -252,6 +262,7 @@ export async function startServer(
       definitions: { service: definitionService, repository: definitions },
       workspaces: workspaceService,
       credentials,
+      github,
       devices,
       receipts,
       events,
@@ -272,6 +283,7 @@ export async function startServer(
       definitions: { service: definitionService, repository: definitions },
       workspaces: workspaceService,
       credentials,
+      github,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {

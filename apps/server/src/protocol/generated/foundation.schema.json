@@ -2542,10 +2542,290 @@
               "type": "array",
               "uniqueItems": true,
               "items": {
-                "enum": ["command", "http", "script", "git", "git_push"]
+                "enum": ["command", "http", "script", "git", "git_push", "github"]
               }
             }
           }
+        }
+      }
+    },
+    "GitHubPermissions": {
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": {
+        "enum": ["read", "write", "admin"]
+      }
+    },
+    "GitHubRepository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "name", "defaultBranch", "private"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "owner": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "defaultBranch": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "private": {
+          "type": "boolean"
+        }
+      }
+    },
+    "GitHubInstallation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "installationId",
+        "account",
+        "accountType",
+        "state",
+        "permissions",
+        "repositories",
+        "verifiedAt"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "installationId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "account": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "accountType": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "state": {
+          "enum": ["ACTIVE", "SUSPENDED", "REMOVED"]
+        },
+        "permissions": {
+          "$ref": "#/$defs/GitHubPermissions"
+        },
+        "repositories": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/GitHubRepository"
+          }
+        },
+        "verifiedAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "GitHubApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "appId",
+        "host",
+        "slug",
+        "name",
+        "privateKey",
+        "webhookSecret",
+        "webhookPath",
+        "verifiedAt",
+        "revision",
+        "installations"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "appId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "host": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "slug": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "name": {
+          "type": ["string", "null"],
+          "maxLength": 200
+        },
+        "privateKey": {
+          "const": "configured"
+        },
+        "webhookSecret": {
+          "enum": ["configured", "missing"]
+        },
+        "webhookPath": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "verifiedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "installations": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/GitHubInstallation"
+          }
+        }
+      }
+    },
+    "GitHubAppList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "apps"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "apps": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/GitHubApp"
+          }
+        }
+      }
+    },
+    "GitHubAppResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "app"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "app": {
+          "$ref": "#/$defs/GitHubApp"
+        }
+      }
+    },
+    "GitHubConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "projectId",
+        "appId",
+        "installationId",
+        "repository",
+        "verifiedAt",
+        "revision",
+        "diagnostics"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "projectId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "appId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "installationId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "repository": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "owner", "name", "defaultBranch"],
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "owner": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "defaultBranch": {
+              "type": "string",
+              "maxLength": 300
+            }
+          }
+        },
+        "verifiedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["node", "missing"],
+            "properties": {
+              "node": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "missing": {
+                "$ref": "#/$defs/GitHubPermissions"
+              }
+            }
+          }
+        }
+      }
+    },
+    "GitHubConnectionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "connection"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "connection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GitHubConnection"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

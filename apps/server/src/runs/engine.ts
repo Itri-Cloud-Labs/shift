@@ -15,6 +15,9 @@ import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
 import { actionTypes, freezeAction, workspaceTypes } from '../actions/config.js';
+import { levels, type Permissions } from '../github/api.js';
+import type { GitHubIntegration } from '../github/integration.js';
+import { requiredPermissions } from '../github/permissions.js';
 import type { Credentials } from '../actions/credentials.js';
 import { EffectStore } from '../actions/effects.js';
 import type { ProcessRunner } from '../actions/process.js';
@@ -50,6 +53,8 @@ export interface RunEngineOptions {
   credentials?: Credentials;
   runner?: ProcessRunner;
   fetch?: typeof fetch;
+  // The owner's GitHub App and project repository bindings, for GitHub nodes.
+  github?: GitHubIntegration;
   maxActiveAgents?: number;
   pollIntervalMs?: number;
 }
@@ -201,6 +206,7 @@ export class RunEngine {
       ...(options.credentials ? { credentials: options.credentials } : {}),
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.github ? { github: options.github } : {}),
     });
   }
 
@@ -330,6 +336,7 @@ export class RunEngine {
       const inputSchema = (entry.config as { inputSchema?: Json }).inputSchema;
       const invalid = inputSchema === undefined ? null : checkValue(inputSchema, triggerInput);
       if (invalid) throw new ShiftError('INVALID_INPUT', `Invalid trigger input: ${invalid}`, 422);
+      const github = this.#githubAuthority(project.id, document.nodes);
       const snapshot: RunSnapshot = {
         formatVersion: 2,
         workflowId,
@@ -346,9 +353,12 @@ export class RunEngine {
         defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
         // The run keeps the permissions and credentials it was admitted with; later revocations
         // still apply when an action runs.
-        authority: this.#options.credentials?.authority(project.id) ?? {
-          denied: [],
-          credentials: {},
+        authority: {
+          ...(this.#options.credentials?.authority(project.id) ?? {
+            denied: [],
+            credentials: {},
+          }),
+          ...(github ? { github } : {}),
         },
       };
       const runId = this.repository.createRun(snapshot, triggerInput);
@@ -356,6 +366,32 @@ export class RunEngine {
     });
     this.#pump();
     return response;
+  }
+
+  // The GitHub connection a run starts with, checked now when one of its nodes needs it: a start
+  // fails clearly rather than a step deep into the run. Runs keep the connection's ID; its keys
+  // and tokens are read only when an action runs, so rotating them needs no graph edit.
+  #githubAuthority(
+    projectId: string,
+    nodes: ReadonlyArray<{ type: string; config: Json }>,
+  ): { connectionId: string | null } | null {
+    const required: Permissions = {};
+    for (const node of nodes)
+      for (const [name, level] of Object.entries(requiredPermissions(node.type, node.config) ?? {}))
+        if ((levels[required[name]!] ?? 0) < levels[level]) required[name] = level;
+    const github = this.#options.github;
+    if (!github) {
+      if (Object.keys(required).length > 0)
+        throw new ShiftError(
+          'GITHUB_NOT_CONFIGURED',
+          'This server has no GitHub integration.',
+          422,
+        );
+      return null;
+    }
+    const connectionId = github.current(projectId);
+    if (Object.keys(required).length > 0) github.binding(projectId, connectionId, required);
+    return { connectionId };
   }
 
   // Owner control commands on a run. Each commits with its receipt; a cancellation then stops
