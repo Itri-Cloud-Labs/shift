@@ -4,7 +4,7 @@ import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { GitHubApi } from '../src/github/api.js';
-import { marker } from '../src/github/actions.js';
+import { marker, reconcileCreate } from '../src/github/actions.js';
 import type { Json } from '../src/harness/types.js';
 import {
   actionWorkflow,
@@ -440,6 +440,30 @@ test('a create or update GitHub made before answering 500 is settled from GitHub
     );
     assert.equal(updated.state, 'COMPLETED', JSON.stringify(updated.attention));
     assert.equal(step(env, updated.id, 'act').output!.data['title'], 'Renamed');
+  } finally {
+    await close();
+  }
+});
+
+test('a branch with more pull requests than Shift reads is never treated as fully read', async () => {
+  const { env, fake, close } = await connected();
+  try {
+    for (let index = 0; index < 1001; index++)
+      fake.addPull(9001, { head: 'busy', headSha: 'e'.repeat(40), state: 'closed' });
+    const binding = env.github.binding(env.projectId, env.github.current(env.projectId), {
+      metadata: 'read',
+      pull_requests: 'read',
+    });
+    const context = { api: env.github.api, binding, signal: new AbortController().signal };
+    const repo = { id: 9001, owner: 'acme', name: 'widgets', defaultBranch: 'main' };
+    // Recovery cannot rule out its own pull request among the unread ones: the owner decides.
+    const settledCreate = await reconcileCreate(context, repo, { head: 'busy' }, 'op-1');
+    assert.equal(settledCreate.kind, 'uncertain');
+    const read = await settled(
+      env,
+      await run(env, actionWorkflow('github_get_pr', { head: 'busy' })),
+    );
+    assert.equal(step(env, read.id, 'act').error!.code, 'GITHUB_TOO_MANY_RESULTS');
   } finally {
     await close();
   }

@@ -170,6 +170,8 @@ export async function resolveRepository(context: GitHubContext): Promise<Repo> {
   };
 }
 
+const maxPages = 10;
+
 async function pulls(
   context: GitHubContext,
   repo: Repo,
@@ -177,7 +179,17 @@ async function pulls(
   state: 'open' | 'all',
 ): Promise<ApiPull[]> {
   const found: ApiPull[] = [];
-  for (let page = 1; page <= 10; page++) {
+  for (let page = 1; ; page++) {
+    // A partial list would let recovery miss its own pull request and create another, so a
+    // branch with more than Shift reads is an error, never a guess.
+    if (page > maxPages)
+      throw new GitHubError(
+        'GITHUB_TOO_MANY_RESULTS',
+        `Branch ${head} has more than ${maxPages * 100} pull requests; Shift cannot read them all.`,
+        422,
+        422,
+        false,
+      );
     const batch = await call<ApiPull[]>(
       context,
       'GET /repos/{owner}/{repo}/pulls',
