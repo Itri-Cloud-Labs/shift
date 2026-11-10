@@ -437,7 +437,12 @@ export class FakeGitHub {
     if ((match = /^commits\/([^/]+)\/check-runs$/.exec(rest!)) && method === 'GET') {
       if (!need('checks', 'read')) return forbidden();
       const runs = this.checkRuns.filter((item) => item.head_sha === match![1]);
-      return send(200, { total_count: runs.length, check_runs: runs });
+      const page = Number(url.searchParams.get('page') ?? '1');
+      const perPage = Number(url.searchParams.get('per_page') ?? '30');
+      return send(200, {
+        total_count: runs.length,
+        check_runs: runs.slice((page - 1) * perPage, page * perPage),
+      });
     }
     if ((match = /^commits\/([^/]+)\/status$/.exec(rest!)) && method === 'GET') {
       if (!need('statuses', 'read')) return forbidden();

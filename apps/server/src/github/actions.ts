@@ -10,7 +10,13 @@ import type { Binding } from './integration.js';
 // body, so recovery can find exactly the pull request an interrupted attempt opened: one match
 // is the known result, none means it was never created, and several need the owner.
 
-export type GitHubAction = 'github_get_pr' | 'github_create_pr' | 'github_update_pr';
+export type GitHubAction =
+  | 'github_get_pr'
+  | 'github_create_pr'
+  | 'github_update_pr'
+  | 'github_verify_checks'
+  | 'github_wait_checks'
+  | 'github_merge';
 
 export interface GitHubConfig {
   action: GitHubAction;
@@ -23,6 +29,18 @@ export interface GitHubConfig {
   body?: string;
   draft?: boolean;
   state?: 'open' | 'closed';
+  // Checks: the commit they are read for, and the names that count (all when empty).
+  commit?: string;
+  checks?: string[];
+  // Wait for Checks: when it gives up (fixed when the step was prepared) and how often it reads.
+  deadline?: number;
+  intervalMs?: number;
+  timeoutMs?: number;
+  // Merge.
+  method?: 'merge' | 'squash' | 'rebase';
+  expectedCommit?: string;
+  commitTitle?: string;
+  commitMessage?: string;
   safeToRetry: false;
 }
 
@@ -94,7 +112,19 @@ export function githubFailure(error: GitHubError): Outcome {
 // The part of a mutation's identity that comes from the node: what it was configured to do.
 export function githubIdentity(config: GitHubConfig): Json {
   const identity: Record<string, Json> = {};
-  for (const field of ['number', 'head', 'base', 'title', 'body', 'draft', 'state'] as const)
+  for (const field of [
+    'number',
+    'head',
+    'base',
+    'title',
+    'body',
+    'draft',
+    'state',
+    'method',
+    'expectedCommit',
+    'commitTitle',
+    'commitMessage',
+  ] as const)
     if (config[field] !== undefined) identity[field] = config[field];
   return identity;
 }
