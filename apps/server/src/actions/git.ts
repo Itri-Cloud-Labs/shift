@@ -16,8 +16,8 @@ import type { ProcessRunner } from './process.js';
 const run = promisify(execFile);
 
 // How Git reaches a remote. The host transport uses the owner's own SSH agent and credential
-// helpers; a GitHub App transport (prompt 22) will supply a temporary credential helper instead.
-// Neither may put a token into a URL, an argument or a log.
+// helpers; the GitHub App transport supplies a temporary credential helper instead. Neither may
+// put a token into a URL, an argument, the repository's configuration or a log.
 export interface GitTransport {
   environment(): Record<string, string>;
   configArgs(): string[];
@@ -28,11 +28,33 @@ export const hostTransport: GitTransport = {
   configArgs: () => [],
 };
 
+// Authenticates HTTPS Git with an installation token for this one command. The helper reads the
+// token from the command's environment, so it never appears in arguments, and `credential.helper=`
+// first empties the helper list, so none of the owner's helpers is asked or told to store it.
+export function appTransport(token: string): GitTransport {
+  return {
+    environment: () => ({ SHIFT_GIT_TOKEN: token, GIT_ASKPASS: '', SSH_ASKPASS: '' }),
+    configArgs: () => [
+      '-c',
+      'credential.helper=',
+      '-c',
+      `credential.helper=!f() { test "$1" = get && printf 'username=x-access-token\\npassword=%s\\n' "$SHIFT_GIT_TOKEN"; }; f`,
+      '-c',
+      'credential.interactive=never',
+      '-c',
+      'core.askPass=',
+    ],
+  };
+}
+
 export interface GitContext {
   cwd: string;
   baseCommit: string;
   env: Record<string, string>;
   transport: GitTransport;
+  // Push to this remote instead of a named one of the workspace's, such as the project's GitHub
+  // repository; the URL carries no credentials.
+  remote?: { name: string; url: string };
   runner?: ProcessRunner;
   signal: AbortSignal;
 }
@@ -138,6 +160,7 @@ export function gitIdentity(config: GitConfig): Json {
         remote: config.remote ?? 'origin',
         branch: config.branch ?? null,
         remoteBranch: config.remoteBranch ?? null,
+        ...(config.transport === 'github_app' ? { transport: 'github_app' } : {}),
       };
     default:
       return null;
@@ -326,8 +349,8 @@ export async function planGit(config: GitConfig, context: GitContext): Promise<P
         const problem = await checkBranch(context, name);
         if (problem) return { kind: 'done', outcome: failure('INVALID_BRANCH', problem, 'input') };
       }
-      const remote = config.remote ?? 'origin';
-      const url = await remoteUrl(context, remote);
+      const remote = context.remote?.name ?? config.remote ?? 'origin';
+      const url = context.remote ? context.remote.url : await remoteUrl(context, remote);
       if (typeof url !== 'string') return { kind: 'done', outcome: url };
       const commit = await branchCommit(context, branch);
       if (!commit)

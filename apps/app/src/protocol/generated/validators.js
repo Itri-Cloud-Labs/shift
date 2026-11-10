@@ -19448,7 +19448,7 @@ var schema293 = {
         denied: {
           type: 'array',
           uniqueItems: true,
-          items: { enum: ['command', 'http', 'script', 'git', 'git_push'] },
+          items: { enum: ['command', 'http', 'script', 'git', 'git_push', 'github'] },
         },
       },
     },
@@ -19704,7 +19704,8 @@ function validate203(
                                     data5 === 'http' ||
                                     data5 === 'script' ||
                                     data5 === 'git' ||
-                                    data5 === 'git_push'
+                                    data5 === 'git_push' ||
+                                    data5 === 'github'
                                   )) {
                                     validate203.errors = [
                                       {
@@ -19814,6 +19815,2810 @@ function validate203(
   return errors === 0;
 }
 validate203.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+var validateGitHubAppList = validate204;
+var schema298 = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'id',
+    'appId',
+    'host',
+    'slug',
+    'name',
+    'privateKey',
+    'webhookSecret',
+    'webhookPath',
+    'verifiedAt',
+    'revision',
+    'installations',
+  ],
+  properties: {
+    id: { $ref: '#/$defs/Uuid' },
+    appId: { type: 'integer', minimum: 1 },
+    host: { type: 'string', maxLength: 200 },
+    slug: { type: ['string', 'null'], maxLength: 200 },
+    name: { type: ['string', 'null'], maxLength: 200 },
+    privateKey: { const: 'configured' },
+    webhookSecret: { enum: ['configured', 'missing'] },
+    webhookPath: { type: 'string', maxLength: 200 },
+    verifiedAt: { type: ['integer', 'null'], minimum: 0 },
+    revision: { type: 'integer', minimum: 0 },
+    installations: { type: 'array', maxItems: 100, items: { $ref: '#/$defs/GitHubInstallation' } },
+  },
+};
+var schema300 = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'id',
+    'installationId',
+    'account',
+    'accountType',
+    'state',
+    'permissions',
+    'repositories',
+    'verifiedAt',
+  ],
+  properties: {
+    id: { $ref: '#/$defs/Uuid' },
+    installationId: { type: 'integer', minimum: 1 },
+    account: { type: 'string', maxLength: 200 },
+    accountType: { type: 'string', maxLength: 50 },
+    state: { enum: ['ACTIVE', 'SUSPENDED', 'REMOVED'] },
+    permissions: { $ref: '#/$defs/GitHubPermissions' },
+    repositories: { type: 'array', maxItems: 1e3, items: { $ref: '#/$defs/GitHubRepository' } },
+    verifiedAt: { type: 'integer', minimum: 0 },
+  },
+};
+var schema302 = {
+  type: 'object',
+  maxProperties: 100,
+  additionalProperties: { enum: ['read', 'write', 'admin'] },
+};
+function validate206(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate206.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.id === void 0 && (missing0 = 'id')) ||
+        (data.installationId === void 0 && (missing0 = 'installationId')) ||
+        (data.account === void 0 && (missing0 = 'account')) ||
+        (data.accountType === void 0 && (missing0 = 'accountType')) ||
+        (data.state === void 0 && (missing0 = 'state')) ||
+        (data.permissions === void 0 && (missing0 = 'permissions')) ||
+        (data.repositories === void 0 && (missing0 = 'repositories')) ||
+        (data.verifiedAt === void 0 && (missing0 = 'verifiedAt'))
+      ) {
+        validate206.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!(
+            key0 === 'id' ||
+            key0 === 'installationId' ||
+            key0 === 'account' ||
+            key0 === 'accountType' ||
+            key0 === 'state' ||
+            key0 === 'permissions' ||
+            key0 === 'repositories' ||
+            key0 === 'verifiedAt'
+          )) {
+            validate206.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.id !== void 0) {
+            let data0 = data.id;
+            const _errs2 = errors;
+            const _errs3 = errors;
+            if (errors === _errs3) {
+              if (errors === _errs3) {
+                if (typeof data0 === 'string') {
+                  if (func2(data0) > 36) {
+                    validate206.errors = [
+                      {
+                        instancePath: instancePath + '/id',
+                        schemaPath: '#/$defs/Uuid/maxLength',
+                        keyword: 'maxLength',
+                        params: { limit: 36 },
+                        message: 'must NOT have more than 36 characters',
+                      },
+                    ];
+                    return false;
+                  } else {
+                    if (func2(data0) < 36) {
+                      validate206.errors = [
+                        {
+                          instancePath: instancePath + '/id',
+                          schemaPath: '#/$defs/Uuid/minLength',
+                          keyword: 'minLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have fewer than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (!formats0.test(data0)) {
+                        validate206.errors = [
+                          {
+                            instancePath: instancePath + '/id',
+                            schemaPath: '#/$defs/Uuid/format',
+                            keyword: 'format',
+                            params: { format: 'uuid' },
+                            message: 'must match format "uuid"',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                } else {
+                  validate206.errors = [
+                    {
+                      instancePath: instancePath + '/id',
+                      schemaPath: '#/$defs/Uuid/type',
+                      keyword: 'type',
+                      params: { type: 'string' },
+                      message: 'must be string',
+                    },
+                  ];
+                  return false;
+                }
+              }
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.installationId !== void 0) {
+              let data1 = data.installationId;
+              const _errs5 = errors;
+              if (!(typeof data1 == 'number' && !(data1 % 1) && !isNaN(data1) && isFinite(data1))) {
+                validate206.errors = [
+                  {
+                    instancePath: instancePath + '/installationId',
+                    schemaPath: '#/properties/installationId/type',
+                    keyword: 'type',
+                    params: { type: 'integer' },
+                    message: 'must be integer',
+                  },
+                ];
+                return false;
+              }
+              if (errors === _errs5) {
+                if (typeof data1 == 'number' && isFinite(data1)) {
+                  if (data1 < 1 || isNaN(data1)) {
+                    validate206.errors = [
+                      {
+                        instancePath: instancePath + '/installationId',
+                        schemaPath: '#/properties/installationId/minimum',
+                        keyword: 'minimum',
+                        params: { comparison: '>=', limit: 1 },
+                        message: 'must be >= 1',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs5 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.account !== void 0) {
+                let data2 = data.account;
+                const _errs7 = errors;
+                if (errors === _errs7) {
+                  if (typeof data2 === 'string') {
+                    if (func2(data2) > 200) {
+                      validate206.errors = [
+                        {
+                          instancePath: instancePath + '/account',
+                          schemaPath: '#/properties/account/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 200 },
+                          message: 'must NOT have more than 200 characters',
+                        },
+                      ];
+                      return false;
+                    }
+                  } else {
+                    validate206.errors = [
+                      {
+                        instancePath: instancePath + '/account',
+                        schemaPath: '#/properties/account/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+                var valid0 = _errs7 === errors;
+              } else {
+                var valid0 = true;
+              }
+              if (valid0) {
+                if (data.accountType !== void 0) {
+                  let data3 = data.accountType;
+                  const _errs9 = errors;
+                  if (errors === _errs9) {
+                    if (typeof data3 === 'string') {
+                      if (func2(data3) > 50) {
+                        validate206.errors = [
+                          {
+                            instancePath: instancePath + '/accountType',
+                            schemaPath: '#/properties/accountType/maxLength',
+                            keyword: 'maxLength',
+                            params: { limit: 50 },
+                            message: 'must NOT have more than 50 characters',
+                          },
+                        ];
+                        return false;
+                      }
+                    } else {
+                      validate206.errors = [
+                        {
+                          instancePath: instancePath + '/accountType',
+                          schemaPath: '#/properties/accountType/type',
+                          keyword: 'type',
+                          params: { type: 'string' },
+                          message: 'must be string',
+                        },
+                      ];
+                      return false;
+                    }
+                  }
+                  var valid0 = _errs9 === errors;
+                } else {
+                  var valid0 = true;
+                }
+                if (valid0) {
+                  if (data.state !== void 0) {
+                    let data4 = data.state;
+                    const _errs11 = errors;
+                    if (!(data4 === 'ACTIVE' || data4 === 'SUSPENDED' || data4 === 'REMOVED')) {
+                      validate206.errors = [
+                        {
+                          instancePath: instancePath + '/state',
+                          schemaPath: '#/properties/state/enum',
+                          keyword: 'enum',
+                          params: { allowedValues: schema300.properties.state.enum },
+                          message: 'must be equal to one of the allowed values',
+                        },
+                      ];
+                      return false;
+                    }
+                    var valid0 = _errs11 === errors;
+                  } else {
+                    var valid0 = true;
+                  }
+                  if (valid0) {
+                    if (data.permissions !== void 0) {
+                      let data5 = data.permissions;
+                      const _errs12 = errors;
+                      const _errs13 = errors;
+                      if (errors === _errs13) {
+                        if (data5 && typeof data5 == 'object' && !Array.isArray(data5)) {
+                          if (Object.keys(data5).length > 100) {
+                            validate206.errors = [
+                              {
+                                instancePath: instancePath + '/permissions',
+                                schemaPath: '#/$defs/GitHubPermissions/maxProperties',
+                                keyword: 'maxProperties',
+                                params: { limit: 100 },
+                                message: 'must NOT have more than 100 properties',
+                              },
+                            ];
+                            return false;
+                          } else {
+                            for (const key1 in data5) {
+                              let data6 = data5[key1];
+                              const _errs16 = errors;
+                              if (!(data6 === 'read' || data6 === 'write' || data6 === 'admin')) {
+                                validate206.errors = [
+                                  {
+                                    instancePath:
+                                      instancePath +
+                                      '/permissions/' +
+                                      key1.replace(/~/g, '~0').replace(/\//g, '~1'),
+                                    schemaPath:
+                                      '#/$defs/GitHubPermissions/additionalProperties/enum',
+                                    keyword: 'enum',
+                                    params: { allowedValues: schema302.additionalProperties.enum },
+                                    message: 'must be equal to one of the allowed values',
+                                  },
+                                ];
+                                return false;
+                              }
+                              var valid3 = _errs16 === errors;
+                              if (!valid3) {
+                                break;
+                              }
+                            }
+                          }
+                        } else {
+                          validate206.errors = [
+                            {
+                              instancePath: instancePath + '/permissions',
+                              schemaPath: '#/$defs/GitHubPermissions/type',
+                              keyword: 'type',
+                              params: { type: 'object' },
+                              message: 'must be object',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                      var valid0 = _errs12 === errors;
+                    } else {
+                      var valid0 = true;
+                    }
+                    if (valid0) {
+                      if (data.repositories !== void 0) {
+                        let data7 = data.repositories;
+                        const _errs17 = errors;
+                        if (errors === _errs17) {
+                          if (Array.isArray(data7)) {
+                            if (data7.length > 1e3) {
+                              validate206.errors = [
+                                {
+                                  instancePath: instancePath + '/repositories',
+                                  schemaPath: '#/properties/repositories/maxItems',
+                                  keyword: 'maxItems',
+                                  params: { limit: 1e3 },
+                                  message: 'must NOT have more than 1000 items',
+                                },
+                              ];
+                              return false;
+                            } else {
+                              var valid4 = true;
+                              const len0 = data7.length;
+                              for (let i0 = 0; i0 < len0; i0++) {
+                                let data8 = data7[i0];
+                                const _errs19 = errors;
+                                const _errs20 = errors;
+                                if (errors === _errs20) {
+                                  if (data8 && typeof data8 == 'object' && !Array.isArray(data8)) {
+                                    let missing1;
+                                    if (
+                                      (data8.id === void 0 && (missing1 = 'id')) ||
+                                      (data8.owner === void 0 && (missing1 = 'owner')) ||
+                                      (data8.name === void 0 && (missing1 = 'name')) ||
+                                      (data8.defaultBranch === void 0 &&
+                                        (missing1 = 'defaultBranch')) ||
+                                      (data8.private === void 0 && (missing1 = 'private'))
+                                    ) {
+                                      validate206.errors = [
+                                        {
+                                          instancePath: instancePath + '/repositories/' + i0,
+                                          schemaPath: '#/$defs/GitHubRepository/required',
+                                          keyword: 'required',
+                                          params: { missingProperty: missing1 },
+                                          message: "must have required property '" + missing1 + "'",
+                                        },
+                                      ];
+                                      return false;
+                                    } else {
+                                      const _errs22 = errors;
+                                      for (const key2 in data8) {
+                                        if (!(
+                                          key2 === 'id' ||
+                                          key2 === 'owner' ||
+                                          key2 === 'name' ||
+                                          key2 === 'defaultBranch' ||
+                                          key2 === 'private'
+                                        )) {
+                                          validate206.errors = [
+                                            {
+                                              instancePath: instancePath + '/repositories/' + i0,
+                                              schemaPath:
+                                                '#/$defs/GitHubRepository/additionalProperties',
+                                              keyword: 'additionalProperties',
+                                              params: { additionalProperty: key2 },
+                                              message: 'must NOT have additional properties',
+                                            },
+                                          ];
+                                          return false;
+                                          break;
+                                        }
+                                      }
+                                      if (_errs22 === errors) {
+                                        if (data8.id !== void 0) {
+                                          let data9 = data8.id;
+                                          const _errs23 = errors;
+                                          if (!(
+                                            typeof data9 == 'number' &&
+                                            !(data9 % 1) &&
+                                            !isNaN(data9) &&
+                                            isFinite(data9)
+                                          )) {
+                                            validate206.errors = [
+                                              {
+                                                instancePath:
+                                                  instancePath + '/repositories/' + i0 + '/id',
+                                                schemaPath:
+                                                  '#/$defs/GitHubRepository/properties/id/type',
+                                                keyword: 'type',
+                                                params: { type: 'integer' },
+                                                message: 'must be integer',
+                                              },
+                                            ];
+                                            return false;
+                                          }
+                                          if (errors === _errs23) {
+                                            if (typeof data9 == 'number' && isFinite(data9)) {
+                                              if (data9 < 1 || isNaN(data9)) {
+                                                validate206.errors = [
+                                                  {
+                                                    instancePath:
+                                                      instancePath + '/repositories/' + i0 + '/id',
+                                                    schemaPath:
+                                                      '#/$defs/GitHubRepository/properties/id/minimum',
+                                                    keyword: 'minimum',
+                                                    params: { comparison: '>=', limit: 1 },
+                                                    message: 'must be >= 1',
+                                                  },
+                                                ];
+                                                return false;
+                                              }
+                                            }
+                                          }
+                                          var valid6 = _errs23 === errors;
+                                        } else {
+                                          var valid6 = true;
+                                        }
+                                        if (valid6) {
+                                          if (data8.owner !== void 0) {
+                                            let data10 = data8.owner;
+                                            const _errs25 = errors;
+                                            if (errors === _errs25) {
+                                              if (typeof data10 === 'string') {
+                                                if (func2(data10) > 200) {
+                                                  validate206.errors = [
+                                                    {
+                                                      instancePath:
+                                                        instancePath +
+                                                        '/repositories/' +
+                                                        i0 +
+                                                        '/owner',
+                                                      schemaPath:
+                                                        '#/$defs/GitHubRepository/properties/owner/maxLength',
+                                                      keyword: 'maxLength',
+                                                      params: { limit: 200 },
+                                                      message:
+                                                        'must NOT have more than 200 characters',
+                                                    },
+                                                  ];
+                                                  return false;
+                                                }
+                                              } else {
+                                                validate206.errors = [
+                                                  {
+                                                    instancePath:
+                                                      instancePath +
+                                                      '/repositories/' +
+                                                      i0 +
+                                                      '/owner',
+                                                    schemaPath:
+                                                      '#/$defs/GitHubRepository/properties/owner/type',
+                                                    keyword: 'type',
+                                                    params: { type: 'string' },
+                                                    message: 'must be string',
+                                                  },
+                                                ];
+                                                return false;
+                                              }
+                                            }
+                                            var valid6 = _errs25 === errors;
+                                          } else {
+                                            var valid6 = true;
+                                          }
+                                          if (valid6) {
+                                            if (data8.name !== void 0) {
+                                              let data11 = data8.name;
+                                              const _errs27 = errors;
+                                              if (errors === _errs27) {
+                                                if (typeof data11 === 'string') {
+                                                  if (func2(data11) > 200) {
+                                                    validate206.errors = [
+                                                      {
+                                                        instancePath:
+                                                          instancePath +
+                                                          '/repositories/' +
+                                                          i0 +
+                                                          '/name',
+                                                        schemaPath:
+                                                          '#/$defs/GitHubRepository/properties/name/maxLength',
+                                                        keyword: 'maxLength',
+                                                        params: { limit: 200 },
+                                                        message:
+                                                          'must NOT have more than 200 characters',
+                                                      },
+                                                    ];
+                                                    return false;
+                                                  }
+                                                } else {
+                                                  validate206.errors = [
+                                                    {
+                                                      instancePath:
+                                                        instancePath +
+                                                        '/repositories/' +
+                                                        i0 +
+                                                        '/name',
+                                                      schemaPath:
+                                                        '#/$defs/GitHubRepository/properties/name/type',
+                                                      keyword: 'type',
+                                                      params: { type: 'string' },
+                                                      message: 'must be string',
+                                                    },
+                                                  ];
+                                                  return false;
+                                                }
+                                              }
+                                              var valid6 = _errs27 === errors;
+                                            } else {
+                                              var valid6 = true;
+                                            }
+                                            if (valid6) {
+                                              if (data8.defaultBranch !== void 0) {
+                                                let data12 = data8.defaultBranch;
+                                                const _errs29 = errors;
+                                                if (errors === _errs29) {
+                                                  if (typeof data12 === 'string') {
+                                                    if (func2(data12) > 300) {
+                                                      validate206.errors = [
+                                                        {
+                                                          instancePath:
+                                                            instancePath +
+                                                            '/repositories/' +
+                                                            i0 +
+                                                            '/defaultBranch',
+                                                          schemaPath:
+                                                            '#/$defs/GitHubRepository/properties/defaultBranch/maxLength',
+                                                          keyword: 'maxLength',
+                                                          params: { limit: 300 },
+                                                          message:
+                                                            'must NOT have more than 300 characters',
+                                                        },
+                                                      ];
+                                                      return false;
+                                                    }
+                                                  } else {
+                                                    validate206.errors = [
+                                                      {
+                                                        instancePath:
+                                                          instancePath +
+                                                          '/repositories/' +
+                                                          i0 +
+                                                          '/defaultBranch',
+                                                        schemaPath:
+                                                          '#/$defs/GitHubRepository/properties/defaultBranch/type',
+                                                        keyword: 'type',
+                                                        params: { type: 'string' },
+                                                        message: 'must be string',
+                                                      },
+                                                    ];
+                                                    return false;
+                                                  }
+                                                }
+                                                var valid6 = _errs29 === errors;
+                                              } else {
+                                                var valid6 = true;
+                                              }
+                                              if (valid6) {
+                                                if (data8.private !== void 0) {
+                                                  const _errs31 = errors;
+                                                  if (typeof data8.private !== 'boolean') {
+                                                    validate206.errors = [
+                                                      {
+                                                        instancePath:
+                                                          instancePath +
+                                                          '/repositories/' +
+                                                          i0 +
+                                                          '/private',
+                                                        schemaPath:
+                                                          '#/$defs/GitHubRepository/properties/private/type',
+                                                        keyword: 'type',
+                                                        params: { type: 'boolean' },
+                                                        message: 'must be boolean',
+                                                      },
+                                                    ];
+                                                    return false;
+                                                  }
+                                                  var valid6 = _errs31 === errors;
+                                                } else {
+                                                  var valid6 = true;
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  } else {
+                                    validate206.errors = [
+                                      {
+                                        instancePath: instancePath + '/repositories/' + i0,
+                                        schemaPath: '#/$defs/GitHubRepository/type',
+                                        keyword: 'type',
+                                        params: { type: 'object' },
+                                        message: 'must be object',
+                                      },
+                                    ];
+                                    return false;
+                                  }
+                                }
+                                var valid4 = _errs19 === errors;
+                                if (!valid4) {
+                                  break;
+                                }
+                              }
+                            }
+                          } else {
+                            validate206.errors = [
+                              {
+                                instancePath: instancePath + '/repositories',
+                                schemaPath: '#/properties/repositories/type',
+                                keyword: 'type',
+                                params: { type: 'array' },
+                                message: 'must be array',
+                              },
+                            ];
+                            return false;
+                          }
+                        }
+                        var valid0 = _errs17 === errors;
+                      } else {
+                        var valid0 = true;
+                      }
+                      if (valid0) {
+                        if (data.verifiedAt !== void 0) {
+                          let data14 = data.verifiedAt;
+                          const _errs33 = errors;
+                          if (!(
+                            typeof data14 == 'number' &&
+                            !(data14 % 1) &&
+                            !isNaN(data14) &&
+                            isFinite(data14)
+                          )) {
+                            validate206.errors = [
+                              {
+                                instancePath: instancePath + '/verifiedAt',
+                                schemaPath: '#/properties/verifiedAt/type',
+                                keyword: 'type',
+                                params: { type: 'integer' },
+                                message: 'must be integer',
+                              },
+                            ];
+                            return false;
+                          }
+                          if (errors === _errs33) {
+                            if (typeof data14 == 'number' && isFinite(data14)) {
+                              if (data14 < 0 || isNaN(data14)) {
+                                validate206.errors = [
+                                  {
+                                    instancePath: instancePath + '/verifiedAt',
+                                    schemaPath: '#/properties/verifiedAt/minimum',
+                                    keyword: 'minimum',
+                                    params: { comparison: '>=', limit: 0 },
+                                    message: 'must be >= 0',
+                                  },
+                                ];
+                                return false;
+                              }
+                            }
+                          }
+                          var valid0 = _errs33 === errors;
+                        } else {
+                          var valid0 = true;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate206.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate206.errors = vErrors;
+  return errors === 0;
+}
+validate206.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+function validate205(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate205.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.id === void 0 && (missing0 = 'id')) ||
+        (data.appId === void 0 && (missing0 = 'appId')) ||
+        (data.host === void 0 && (missing0 = 'host')) ||
+        (data.slug === void 0 && (missing0 = 'slug')) ||
+        (data.name === void 0 && (missing0 = 'name')) ||
+        (data.privateKey === void 0 && (missing0 = 'privateKey')) ||
+        (data.webhookSecret === void 0 && (missing0 = 'webhookSecret')) ||
+        (data.webhookPath === void 0 && (missing0 = 'webhookPath')) ||
+        (data.verifiedAt === void 0 && (missing0 = 'verifiedAt')) ||
+        (data.revision === void 0 && (missing0 = 'revision')) ||
+        (data.installations === void 0 && (missing0 = 'installations'))
+      ) {
+        validate205.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!func1.call(schema298.properties, key0)) {
+            validate205.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.id !== void 0) {
+            let data0 = data.id;
+            const _errs2 = errors;
+            const _errs3 = errors;
+            if (errors === _errs3) {
+              if (errors === _errs3) {
+                if (typeof data0 === 'string') {
+                  if (func2(data0) > 36) {
+                    validate205.errors = [
+                      {
+                        instancePath: instancePath + '/id',
+                        schemaPath: '#/$defs/Uuid/maxLength',
+                        keyword: 'maxLength',
+                        params: { limit: 36 },
+                        message: 'must NOT have more than 36 characters',
+                      },
+                    ];
+                    return false;
+                  } else {
+                    if (func2(data0) < 36) {
+                      validate205.errors = [
+                        {
+                          instancePath: instancePath + '/id',
+                          schemaPath: '#/$defs/Uuid/minLength',
+                          keyword: 'minLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have fewer than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (!formats0.test(data0)) {
+                        validate205.errors = [
+                          {
+                            instancePath: instancePath + '/id',
+                            schemaPath: '#/$defs/Uuid/format',
+                            keyword: 'format',
+                            params: { format: 'uuid' },
+                            message: 'must match format "uuid"',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                } else {
+                  validate205.errors = [
+                    {
+                      instancePath: instancePath + '/id',
+                      schemaPath: '#/$defs/Uuid/type',
+                      keyword: 'type',
+                      params: { type: 'string' },
+                      message: 'must be string',
+                    },
+                  ];
+                  return false;
+                }
+              }
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.appId !== void 0) {
+              let data1 = data.appId;
+              const _errs5 = errors;
+              if (!(typeof data1 == 'number' && !(data1 % 1) && !isNaN(data1) && isFinite(data1))) {
+                validate205.errors = [
+                  {
+                    instancePath: instancePath + '/appId',
+                    schemaPath: '#/properties/appId/type',
+                    keyword: 'type',
+                    params: { type: 'integer' },
+                    message: 'must be integer',
+                  },
+                ];
+                return false;
+              }
+              if (errors === _errs5) {
+                if (typeof data1 == 'number' && isFinite(data1)) {
+                  if (data1 < 1 || isNaN(data1)) {
+                    validate205.errors = [
+                      {
+                        instancePath: instancePath + '/appId',
+                        schemaPath: '#/properties/appId/minimum',
+                        keyword: 'minimum',
+                        params: { comparison: '>=', limit: 1 },
+                        message: 'must be >= 1',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs5 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.host !== void 0) {
+                let data2 = data.host;
+                const _errs7 = errors;
+                if (errors === _errs7) {
+                  if (typeof data2 === 'string') {
+                    if (func2(data2) > 200) {
+                      validate205.errors = [
+                        {
+                          instancePath: instancePath + '/host',
+                          schemaPath: '#/properties/host/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 200 },
+                          message: 'must NOT have more than 200 characters',
+                        },
+                      ];
+                      return false;
+                    }
+                  } else {
+                    validate205.errors = [
+                      {
+                        instancePath: instancePath + '/host',
+                        schemaPath: '#/properties/host/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+                var valid0 = _errs7 === errors;
+              } else {
+                var valid0 = true;
+              }
+              if (valid0) {
+                if (data.slug !== void 0) {
+                  let data3 = data.slug;
+                  const _errs9 = errors;
+                  if (typeof data3 !== 'string' && data3 !== null) {
+                    validate205.errors = [
+                      {
+                        instancePath: instancePath + '/slug',
+                        schemaPath: '#/properties/slug/type',
+                        keyword: 'type',
+                        params: { type: schema298.properties.slug.type },
+                        message: 'must be string,null',
+                      },
+                    ];
+                    return false;
+                  }
+                  if (errors === _errs9) {
+                    if (typeof data3 === 'string') {
+                      if (func2(data3) > 200) {
+                        validate205.errors = [
+                          {
+                            instancePath: instancePath + '/slug',
+                            schemaPath: '#/properties/slug/maxLength',
+                            keyword: 'maxLength',
+                            params: { limit: 200 },
+                            message: 'must NOT have more than 200 characters',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                  var valid0 = _errs9 === errors;
+                } else {
+                  var valid0 = true;
+                }
+                if (valid0) {
+                  if (data.name !== void 0) {
+                    let data4 = data.name;
+                    const _errs11 = errors;
+                    if (typeof data4 !== 'string' && data4 !== null) {
+                      validate205.errors = [
+                        {
+                          instancePath: instancePath + '/name',
+                          schemaPath: '#/properties/name/type',
+                          keyword: 'type',
+                          params: { type: schema298.properties.name.type },
+                          message: 'must be string,null',
+                        },
+                      ];
+                      return false;
+                    }
+                    if (errors === _errs11) {
+                      if (typeof data4 === 'string') {
+                        if (func2(data4) > 200) {
+                          validate205.errors = [
+                            {
+                              instancePath: instancePath + '/name',
+                              schemaPath: '#/properties/name/maxLength',
+                              keyword: 'maxLength',
+                              params: { limit: 200 },
+                              message: 'must NOT have more than 200 characters',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                    }
+                    var valid0 = _errs11 === errors;
+                  } else {
+                    var valid0 = true;
+                  }
+                  if (valid0) {
+                    if (data.privateKey !== void 0) {
+                      const _errs13 = errors;
+                      if ('configured' !== data.privateKey) {
+                        validate205.errors = [
+                          {
+                            instancePath: instancePath + '/privateKey',
+                            schemaPath: '#/properties/privateKey/const',
+                            keyword: 'const',
+                            params: { allowedValue: 'configured' },
+                            message: 'must be equal to constant',
+                          },
+                        ];
+                        return false;
+                      }
+                      var valid0 = _errs13 === errors;
+                    } else {
+                      var valid0 = true;
+                    }
+                    if (valid0) {
+                      if (data.webhookSecret !== void 0) {
+                        let data6 = data.webhookSecret;
+                        const _errs14 = errors;
+                        if (!(data6 === 'configured' || data6 === 'missing')) {
+                          validate205.errors = [
+                            {
+                              instancePath: instancePath + '/webhookSecret',
+                              schemaPath: '#/properties/webhookSecret/enum',
+                              keyword: 'enum',
+                              params: { allowedValues: schema298.properties.webhookSecret.enum },
+                              message: 'must be equal to one of the allowed values',
+                            },
+                          ];
+                          return false;
+                        }
+                        var valid0 = _errs14 === errors;
+                      } else {
+                        var valid0 = true;
+                      }
+                      if (valid0) {
+                        if (data.webhookPath !== void 0) {
+                          let data7 = data.webhookPath;
+                          const _errs15 = errors;
+                          if (errors === _errs15) {
+                            if (typeof data7 === 'string') {
+                              if (func2(data7) > 200) {
+                                validate205.errors = [
+                                  {
+                                    instancePath: instancePath + '/webhookPath',
+                                    schemaPath: '#/properties/webhookPath/maxLength',
+                                    keyword: 'maxLength',
+                                    params: { limit: 200 },
+                                    message: 'must NOT have more than 200 characters',
+                                  },
+                                ];
+                                return false;
+                              }
+                            } else {
+                              validate205.errors = [
+                                {
+                                  instancePath: instancePath + '/webhookPath',
+                                  schemaPath: '#/properties/webhookPath/type',
+                                  keyword: 'type',
+                                  params: { type: 'string' },
+                                  message: 'must be string',
+                                },
+                              ];
+                              return false;
+                            }
+                          }
+                          var valid0 = _errs15 === errors;
+                        } else {
+                          var valid0 = true;
+                        }
+                        if (valid0) {
+                          if (data.verifiedAt !== void 0) {
+                            let data8 = data.verifiedAt;
+                            const _errs17 = errors;
+                            if (
+                              !(
+                                typeof data8 == 'number' &&
+                                !(data8 % 1) &&
+                                !isNaN(data8) &&
+                                isFinite(data8)
+                              ) &&
+                              data8 !== null
+                            ) {
+                              validate205.errors = [
+                                {
+                                  instancePath: instancePath + '/verifiedAt',
+                                  schemaPath: '#/properties/verifiedAt/type',
+                                  keyword: 'type',
+                                  params: { type: schema298.properties.verifiedAt.type },
+                                  message: 'must be integer,null',
+                                },
+                              ];
+                              return false;
+                            }
+                            if (errors === _errs17) {
+                              if (typeof data8 == 'number' && isFinite(data8)) {
+                                if (data8 < 0 || isNaN(data8)) {
+                                  validate205.errors = [
+                                    {
+                                      instancePath: instancePath + '/verifiedAt',
+                                      schemaPath: '#/properties/verifiedAt/minimum',
+                                      keyword: 'minimum',
+                                      params: { comparison: '>=', limit: 0 },
+                                      message: 'must be >= 0',
+                                    },
+                                  ];
+                                  return false;
+                                }
+                              }
+                            }
+                            var valid0 = _errs17 === errors;
+                          } else {
+                            var valid0 = true;
+                          }
+                          if (valid0) {
+                            if (data.revision !== void 0) {
+                              let data9 = data.revision;
+                              const _errs19 = errors;
+                              if (!(
+                                typeof data9 == 'number' &&
+                                !(data9 % 1) &&
+                                !isNaN(data9) &&
+                                isFinite(data9)
+                              )) {
+                                validate205.errors = [
+                                  {
+                                    instancePath: instancePath + '/revision',
+                                    schemaPath: '#/properties/revision/type',
+                                    keyword: 'type',
+                                    params: { type: 'integer' },
+                                    message: 'must be integer',
+                                  },
+                                ];
+                                return false;
+                              }
+                              if (errors === _errs19) {
+                                if (typeof data9 == 'number' && isFinite(data9)) {
+                                  if (data9 < 0 || isNaN(data9)) {
+                                    validate205.errors = [
+                                      {
+                                        instancePath: instancePath + '/revision',
+                                        schemaPath: '#/properties/revision/minimum',
+                                        keyword: 'minimum',
+                                        params: { comparison: '>=', limit: 0 },
+                                        message: 'must be >= 0',
+                                      },
+                                    ];
+                                    return false;
+                                  }
+                                }
+                              }
+                              var valid0 = _errs19 === errors;
+                            } else {
+                              var valid0 = true;
+                            }
+                            if (valid0) {
+                              if (data.installations !== void 0) {
+                                let data10 = data.installations;
+                                const _errs21 = errors;
+                                if (errors === _errs21) {
+                                  if (Array.isArray(data10)) {
+                                    if (data10.length > 100) {
+                                      validate205.errors = [
+                                        {
+                                          instancePath: instancePath + '/installations',
+                                          schemaPath: '#/properties/installations/maxItems',
+                                          keyword: 'maxItems',
+                                          params: { limit: 100 },
+                                          message: 'must NOT have more than 100 items',
+                                        },
+                                      ];
+                                      return false;
+                                    } else {
+                                      var valid2 = true;
+                                      const len0 = data10.length;
+                                      for (let i0 = 0; i0 < len0; i0++) {
+                                        const _errs23 = errors;
+                                        if (
+                                          !validate206(data10[i0], {
+                                            instancePath: instancePath + '/installations/' + i0,
+                                            parentData: data10,
+                                            parentDataProperty: i0,
+                                            rootData,
+                                            dynamicAnchors,
+                                          })
+                                        ) {
+                                          vErrors =
+                                            vErrors === null
+                                              ? validate206.errors
+                                              : vErrors.concat(validate206.errors);
+                                          errors = vErrors.length;
+                                        }
+                                        var valid2 = _errs23 === errors;
+                                        if (!valid2) {
+                                          break;
+                                        }
+                                      }
+                                    }
+                                  } else {
+                                    validate205.errors = [
+                                      {
+                                        instancePath: instancePath + '/installations',
+                                        schemaPath: '#/properties/installations/type',
+                                        keyword: 'type',
+                                        params: { type: 'array' },
+                                        message: 'must be array',
+                                      },
+                                    ];
+                                    return false;
+                                  }
+                                }
+                                var valid0 = _errs21 === errors;
+                              } else {
+                                var valid0 = true;
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate205.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate205.errors = vErrors;
+  return errors === 0;
+}
+validate205.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+function validate204(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate204.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.schemaVersion === void 0 && (missing0 = 'schemaVersion')) ||
+        (data.requestId === void 0 && (missing0 = 'requestId')) ||
+        (data.apps === void 0 && (missing0 = 'apps'))
+      ) {
+        validate204.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!(key0 === 'schemaVersion' || key0 === 'requestId' || key0 === 'apps')) {
+            validate204.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.schemaVersion !== void 0) {
+            const _errs2 = errors;
+            if (1 !== data.schemaVersion) {
+              validate204.errors = [
+                {
+                  instancePath: instancePath + '/schemaVersion',
+                  schemaPath: '#/properties/schemaVersion/const',
+                  keyword: 'const',
+                  params: { allowedValue: 1 },
+                  message: 'must be equal to constant',
+                },
+              ];
+              return false;
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.requestId !== void 0) {
+              let data1 = data.requestId;
+              const _errs3 = errors;
+              const _errs4 = errors;
+              if (errors === _errs4) {
+                if (errors === _errs4) {
+                  if (typeof data1 === 'string') {
+                    if (func2(data1) > 36) {
+                      validate204.errors = [
+                        {
+                          instancePath: instancePath + '/requestId',
+                          schemaPath: '#/$defs/Uuid/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have more than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (func2(data1) < 36) {
+                        validate204.errors = [
+                          {
+                            instancePath: instancePath + '/requestId',
+                            schemaPath: '#/$defs/Uuid/minLength',
+                            keyword: 'minLength',
+                            params: { limit: 36 },
+                            message: 'must NOT have fewer than 36 characters',
+                          },
+                        ];
+                        return false;
+                      } else {
+                        if (!formats0.test(data1)) {
+                          validate204.errors = [
+                            {
+                              instancePath: instancePath + '/requestId',
+                              schemaPath: '#/$defs/Uuid/format',
+                              keyword: 'format',
+                              params: { format: 'uuid' },
+                              message: 'must match format "uuid"',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                    }
+                  } else {
+                    validate204.errors = [
+                      {
+                        instancePath: instancePath + '/requestId',
+                        schemaPath: '#/$defs/Uuid/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs3 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.apps !== void 0) {
+                let data2 = data.apps;
+                const _errs6 = errors;
+                if (errors === _errs6) {
+                  if (Array.isArray(data2)) {
+                    if (data2.length > 20) {
+                      validate204.errors = [
+                        {
+                          instancePath: instancePath + '/apps',
+                          schemaPath: '#/properties/apps/maxItems',
+                          keyword: 'maxItems',
+                          params: { limit: 20 },
+                          message: 'must NOT have more than 20 items',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      var valid2 = true;
+                      const len0 = data2.length;
+                      for (let i0 = 0; i0 < len0; i0++) {
+                        const _errs8 = errors;
+                        if (
+                          !validate205(data2[i0], {
+                            instancePath: instancePath + '/apps/' + i0,
+                            parentData: data2,
+                            parentDataProperty: i0,
+                            rootData,
+                            dynamicAnchors,
+                          })
+                        ) {
+                          vErrors =
+                            vErrors === null
+                              ? validate205.errors
+                              : vErrors.concat(validate205.errors);
+                          errors = vErrors.length;
+                        }
+                        var valid2 = _errs8 === errors;
+                        if (!valid2) {
+                          break;
+                        }
+                      }
+                    }
+                  } else {
+                    validate204.errors = [
+                      {
+                        instancePath: instancePath + '/apps',
+                        schemaPath: '#/properties/apps/type',
+                        keyword: 'type',
+                        params: { type: 'array' },
+                        message: 'must be array',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+                var valid0 = _errs6 === errors;
+              } else {
+                var valid0 = true;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate204.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate204.errors = vErrors;
+  return errors === 0;
+}
+validate204.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+var validateGitHubAppResponse = validate209;
+function validate209(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate209.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.schemaVersion === void 0 && (missing0 = 'schemaVersion')) ||
+        (data.requestId === void 0 && (missing0 = 'requestId')) ||
+        (data.app === void 0 && (missing0 = 'app'))
+      ) {
+        validate209.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!(key0 === 'schemaVersion' || key0 === 'requestId' || key0 === 'app')) {
+            validate209.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.schemaVersion !== void 0) {
+            const _errs2 = errors;
+            if (1 !== data.schemaVersion) {
+              validate209.errors = [
+                {
+                  instancePath: instancePath + '/schemaVersion',
+                  schemaPath: '#/properties/schemaVersion/const',
+                  keyword: 'const',
+                  params: { allowedValue: 1 },
+                  message: 'must be equal to constant',
+                },
+              ];
+              return false;
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.requestId !== void 0) {
+              let data1 = data.requestId;
+              const _errs3 = errors;
+              const _errs4 = errors;
+              if (errors === _errs4) {
+                if (errors === _errs4) {
+                  if (typeof data1 === 'string') {
+                    if (func2(data1) > 36) {
+                      validate209.errors = [
+                        {
+                          instancePath: instancePath + '/requestId',
+                          schemaPath: '#/$defs/Uuid/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have more than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (func2(data1) < 36) {
+                        validate209.errors = [
+                          {
+                            instancePath: instancePath + '/requestId',
+                            schemaPath: '#/$defs/Uuid/minLength',
+                            keyword: 'minLength',
+                            params: { limit: 36 },
+                            message: 'must NOT have fewer than 36 characters',
+                          },
+                        ];
+                        return false;
+                      } else {
+                        if (!formats0.test(data1)) {
+                          validate209.errors = [
+                            {
+                              instancePath: instancePath + '/requestId',
+                              schemaPath: '#/$defs/Uuid/format',
+                              keyword: 'format',
+                              params: { format: 'uuid' },
+                              message: 'must match format "uuid"',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                    }
+                  } else {
+                    validate209.errors = [
+                      {
+                        instancePath: instancePath + '/requestId',
+                        schemaPath: '#/$defs/Uuid/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs3 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.app !== void 0) {
+                const _errs6 = errors;
+                if (
+                  !validate205(data.app, {
+                    instancePath: instancePath + '/app',
+                    parentData: data,
+                    parentDataProperty: 'app',
+                    rootData,
+                    dynamicAnchors,
+                  })
+                ) {
+                  vErrors =
+                    vErrors === null ? validate205.errors : vErrors.concat(validate205.errors);
+                  errors = vErrors.length;
+                }
+                var valid0 = _errs6 === errors;
+              } else {
+                var valid0 = true;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate209.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate209.errors = vErrors;
+  return errors === 0;
+}
+validate209.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+var validateGitHubConnectionResponse = validate211;
+var schema308 = {
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'id',
+    'projectId',
+    'appId',
+    'installationId',
+    'repository',
+    'verifiedAt',
+    'revision',
+    'diagnostics',
+  ],
+  properties: {
+    id: { $ref: '#/$defs/Uuid' },
+    projectId: { $ref: '#/$defs/Uuid' },
+    appId: { $ref: '#/$defs/Uuid' },
+    installationId: { $ref: '#/$defs/Uuid' },
+    repository: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'owner', 'name', 'defaultBranch'],
+      properties: {
+        id: { type: 'integer', minimum: 1 },
+        owner: { type: 'string', maxLength: 200 },
+        name: { type: 'string', maxLength: 200 },
+        defaultBranch: { type: 'string', maxLength: 300 },
+      },
+    },
+    verifiedAt: { type: ['integer', 'null'], minimum: 0 },
+    revision: { type: 'integer', minimum: 0 },
+    diagnostics: {
+      type: 'array',
+      maxItems: 50,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['node', 'missing'],
+        properties: {
+          node: { type: 'string', maxLength: 100 },
+          missing: { $ref: '#/$defs/GitHubPermissions' },
+        },
+      },
+    },
+  },
+};
+function validate212(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate212.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.id === void 0 && (missing0 = 'id')) ||
+        (data.projectId === void 0 && (missing0 = 'projectId')) ||
+        (data.appId === void 0 && (missing0 = 'appId')) ||
+        (data.installationId === void 0 && (missing0 = 'installationId')) ||
+        (data.repository === void 0 && (missing0 = 'repository')) ||
+        (data.verifiedAt === void 0 && (missing0 = 'verifiedAt')) ||
+        (data.revision === void 0 && (missing0 = 'revision')) ||
+        (data.diagnostics === void 0 && (missing0 = 'diagnostics'))
+      ) {
+        validate212.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!(
+            key0 === 'id' ||
+            key0 === 'projectId' ||
+            key0 === 'appId' ||
+            key0 === 'installationId' ||
+            key0 === 'repository' ||
+            key0 === 'verifiedAt' ||
+            key0 === 'revision' ||
+            key0 === 'diagnostics'
+          )) {
+            validate212.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.id !== void 0) {
+            let data0 = data.id;
+            const _errs2 = errors;
+            const _errs3 = errors;
+            if (errors === _errs3) {
+              if (errors === _errs3) {
+                if (typeof data0 === 'string') {
+                  if (func2(data0) > 36) {
+                    validate212.errors = [
+                      {
+                        instancePath: instancePath + '/id',
+                        schemaPath: '#/$defs/Uuid/maxLength',
+                        keyword: 'maxLength',
+                        params: { limit: 36 },
+                        message: 'must NOT have more than 36 characters',
+                      },
+                    ];
+                    return false;
+                  } else {
+                    if (func2(data0) < 36) {
+                      validate212.errors = [
+                        {
+                          instancePath: instancePath + '/id',
+                          schemaPath: '#/$defs/Uuid/minLength',
+                          keyword: 'minLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have fewer than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (!formats0.test(data0)) {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/id',
+                            schemaPath: '#/$defs/Uuid/format',
+                            keyword: 'format',
+                            params: { format: 'uuid' },
+                            message: 'must match format "uuid"',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                } else {
+                  validate212.errors = [
+                    {
+                      instancePath: instancePath + '/id',
+                      schemaPath: '#/$defs/Uuid/type',
+                      keyword: 'type',
+                      params: { type: 'string' },
+                      message: 'must be string',
+                    },
+                  ];
+                  return false;
+                }
+              }
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.projectId !== void 0) {
+              let data1 = data.projectId;
+              const _errs5 = errors;
+              const _errs6 = errors;
+              if (errors === _errs6) {
+                if (errors === _errs6) {
+                  if (typeof data1 === 'string') {
+                    if (func2(data1) > 36) {
+                      validate212.errors = [
+                        {
+                          instancePath: instancePath + '/projectId',
+                          schemaPath: '#/$defs/Uuid/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have more than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (func2(data1) < 36) {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/projectId',
+                            schemaPath: '#/$defs/Uuid/minLength',
+                            keyword: 'minLength',
+                            params: { limit: 36 },
+                            message: 'must NOT have fewer than 36 characters',
+                          },
+                        ];
+                        return false;
+                      } else {
+                        if (!formats0.test(data1)) {
+                          validate212.errors = [
+                            {
+                              instancePath: instancePath + '/projectId',
+                              schemaPath: '#/$defs/Uuid/format',
+                              keyword: 'format',
+                              params: { format: 'uuid' },
+                              message: 'must match format "uuid"',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                    }
+                  } else {
+                    validate212.errors = [
+                      {
+                        instancePath: instancePath + '/projectId',
+                        schemaPath: '#/$defs/Uuid/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs5 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.appId !== void 0) {
+                let data2 = data.appId;
+                const _errs8 = errors;
+                const _errs9 = errors;
+                if (errors === _errs9) {
+                  if (errors === _errs9) {
+                    if (typeof data2 === 'string') {
+                      if (func2(data2) > 36) {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/appId',
+                            schemaPath: '#/$defs/Uuid/maxLength',
+                            keyword: 'maxLength',
+                            params: { limit: 36 },
+                            message: 'must NOT have more than 36 characters',
+                          },
+                        ];
+                        return false;
+                      } else {
+                        if (func2(data2) < 36) {
+                          validate212.errors = [
+                            {
+                              instancePath: instancePath + '/appId',
+                              schemaPath: '#/$defs/Uuid/minLength',
+                              keyword: 'minLength',
+                              params: { limit: 36 },
+                              message: 'must NOT have fewer than 36 characters',
+                            },
+                          ];
+                          return false;
+                        } else {
+                          if (!formats0.test(data2)) {
+                            validate212.errors = [
+                              {
+                                instancePath: instancePath + '/appId',
+                                schemaPath: '#/$defs/Uuid/format',
+                                keyword: 'format',
+                                params: { format: 'uuid' },
+                                message: 'must match format "uuid"',
+                              },
+                            ];
+                            return false;
+                          }
+                        }
+                      }
+                    } else {
+                      validate212.errors = [
+                        {
+                          instancePath: instancePath + '/appId',
+                          schemaPath: '#/$defs/Uuid/type',
+                          keyword: 'type',
+                          params: { type: 'string' },
+                          message: 'must be string',
+                        },
+                      ];
+                      return false;
+                    }
+                  }
+                }
+                var valid0 = _errs8 === errors;
+              } else {
+                var valid0 = true;
+              }
+              if (valid0) {
+                if (data.installationId !== void 0) {
+                  let data3 = data.installationId;
+                  const _errs11 = errors;
+                  const _errs12 = errors;
+                  if (errors === _errs12) {
+                    if (errors === _errs12) {
+                      if (typeof data3 === 'string') {
+                        if (func2(data3) > 36) {
+                          validate212.errors = [
+                            {
+                              instancePath: instancePath + '/installationId',
+                              schemaPath: '#/$defs/Uuid/maxLength',
+                              keyword: 'maxLength',
+                              params: { limit: 36 },
+                              message: 'must NOT have more than 36 characters',
+                            },
+                          ];
+                          return false;
+                        } else {
+                          if (func2(data3) < 36) {
+                            validate212.errors = [
+                              {
+                                instancePath: instancePath + '/installationId',
+                                schemaPath: '#/$defs/Uuid/minLength',
+                                keyword: 'minLength',
+                                params: { limit: 36 },
+                                message: 'must NOT have fewer than 36 characters',
+                              },
+                            ];
+                            return false;
+                          } else {
+                            if (!formats0.test(data3)) {
+                              validate212.errors = [
+                                {
+                                  instancePath: instancePath + '/installationId',
+                                  schemaPath: '#/$defs/Uuid/format',
+                                  keyword: 'format',
+                                  params: { format: 'uuid' },
+                                  message: 'must match format "uuid"',
+                                },
+                              ];
+                              return false;
+                            }
+                          }
+                        }
+                      } else {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/installationId',
+                            schemaPath: '#/$defs/Uuid/type',
+                            keyword: 'type',
+                            params: { type: 'string' },
+                            message: 'must be string',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                  var valid0 = _errs11 === errors;
+                } else {
+                  var valid0 = true;
+                }
+                if (valid0) {
+                  if (data.repository !== void 0) {
+                    let data4 = data.repository;
+                    const _errs14 = errors;
+                    if (errors === _errs14) {
+                      if (data4 && typeof data4 == 'object' && !Array.isArray(data4)) {
+                        let missing1;
+                        if (
+                          (data4.id === void 0 && (missing1 = 'id')) ||
+                          (data4.owner === void 0 && (missing1 = 'owner')) ||
+                          (data4.name === void 0 && (missing1 = 'name')) ||
+                          (data4.defaultBranch === void 0 && (missing1 = 'defaultBranch'))
+                        ) {
+                          validate212.errors = [
+                            {
+                              instancePath: instancePath + '/repository',
+                              schemaPath: '#/properties/repository/required',
+                              keyword: 'required',
+                              params: { missingProperty: missing1 },
+                              message: "must have required property '" + missing1 + "'",
+                            },
+                          ];
+                          return false;
+                        } else {
+                          const _errs16 = errors;
+                          for (const key1 in data4) {
+                            if (!(
+                              key1 === 'id' ||
+                              key1 === 'owner' ||
+                              key1 === 'name' ||
+                              key1 === 'defaultBranch'
+                            )) {
+                              validate212.errors = [
+                                {
+                                  instancePath: instancePath + '/repository',
+                                  schemaPath: '#/properties/repository/additionalProperties',
+                                  keyword: 'additionalProperties',
+                                  params: { additionalProperty: key1 },
+                                  message: 'must NOT have additional properties',
+                                },
+                              ];
+                              return false;
+                              break;
+                            }
+                          }
+                          if (_errs16 === errors) {
+                            if (data4.id !== void 0) {
+                              let data5 = data4.id;
+                              const _errs17 = errors;
+                              if (!(
+                                typeof data5 == 'number' &&
+                                !(data5 % 1) &&
+                                !isNaN(data5) &&
+                                isFinite(data5)
+                              )) {
+                                validate212.errors = [
+                                  {
+                                    instancePath: instancePath + '/repository/id',
+                                    schemaPath: '#/properties/repository/properties/id/type',
+                                    keyword: 'type',
+                                    params: { type: 'integer' },
+                                    message: 'must be integer',
+                                  },
+                                ];
+                                return false;
+                              }
+                              if (errors === _errs17) {
+                                if (typeof data5 == 'number' && isFinite(data5)) {
+                                  if (data5 < 1 || isNaN(data5)) {
+                                    validate212.errors = [
+                                      {
+                                        instancePath: instancePath + '/repository/id',
+                                        schemaPath: '#/properties/repository/properties/id/minimum',
+                                        keyword: 'minimum',
+                                        params: { comparison: '>=', limit: 1 },
+                                        message: 'must be >= 1',
+                                      },
+                                    ];
+                                    return false;
+                                  }
+                                }
+                              }
+                              var valid5 = _errs17 === errors;
+                            } else {
+                              var valid5 = true;
+                            }
+                            if (valid5) {
+                              if (data4.owner !== void 0) {
+                                let data6 = data4.owner;
+                                const _errs19 = errors;
+                                if (errors === _errs19) {
+                                  if (typeof data6 === 'string') {
+                                    if (func2(data6) > 200) {
+                                      validate212.errors = [
+                                        {
+                                          instancePath: instancePath + '/repository/owner',
+                                          schemaPath:
+                                            '#/properties/repository/properties/owner/maxLength',
+                                          keyword: 'maxLength',
+                                          params: { limit: 200 },
+                                          message: 'must NOT have more than 200 characters',
+                                        },
+                                      ];
+                                      return false;
+                                    }
+                                  } else {
+                                    validate212.errors = [
+                                      {
+                                        instancePath: instancePath + '/repository/owner',
+                                        schemaPath: '#/properties/repository/properties/owner/type',
+                                        keyword: 'type',
+                                        params: { type: 'string' },
+                                        message: 'must be string',
+                                      },
+                                    ];
+                                    return false;
+                                  }
+                                }
+                                var valid5 = _errs19 === errors;
+                              } else {
+                                var valid5 = true;
+                              }
+                              if (valid5) {
+                                if (data4.name !== void 0) {
+                                  let data7 = data4.name;
+                                  const _errs21 = errors;
+                                  if (errors === _errs21) {
+                                    if (typeof data7 === 'string') {
+                                      if (func2(data7) > 200) {
+                                        validate212.errors = [
+                                          {
+                                            instancePath: instancePath + '/repository/name',
+                                            schemaPath:
+                                              '#/properties/repository/properties/name/maxLength',
+                                            keyword: 'maxLength',
+                                            params: { limit: 200 },
+                                            message: 'must NOT have more than 200 characters',
+                                          },
+                                        ];
+                                        return false;
+                                      }
+                                    } else {
+                                      validate212.errors = [
+                                        {
+                                          instancePath: instancePath + '/repository/name',
+                                          schemaPath:
+                                            '#/properties/repository/properties/name/type',
+                                          keyword: 'type',
+                                          params: { type: 'string' },
+                                          message: 'must be string',
+                                        },
+                                      ];
+                                      return false;
+                                    }
+                                  }
+                                  var valid5 = _errs21 === errors;
+                                } else {
+                                  var valid5 = true;
+                                }
+                                if (valid5) {
+                                  if (data4.defaultBranch !== void 0) {
+                                    let data8 = data4.defaultBranch;
+                                    const _errs23 = errors;
+                                    if (errors === _errs23) {
+                                      if (typeof data8 === 'string') {
+                                        if (func2(data8) > 300) {
+                                          validate212.errors = [
+                                            {
+                                              instancePath:
+                                                instancePath + '/repository/defaultBranch',
+                                              schemaPath:
+                                                '#/properties/repository/properties/defaultBranch/maxLength',
+                                              keyword: 'maxLength',
+                                              params: { limit: 300 },
+                                              message: 'must NOT have more than 300 characters',
+                                            },
+                                          ];
+                                          return false;
+                                        }
+                                      } else {
+                                        validate212.errors = [
+                                          {
+                                            instancePath:
+                                              instancePath + '/repository/defaultBranch',
+                                            schemaPath:
+                                              '#/properties/repository/properties/defaultBranch/type',
+                                            keyword: 'type',
+                                            params: { type: 'string' },
+                                            message: 'must be string',
+                                          },
+                                        ];
+                                        return false;
+                                      }
+                                    }
+                                    var valid5 = _errs23 === errors;
+                                  } else {
+                                    var valid5 = true;
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      } else {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/repository',
+                            schemaPath: '#/properties/repository/type',
+                            keyword: 'type',
+                            params: { type: 'object' },
+                            message: 'must be object',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                    var valid0 = _errs14 === errors;
+                  } else {
+                    var valid0 = true;
+                  }
+                  if (valid0) {
+                    if (data.verifiedAt !== void 0) {
+                      let data9 = data.verifiedAt;
+                      const _errs25 = errors;
+                      if (
+                        !(
+                          typeof data9 == 'number' &&
+                          !(data9 % 1) &&
+                          !isNaN(data9) &&
+                          isFinite(data9)
+                        ) &&
+                        data9 !== null
+                      ) {
+                        validate212.errors = [
+                          {
+                            instancePath: instancePath + '/verifiedAt',
+                            schemaPath: '#/properties/verifiedAt/type',
+                            keyword: 'type',
+                            params: { type: schema308.properties.verifiedAt.type },
+                            message: 'must be integer,null',
+                          },
+                        ];
+                        return false;
+                      }
+                      if (errors === _errs25) {
+                        if (typeof data9 == 'number' && isFinite(data9)) {
+                          if (data9 < 0 || isNaN(data9)) {
+                            validate212.errors = [
+                              {
+                                instancePath: instancePath + '/verifiedAt',
+                                schemaPath: '#/properties/verifiedAt/minimum',
+                                keyword: 'minimum',
+                                params: { comparison: '>=', limit: 0 },
+                                message: 'must be >= 0',
+                              },
+                            ];
+                            return false;
+                          }
+                        }
+                      }
+                      var valid0 = _errs25 === errors;
+                    } else {
+                      var valid0 = true;
+                    }
+                    if (valid0) {
+                      if (data.revision !== void 0) {
+                        let data10 = data.revision;
+                        const _errs27 = errors;
+                        if (!(
+                          typeof data10 == 'number' &&
+                          !(data10 % 1) &&
+                          !isNaN(data10) &&
+                          isFinite(data10)
+                        )) {
+                          validate212.errors = [
+                            {
+                              instancePath: instancePath + '/revision',
+                              schemaPath: '#/properties/revision/type',
+                              keyword: 'type',
+                              params: { type: 'integer' },
+                              message: 'must be integer',
+                            },
+                          ];
+                          return false;
+                        }
+                        if (errors === _errs27) {
+                          if (typeof data10 == 'number' && isFinite(data10)) {
+                            if (data10 < 0 || isNaN(data10)) {
+                              validate212.errors = [
+                                {
+                                  instancePath: instancePath + '/revision',
+                                  schemaPath: '#/properties/revision/minimum',
+                                  keyword: 'minimum',
+                                  params: { comparison: '>=', limit: 0 },
+                                  message: 'must be >= 0',
+                                },
+                              ];
+                              return false;
+                            }
+                          }
+                        }
+                        var valid0 = _errs27 === errors;
+                      } else {
+                        var valid0 = true;
+                      }
+                      if (valid0) {
+                        if (data.diagnostics !== void 0) {
+                          let data11 = data.diagnostics;
+                          const _errs29 = errors;
+                          if (errors === _errs29) {
+                            if (Array.isArray(data11)) {
+                              if (data11.length > 50) {
+                                validate212.errors = [
+                                  {
+                                    instancePath: instancePath + '/diagnostics',
+                                    schemaPath: '#/properties/diagnostics/maxItems',
+                                    keyword: 'maxItems',
+                                    params: { limit: 50 },
+                                    message: 'must NOT have more than 50 items',
+                                  },
+                                ];
+                                return false;
+                              } else {
+                                var valid6 = true;
+                                const len0 = data11.length;
+                                for (let i0 = 0; i0 < len0; i0++) {
+                                  let data12 = data11[i0];
+                                  const _errs31 = errors;
+                                  if (errors === _errs31) {
+                                    if (
+                                      data12 &&
+                                      typeof data12 == 'object' &&
+                                      !Array.isArray(data12)
+                                    ) {
+                                      let missing2;
+                                      if (
+                                        (data12.node === void 0 && (missing2 = 'node')) ||
+                                        (data12.missing === void 0 && (missing2 = 'missing'))
+                                      ) {
+                                        validate212.errors = [
+                                          {
+                                            instancePath: instancePath + '/diagnostics/' + i0,
+                                            schemaPath: '#/properties/diagnostics/items/required',
+                                            keyword: 'required',
+                                            params: { missingProperty: missing2 },
+                                            message:
+                                              "must have required property '" + missing2 + "'",
+                                          },
+                                        ];
+                                        return false;
+                                      } else {
+                                        const _errs33 = errors;
+                                        for (const key2 in data12) {
+                                          if (!(key2 === 'node' || key2 === 'missing')) {
+                                            validate212.errors = [
+                                              {
+                                                instancePath: instancePath + '/diagnostics/' + i0,
+                                                schemaPath:
+                                                  '#/properties/diagnostics/items/additionalProperties',
+                                                keyword: 'additionalProperties',
+                                                params: { additionalProperty: key2 },
+                                                message: 'must NOT have additional properties',
+                                              },
+                                            ];
+                                            return false;
+                                            break;
+                                          }
+                                        }
+                                        if (_errs33 === errors) {
+                                          if (data12.node !== void 0) {
+                                            let data13 = data12.node;
+                                            const _errs34 = errors;
+                                            if (errors === _errs34) {
+                                              if (typeof data13 === 'string') {
+                                                if (func2(data13) > 100) {
+                                                  validate212.errors = [
+                                                    {
+                                                      instancePath:
+                                                        instancePath +
+                                                        '/diagnostics/' +
+                                                        i0 +
+                                                        '/node',
+                                                      schemaPath:
+                                                        '#/properties/diagnostics/items/properties/node/maxLength',
+                                                      keyword: 'maxLength',
+                                                      params: { limit: 100 },
+                                                      message:
+                                                        'must NOT have more than 100 characters',
+                                                    },
+                                                  ];
+                                                  return false;
+                                                }
+                                              } else {
+                                                validate212.errors = [
+                                                  {
+                                                    instancePath:
+                                                      instancePath + '/diagnostics/' + i0 + '/node',
+                                                    schemaPath:
+                                                      '#/properties/diagnostics/items/properties/node/type',
+                                                    keyword: 'type',
+                                                    params: { type: 'string' },
+                                                    message: 'must be string',
+                                                  },
+                                                ];
+                                                return false;
+                                              }
+                                            }
+                                            var valid7 = _errs34 === errors;
+                                          } else {
+                                            var valid7 = true;
+                                          }
+                                          if (valid7) {
+                                            if (data12.missing !== void 0) {
+                                              let data14 = data12.missing;
+                                              const _errs36 = errors;
+                                              const _errs37 = errors;
+                                              if (errors === _errs37) {
+                                                if (
+                                                  data14 &&
+                                                  typeof data14 == 'object' &&
+                                                  !Array.isArray(data14)
+                                                ) {
+                                                  if (Object.keys(data14).length > 100) {
+                                                    validate212.errors = [
+                                                      {
+                                                        instancePath:
+                                                          instancePath +
+                                                          '/diagnostics/' +
+                                                          i0 +
+                                                          '/missing',
+                                                        schemaPath:
+                                                          '#/$defs/GitHubPermissions/maxProperties',
+                                                        keyword: 'maxProperties',
+                                                        params: { limit: 100 },
+                                                        message:
+                                                          'must NOT have more than 100 properties',
+                                                      },
+                                                    ];
+                                                    return false;
+                                                  } else {
+                                                    for (const key3 in data14) {
+                                                      let data15 = data14[key3];
+                                                      const _errs40 = errors;
+                                                      if (!(
+                                                        data15 === 'read' ||
+                                                        data15 === 'write' ||
+                                                        data15 === 'admin'
+                                                      )) {
+                                                        validate212.errors = [
+                                                          {
+                                                            instancePath:
+                                                              instancePath +
+                                                              '/diagnostics/' +
+                                                              i0 +
+                                                              '/missing/' +
+                                                              key3
+                                                                .replace(/~/g, '~0')
+                                                                .replace(/\//g, '~1'),
+                                                            schemaPath:
+                                                              '#/$defs/GitHubPermissions/additionalProperties/enum',
+                                                            keyword: 'enum',
+                                                            params: {
+                                                              allowedValues:
+                                                                schema302.additionalProperties.enum,
+                                                            },
+                                                            message:
+                                                              'must be equal to one of the allowed values',
+                                                          },
+                                                        ];
+                                                        return false;
+                                                      }
+                                                      var valid9 = _errs40 === errors;
+                                                      if (!valid9) {
+                                                        break;
+                                                      }
+                                                    }
+                                                  }
+                                                } else {
+                                                  validate212.errors = [
+                                                    {
+                                                      instancePath:
+                                                        instancePath +
+                                                        '/diagnostics/' +
+                                                        i0 +
+                                                        '/missing',
+                                                      schemaPath: '#/$defs/GitHubPermissions/type',
+                                                      keyword: 'type',
+                                                      params: { type: 'object' },
+                                                      message: 'must be object',
+                                                    },
+                                                  ];
+                                                  return false;
+                                                }
+                                              }
+                                              var valid7 = _errs36 === errors;
+                                            } else {
+                                              var valid7 = true;
+                                            }
+                                          }
+                                        }
+                                      }
+                                    } else {
+                                      validate212.errors = [
+                                        {
+                                          instancePath: instancePath + '/diagnostics/' + i0,
+                                          schemaPath: '#/properties/diagnostics/items/type',
+                                          keyword: 'type',
+                                          params: { type: 'object' },
+                                          message: 'must be object',
+                                        },
+                                      ];
+                                      return false;
+                                    }
+                                  }
+                                  var valid6 = _errs31 === errors;
+                                  if (!valid6) {
+                                    break;
+                                  }
+                                }
+                              }
+                            } else {
+                              validate212.errors = [
+                                {
+                                  instancePath: instancePath + '/diagnostics',
+                                  schemaPath: '#/properties/diagnostics/type',
+                                  keyword: 'type',
+                                  params: { type: 'array' },
+                                  message: 'must be array',
+                                },
+                              ];
+                              return false;
+                            }
+                          }
+                          var valid0 = _errs29 === errors;
+                        } else {
+                          var valid0 = true;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate212.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate212.errors = vErrors;
+  return errors === 0;
+}
+validate212.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+function validate211(
+  data,
+  { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
+) {
+  let vErrors = null;
+  let errors = 0;
+  const evaluated0 = validate211.evaluated;
+  if (evaluated0.dynamicProps) {
+    evaluated0.props = void 0;
+  }
+  if (evaluated0.dynamicItems) {
+    evaluated0.items = void 0;
+  }
+  if (errors === 0) {
+    if (data && typeof data == 'object' && !Array.isArray(data)) {
+      let missing0;
+      if (
+        (data.schemaVersion === void 0 && (missing0 = 'schemaVersion')) ||
+        (data.requestId === void 0 && (missing0 = 'requestId')) ||
+        (data.connection === void 0 && (missing0 = 'connection'))
+      ) {
+        validate211.errors = [
+          {
+            instancePath,
+            schemaPath: '#/required',
+            keyword: 'required',
+            params: { missingProperty: missing0 },
+            message: "must have required property '" + missing0 + "'",
+          },
+        ];
+        return false;
+      } else {
+        const _errs1 = errors;
+        for (const key0 in data) {
+          if (!(key0 === 'schemaVersion' || key0 === 'requestId' || key0 === 'connection')) {
+            validate211.errors = [
+              {
+                instancePath,
+                schemaPath: '#/additionalProperties',
+                keyword: 'additionalProperties',
+                params: { additionalProperty: key0 },
+                message: 'must NOT have additional properties',
+              },
+            ];
+            return false;
+            break;
+          }
+        }
+        if (_errs1 === errors) {
+          if (data.schemaVersion !== void 0) {
+            const _errs2 = errors;
+            if (1 !== data.schemaVersion) {
+              validate211.errors = [
+                {
+                  instancePath: instancePath + '/schemaVersion',
+                  schemaPath: '#/properties/schemaVersion/const',
+                  keyword: 'const',
+                  params: { allowedValue: 1 },
+                  message: 'must be equal to constant',
+                },
+              ];
+              return false;
+            }
+            var valid0 = _errs2 === errors;
+          } else {
+            var valid0 = true;
+          }
+          if (valid0) {
+            if (data.requestId !== void 0) {
+              let data1 = data.requestId;
+              const _errs3 = errors;
+              const _errs4 = errors;
+              if (errors === _errs4) {
+                if (errors === _errs4) {
+                  if (typeof data1 === 'string') {
+                    if (func2(data1) > 36) {
+                      validate211.errors = [
+                        {
+                          instancePath: instancePath + '/requestId',
+                          schemaPath: '#/$defs/Uuid/maxLength',
+                          keyword: 'maxLength',
+                          params: { limit: 36 },
+                          message: 'must NOT have more than 36 characters',
+                        },
+                      ];
+                      return false;
+                    } else {
+                      if (func2(data1) < 36) {
+                        validate211.errors = [
+                          {
+                            instancePath: instancePath + '/requestId',
+                            schemaPath: '#/$defs/Uuid/minLength',
+                            keyword: 'minLength',
+                            params: { limit: 36 },
+                            message: 'must NOT have fewer than 36 characters',
+                          },
+                        ];
+                        return false;
+                      } else {
+                        if (!formats0.test(data1)) {
+                          validate211.errors = [
+                            {
+                              instancePath: instancePath + '/requestId',
+                              schemaPath: '#/$defs/Uuid/format',
+                              keyword: 'format',
+                              params: { format: 'uuid' },
+                              message: 'must match format "uuid"',
+                            },
+                          ];
+                          return false;
+                        }
+                      }
+                    }
+                  } else {
+                    validate211.errors = [
+                      {
+                        instancePath: instancePath + '/requestId',
+                        schemaPath: '#/$defs/Uuid/type',
+                        keyword: 'type',
+                        params: { type: 'string' },
+                        message: 'must be string',
+                      },
+                    ];
+                    return false;
+                  }
+                }
+              }
+              var valid0 = _errs3 === errors;
+            } else {
+              var valid0 = true;
+            }
+            if (valid0) {
+              if (data.connection !== void 0) {
+                let data2 = data.connection;
+                const _errs6 = errors;
+                const _errs7 = errors;
+                let valid2 = false;
+                const _errs8 = errors;
+                if (
+                  !validate212(data2, {
+                    instancePath: instancePath + '/connection',
+                    parentData: data,
+                    parentDataProperty: 'connection',
+                    rootData,
+                    dynamicAnchors,
+                  })
+                ) {
+                  vErrors =
+                    vErrors === null ? validate212.errors : vErrors.concat(validate212.errors);
+                  errors = vErrors.length;
+                }
+                var _valid0 = _errs8 === errors;
+                valid2 = valid2 || _valid0;
+                const _errs9 = errors;
+                if (data2 !== null) {
+                  const err0 = {
+                    instancePath: instancePath + '/connection',
+                    schemaPath: '#/properties/connection/anyOf/1/type',
+                    keyword: 'type',
+                    params: { type: 'null' },
+                    message: 'must be null',
+                  };
+                  if (vErrors === null) {
+                    vErrors = [err0];
+                  } else {
+                    vErrors.push(err0);
+                  }
+                  errors++;
+                }
+                var _valid0 = _errs9 === errors;
+                valid2 = valid2 || _valid0;
+                if (!valid2) {
+                  const err1 = {
+                    instancePath: instancePath + '/connection',
+                    schemaPath: '#/properties/connection/anyOf',
+                    keyword: 'anyOf',
+                    params: {},
+                    message: 'must match a schema in anyOf',
+                  };
+                  if (vErrors === null) {
+                    vErrors = [err1];
+                  } else {
+                    vErrors.push(err1);
+                  }
+                  errors++;
+                  validate211.errors = vErrors;
+                  return false;
+                } else {
+                  errors = _errs7;
+                  if (vErrors !== null) {
+                    if (_errs7) {
+                      vErrors.length = _errs7;
+                    } else {
+                      vErrors = null;
+                    }
+                  }
+                }
+                var valid0 = _errs6 === errors;
+              } else {
+                var valid0 = true;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      validate211.errors = [
+        {
+          instancePath,
+          schemaPath: '#/type',
+          keyword: 'type',
+          params: { type: 'object' },
+          message: 'must be object',
+        },
+      ];
+      return false;
+    }
+  }
+  validate211.errors = vErrors;
+  return errors === 0;
+}
+validate211.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
 var validateSessionList = validate163;
 var schema154 = {
   type: 'object',
@@ -25197,7 +28002,7 @@ function validate169(
   return errors === 0;
 }
 validate169.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
-var validateEvent = validate204;
+var validateEvent = validate214;
 var schema184 = {
   type: 'object',
   additionalProperties: false,
@@ -25231,13 +28036,13 @@ var pattern17 = new RegExp(
   'u',
 );
 var pattern18 = new RegExp('^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$', 'u');
-function validate204(
+function validate214(
   data,
   { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
 ) {
   let vErrors = null;
   let errors = 0;
-  const evaluated0 = validate204.evaluated;
+  const evaluated0 = validate214.evaluated;
   if (evaluated0.dynamicProps) {
     evaluated0.props = void 0;
   }
@@ -25259,7 +28064,7 @@ function validate204(
         (data.payload === void 0 && (missing0 = 'payload')) ||
         (data.createdAt === void 0 && (missing0 = 'createdAt'))
       ) {
-        validate204.errors = [
+        validate214.errors = [
           {
             instancePath,
             schemaPath: '#/required',
@@ -25273,7 +28078,7 @@ function validate204(
         const _errs1 = errors;
         for (const key0 in data) {
           if (!func1.call(schema184.properties, key0)) {
-            validate204.errors = [
+            validate214.errors = [
               {
                 instancePath,
                 schemaPath: '#/additionalProperties',
@@ -25294,7 +28099,7 @@ function validate204(
             if (errors === _errs3) {
               if (typeof data0 === 'string') {
                 if (func2(data0) > 53) {
-                  validate204.errors = [
+                  validate214.errors = [
                     {
                       instancePath: instancePath + '/cursor',
                       schemaPath: '#/$defs/EventCursor/maxLength',
@@ -25306,7 +28111,7 @@ function validate204(
                   return false;
                 } else {
                   if (!pattern17.test(data0)) {
-                    validate204.errors = [
+                    validate214.errors = [
                       {
                         instancePath: instancePath + '/cursor',
                         schemaPath: '#/$defs/EventCursor/pattern',
@@ -25323,7 +28128,7 @@ function validate204(
                   }
                 }
               } else {
-                validate204.errors = [
+                validate214.errors = [
                   {
                     instancePath: instancePath + '/cursor',
                     schemaPath: '#/$defs/EventCursor/type',
@@ -25348,7 +28153,7 @@ function validate204(
                 if (errors === _errs6) {
                   if (typeof data1 === 'string') {
                     if (func2(data1) > 36) {
-                      validate204.errors = [
+                      validate214.errors = [
                         {
                           instancePath: instancePath + '/epoch',
                           schemaPath: '#/$defs/Uuid/maxLength',
@@ -25360,7 +28165,7 @@ function validate204(
                       return false;
                     } else {
                       if (func2(data1) < 36) {
-                        validate204.errors = [
+                        validate214.errors = [
                           {
                             instancePath: instancePath + '/epoch',
                             schemaPath: '#/$defs/Uuid/minLength',
@@ -25372,7 +28177,7 @@ function validate204(
                         return false;
                       } else {
                         if (!formats0.test(data1)) {
-                          validate204.errors = [
+                          validate214.errors = [
                             {
                               instancePath: instancePath + '/epoch',
                               schemaPath: '#/$defs/Uuid/format',
@@ -25386,7 +28191,7 @@ function validate204(
                       }
                     }
                   } else {
-                    validate204.errors = [
+                    validate214.errors = [
                       {
                         instancePath: instancePath + '/epoch',
                         schemaPath: '#/$defs/Uuid/type',
@@ -25413,7 +28218,7 @@ function validate204(
                   !isNaN(data2) &&
                   isFinite(data2)
                 )) {
-                  validate204.errors = [
+                  validate214.errors = [
                     {
                       instancePath: instancePath + '/sequence',
                       schemaPath: '#/properties/sequence/type',
@@ -25427,7 +28232,7 @@ function validate204(
                 if (errors === _errs8) {
                   if (typeof data2 == 'number' && isFinite(data2)) {
                     if (data2 < 1 || isNaN(data2)) {
-                      validate204.errors = [
+                      validate214.errors = [
                         {
                           instancePath: instancePath + '/sequence',
                           schemaPath: '#/properties/sequence/minimum',
@@ -25451,7 +28256,7 @@ function validate204(
                   if (errors === _errs10) {
                     if (typeof data3 === 'string') {
                       if (func2(data3) > 100) {
-                        validate204.errors = [
+                        validate214.errors = [
                           {
                             instancePath: instancePath + '/type',
                             schemaPath: '#/properties/type/maxLength',
@@ -25463,7 +28268,7 @@ function validate204(
                         return false;
                       } else {
                         if (!pattern18.test(data3)) {
-                          validate204.errors = [
+                          validate214.errors = [
                             {
                               instancePath: instancePath + '/type',
                               schemaPath: '#/properties/type/pattern',
@@ -25477,7 +28282,7 @@ function validate204(
                         }
                       }
                     } else {
-                      validate204.errors = [
+                      validate214.errors = [
                         {
                           instancePath: instancePath + '/type',
                           schemaPath: '#/properties/type/type',
@@ -25503,7 +28308,7 @@ function validate204(
                       !isNaN(data4) &&
                       isFinite(data4)
                     )) {
-                      validate204.errors = [
+                      validate214.errors = [
                         {
                           instancePath: instancePath + '/schemaVersion',
                           schemaPath: '#/properties/schemaVersion/type',
@@ -25517,7 +28322,7 @@ function validate204(
                     if (errors === _errs12) {
                       if (typeof data4 == 'number' && isFinite(data4)) {
                         if (data4 < 1 || isNaN(data4)) {
-                          validate204.errors = [
+                          validate214.errors = [
                             {
                               instancePath: instancePath + '/schemaVersion',
                               schemaPath: '#/properties/schemaVersion/minimum',
@@ -25643,7 +28448,7 @@ function validate204(
                           vErrors.push(err5);
                         }
                         errors++;
-                        validate204.errors = vErrors;
+                        validate214.errors = vErrors;
                         return false;
                       } else {
                         errors = _errs15;
@@ -25768,7 +28573,7 @@ function validate204(
                             vErrors.push(err11);
                           }
                           errors++;
-                          validate204.errors = vErrors;
+                          validate214.errors = vErrors;
                           return false;
                         } else {
                           errors = _errs22;
@@ -25893,7 +28698,7 @@ function validate204(
                               vErrors.push(err17);
                             }
                             errors++;
-                            validate204.errors = vErrors;
+                            validate214.errors = vErrors;
                             return false;
                           } else {
                             errors = _errs29;
@@ -25914,7 +28719,7 @@ function validate204(
                             let data8 = data.payload;
                             const _errs35 = errors;
                             if (!(data8 && typeof data8 == 'object' && !Array.isArray(data8))) {
-                              validate204.errors = [
+                              validate214.errors = [
                                 {
                                   instancePath: instancePath + '/payload',
                                   schemaPath: '#/properties/payload/type',
@@ -25939,7 +28744,7 @@ function validate204(
                                 !isNaN(data9) &&
                                 isFinite(data9)
                               )) {
-                                validate204.errors = [
+                                validate214.errors = [
                                   {
                                     instancePath: instancePath + '/createdAt',
                                     schemaPath: '#/properties/createdAt/type',
@@ -25953,7 +28758,7 @@ function validate204(
                               if (errors === _errs37) {
                                 if (typeof data9 == 'number' && isFinite(data9)) {
                                   if (data9 < 0 || isNaN(data9)) {
-                                    validate204.errors = [
+                                    validate214.errors = [
                                       {
                                         instancePath: instancePath + '/createdAt',
                                         schemaPath: '#/properties/createdAt/minimum',
@@ -25982,7 +28787,7 @@ function validate204(
         }
       }
     } else {
-      validate204.errors = [
+      validate214.errors = [
         {
           instancePath,
           schemaPath: '#/type',
@@ -25994,10 +28799,10 @@ function validate204(
       return false;
     }
   }
-  validate204.errors = vErrors;
+  validate214.errors = vErrors;
   return errors === 0;
 }
-validate204.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
+validate214.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
 var validateEventPage = validate175;
 function validate128(
   data,
@@ -27626,6 +30431,9 @@ export {
   validateEvent,
   validateEventPage,
   validateExecutionPage,
+  validateGitHubAppList,
+  validateGitHubAppResponse,
+  validateGitHubConnectionResponse,
   validateInteractionList,
   validateInteractionResponse,
   validateInvocationResponse,

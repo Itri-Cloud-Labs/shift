@@ -26,6 +26,9 @@ import {
   validateRunVariables,
   validateArtifactList,
   validateCredentialList,
+  validateGitHubAppList,
+  validateGitHubAppResponse,
+  validateGitHubConnectionResponse,
   validateCredentialResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
@@ -52,6 +55,7 @@ import type { EventLog } from './events/log.js';
 import type { EventStreams } from './events/streams.js';
 import type { Device } from './devices/registry.js';
 import type { Credentials } from './actions/credentials.js';
+import type { GitHubIntegration } from './github/integration.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
 import type { DefinitionRepository } from './workflows/repository.js';
@@ -71,6 +75,7 @@ export function createHttpServer(options: {
   definitions?: { service: DefinitionService; repository: DefinitionRepository };
   workspaces?: WorkspaceService;
   credentials?: Credentials;
+  github?: GitHubIntegration;
   devices?: DeviceService;
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
@@ -243,6 +248,61 @@ export function createHttpServer(options: {
           res,
           credentials.setPermissions(id(req), body(req), actorOf(res)),
           validateProjectPermissionsResponse,
+        );
+      });
+    }
+    const github = options.github;
+    if (github) {
+      // The owner's App: secret inputs are write-only; responses say configured or missing.
+      router.get('/github/apps', guard, (_req, res) => {
+        reply(res, 200, { apps: github.apps() }, validateGitHubAppList);
+      });
+      router.post('/github/apps', guard, json, async (req, res) => {
+        command(res, await github.register(body(req), actorOf(res)), validateGitHubAppResponse);
+      });
+      router.post('/github/apps/:appId/rotate', guard, json, async (req, res) => {
+        command(
+          res,
+          await github.rotate(String(req.params['appId']), body(req), actorOf(res)),
+          validateGitHubAppResponse,
+        );
+      });
+      router.post('/github/apps/:appId/refresh', guard, json, async (req, res) => {
+        reply(
+          res,
+          200,
+          { app: await github.refresh(String(req.params['appId'])) },
+          validateGitHubAppResponse,
+        );
+      });
+      router.get('/projects/:id/github', guard, (req, res) => {
+        reply(
+          res,
+          200,
+          { connection: github.connection(id(req)) },
+          validateGitHubConnectionResponse,
+        );
+      });
+      router.post('/projects/:id/github', guard, json, async (req, res) => {
+        command(
+          res,
+          await github.connect(id(req), body(req), actorOf(res)),
+          validateGitHubConnectionResponse,
+        );
+      });
+      router.post('/projects/:id/github/verify', guard, json, async (req, res) => {
+        reply(
+          res,
+          200,
+          { connection: await github.verify(id(req)) },
+          validateGitHubConnectionResponse,
+        );
+      });
+      router.post('/projects/:id/github/disconnect', guard, json, (req, res) => {
+        command(
+          res,
+          github.disconnect(id(req), body(req), actorOf(res)),
+          validateGitHubConnectionResponse,
         );
       });
     }

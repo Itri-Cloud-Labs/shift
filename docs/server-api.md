@@ -178,7 +178,19 @@ A credential is a project secret that actions name. Its value is write-only: no 
 
 `POST /api/v0/admin/projects/{id}/credentials` with `name` (letters, digits, `_` and `-`, up to 64), `value` (up to 16 KiB of text) and `commandId` creates the credential (`201`) or replaces the value of the one with that name (`200`, `revision` increases). The receipt holds a keyed digest of the value, so repeating a command with a different value is a `COMMAND_CONFLICT`. `GET /api/v0/admin/projects/{id}/credentials` returns `{"credentials": [Credential, …]}`, each with `id`, `projectId`, `name`, `revision`, `createdAt` and `updatedAt`. `POST /api/v0/admin/projects/{id}/credentials/{credentialId}/revoke` revokes it and discards the sealed value. CLI: `shift credential set|list|revoke`.
 
-`GET /api/v0/admin/projects/{id}/permissions` returns `{"permissions": {"projectId", "denied": [...]}}`. `POST` the same path with `allow` and `deny` arrays of `command`, `http`, `script`, `git` and `git_push` changes it. CLI: `shift project permissions`.
+`GET /api/v0/admin/projects/{id}/permissions` returns `{"permissions": {"projectId", "denied": [...]}}`. `POST` the same path with `allow` and `deny` arrays of `command`, `http`, `script`, `git`, `git_push` and `github` changes it. CLI: `shift project permissions`.
+
+### GitHub
+
+GitHub nodes use the owner's own GitHub App. It is registered once and can serve several projects; each project binds one repository through one of the App's installations. Secret inputs are write-only: responses say `configured` or `missing`. Each path below also exists for paired devices without `/admin`.
+
+`POST /api/v0/admin/github/apps` with `appId`, `privateKey` (the App's PEM key), optional `webhookSecret` (16 to 256 characters), `host` (default `https://github.com`; a GitHub Enterprise Server origin is reached at `<host>/api/v3`) and `commandId`. Shift verifies the key with `GET /app`, reads the installations and the repositories each can reach, and stores the key and secret sealed. Status `201` with `{"app": GitHubApp}`: `id`, `appId`, `host`, `slug`, `name`, `privateKey: "configured"`, `webhookSecret`, `webhookPath` (`/api/v0/github/apps/{id}/webhook`, shared by every project bound through the App), `verifiedAt`, `revision` and `installations` (`id`, `installationId`, `account`, `accountType`, `state`, `permissions`, `repositories` with `id`, `owner`, `name`, `defaultBranch`, `private`). Errors: `INVALID_PRIVATE_KEY`, `GITHUB_AUTH_FAILED` (GitHub refused the key), `GITHUB_APP_MISMATCH`, `GITHUB_APP_EXISTS`, `GITHUB_UNREACHABLE`.
+
+`GET /api/v0/admin/github/apps` returns `{"apps": [GitHubApp, …]}`. `POST /api/v0/admin/github/apps/{id}/rotate` with `privateKey` and/or `webhookSecret` replaces them; a new key is verified with GitHub first, and tokens minted with the old one are discarded. `POST /api/v0/admin/github/apps/{id}/refresh` verifies the key again and rereads installations.
+
+`POST /api/v0/admin/projects/{id}/github` with `installationId` (the installation's Shift `id`), `repositoryId` and `commandId` binds the project, after reading the repository through the installation (`GITHUB_REPOSITORY_UNAVAILABLE` otherwise). It replaces an earlier binding. `GET` the same path returns `{"connection": GitHubConnection | null}`: `id`, `projectId`, `appId`, `installationId`, `repository` (`id`, `owner`, `name`, `defaultBranch`), `verifiedAt` (null when the last check failed or the installation is not active), `revision` and `diagnostics`, the permissions each GitHub node needs that the installation lacks. `POST …/github/verify` checks the App, the installation and the repository again and refreshes the repository's name. `POST …/github/disconnect` removes the binding.
+
+CLI: `shift github apps|register|rotate|refresh`, `shift github connect|status|verify|disconnect --project`. `register` and `rotate` read the key from `--key-file` and, with `--webhook-secret`, the secret from standard input.
 
 ### Workflows
 

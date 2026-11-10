@@ -12,7 +12,14 @@ import type { SecretBox } from '../secrets/secret-box.js';
 // the owner, read only by the action that injects it, and never returned, logged or stored in a
 // snapshot, operation or receipt. Rotating it keeps its name and ID, so graphs need no edit.
 
-export const actionPermissions = ['command', 'http', 'script', 'git', 'git_push'] as const;
+export const actionPermissions = [
+  'command',
+  'http',
+  'script',
+  'git',
+  'git_push',
+  'github',
+] as const;
 export type ActionPermission = (typeof actionPermissions)[number];
 
 // What a run may do, frozen at admission. Current revocations still restrict it (specification 8).
@@ -20,6 +27,8 @@ export interface Authority {
   denied: ActionPermission[];
   // Credential names to IDs, as they were when the run started.
   credentials: Record<string, string>;
+  // The project's GitHub connection when the run started, for GitHub nodes.
+  github?: { connectionId: string | null };
 }
 
 export interface CredentialView {

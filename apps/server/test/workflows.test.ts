@@ -200,6 +200,16 @@ test('validation rejects graphs the executor cannot run', () => {
       /undeclared binding version/,
     ],
     [
+      'undeclared binding in a pull request number',
+      (d) =>
+        d.nodes.splice(1, 1, {
+          id: 'shape',
+          type: 'github_update_pr',
+          config: { number: '{{pr}}', title: 'Ready' },
+        }),
+      /undeclared binding pr/,
+    ],
+    [
       'execution selector with sequence 0',
       (d) =>
         (d.nodes[1].bindings.name = {
