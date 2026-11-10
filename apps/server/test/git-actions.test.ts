@@ -421,3 +421,75 @@ test('a remote moved by someone else during a crash needs the owner', { skip }, 
     await again.close();
   }
 });
+
+test('a push goes to the remote’s push URL and is checked there', { skip }, async () => {
+  const env = await gitSetup();
+  try {
+    const mirror = join(env.state, 'push-target.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', mirror]);
+    git(env.repository, 'remote', 'set-url', '--push', 'origin', mirror);
+    const id = await run(env, commitFlow);
+    const done = await settled(env, id);
+    assert.equal(done.state, 'COMPLETED', JSON.stringify(step(env, id, 'push').error));
+    const pushed = step(env, id, 'push').output!.data;
+    assert.equal(pushed['url'], mirror);
+    assert.equal(git(mirror, 'rev-parse', 'work'), pushed['commit']);
+    // A second push URL, or one with a token, is refused before anything is sent.
+    git(
+      env.repository,
+      'remote',
+      'set-url',
+      '--push',
+      '--add',
+      'origin',
+      join(env.state, 'other.git'),
+    );
+    const flow = chain([
+      edit,
+      ['branch', 'git_create_branch', { name: 'two' }],
+      ['push', 'git_push', {}],
+    ]);
+    const two = await run(env, flow);
+    await settled(env, two);
+    assert.equal(step(env, two, 'push').error!.code, 'MULTIPLE_PUSH_URLS');
+    git(env.repository, 'config', '--unset-all', 'remote.origin.pushurl');
+    git(
+      env.repository,
+      'remote',
+      'set-url',
+      '--push',
+      'origin',
+      'https://bot:secret-token@example.invalid/r.git',
+    );
+    const leaky = await run(
+      env,
+      chain([edit, ['branch', 'git_create_branch', { name: 'three' }], ['push', 'git_push', {}]]),
+    );
+    await settled(env, leaky);
+    assert.equal(step(env, leaky, 'push').error!.code, 'REMOTE_URL_HAS_CREDENTIALS');
+    assert.equal(step(env, leaky, 'push').error!.message.includes('secret-token'), false);
+  } finally {
+    await env.close();
+  }
+});
+
+test(
+  'the commit’s branch switched during a crash needs the owner, even at the same commit',
+  { skip },
+  async () => {
+    const env = await gitSetup();
+    const id = await run(env, commitFlow);
+    await settled(env, id);
+    const again = await interrupt(env, id, 'commit', (workspace) => {
+      git(workspace, 'switch', '-q', '-c', 'elsewhere');
+    });
+    try {
+      const stuck = await settled(again, id);
+      assert.equal(stuck.state, 'NEEDS_HUMAN');
+      assert.equal(stuck.attention!.code, 'EFFECT_UNCERTAIN');
+      assert.match(stuck.attention!.explanation, /on elsewhere, not work/);
+    } finally {
+      await again.close();
+    }
+  },
+);

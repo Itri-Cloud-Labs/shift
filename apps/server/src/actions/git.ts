@@ -336,7 +336,7 @@ export async function planGit(config: GitConfig, context: GitContext): Promise<P
           outcome: failure('BRANCH_NOT_FOUND', `There is no branch ${branch} to push.`, 'input'),
         };
       const remoteRef = `refs/heads/${config.remoteBranch ?? branch}`;
-      const before = await remoteHead(context, remote, remoteRef);
+      const before = await remoteHead(context, url, remoteRef);
       if (typeof before !== 'string' && before !== null) return { kind: 'done', outcome: before };
       return {
         kind: 'ready',
@@ -359,27 +359,36 @@ async function remoteUrl(context: GitContext, remote: string): Promise<string | 
       `${JSON.stringify(remote.slice(0, 100))} is not a remote name.`,
       'input',
     );
-  let url: string;
+  let urls: string[];
   try {
-    url = trim(await git(context, ['remote', 'get-url', '--', remote]));
+    // Where `git push` sends: the push URL when one is configured, otherwise the fetch URL.
+    urls = (await git(context, ['remote', 'get-url', '--push', '--all', '--', remote]))
+      .split('\n')
+      .map(trim)
+      .filter(Boolean);
   } catch {
     return failure('REMOTE_NOT_FOUND', `The repository has no remote ${remote}.`, 'input');
   }
+  if (urls.length !== 1)
+    return failure(
+      'MULTIPLE_PUSH_URLS',
+      `Remote ${remote} pushes to ${urls.length} places. Shift pushes to exactly one, so it can check what landed.`,
+      'input',
+    );
+  const url = urls[0]!;
   try {
     const parsed = new URL(url);
     if (parsed.password || (/^https?:$/.test(parsed.protocol) && parsed.username))
       return failure(
         'REMOTE_URL_HAS_CREDENTIALS',
-        `Remote ${remote} has credentials in its URL. Use a credential helper or SSH instead.`,
+        `Remote ${remote} has credentials in its push URL. Use a credential helper or SSH instead.`,
         'permission',
       );
-    parsed.username = '';
-    parsed.password = '';
-    return parsed.toString();
   } catch {
     // scp-like SSH addresses and local paths are not URLs and carry no password.
-    return url;
   }
+  // Pushed to and observed at this exact address, so the push and every check of it agree.
+  return url;
 }
 
 // The commit `ref` points at on the remote, null when it does not exist.
@@ -461,7 +470,7 @@ export async function performGit(
           'push',
           '--porcelain',
           '--end-of-options',
-          remote,
+          evidence['url'] as string,
           `${commit}:${ref}`,
         ],
         cwd: context.cwd,
@@ -477,7 +486,7 @@ export async function performGit(
       });
       if (result.stopped) return { kind: 'stopped' };
       // The remote says what happened, whatever the exit code: a ref is updated or it is not.
-      const after = await remoteHead(context, remote, ref);
+      const after = await remoteHead(context, evidence['url'] as string, ref);
       const output = { stdout: result.stdout.text, stderr: result.stderr.text } as Json;
       if (after === commit)
         return {
@@ -555,8 +564,16 @@ export async function reconcileGit(
       };
     }
     case 'git_commit': {
-      if (current.commit === evidence['commit']) return commitResult(evidence, args);
-      if (current.commit === evidence['parent']) return { kind: 'redo' };
+      // The same commit on another branch is someone else's change, not this step's.
+      const sameBranch = current.branch === ((evidence['branch'] as string | null) ?? null);
+      if (sameBranch && current.commit === evidence['commit']) return commitResult(evidence, args);
+      if (sameBranch && current.commit === evidence['parent']) return { kind: 'redo' };
+      if (!sameBranch)
+        return {
+          kind: 'uncertain',
+          explanation: `The workspace is on ${current.branch ?? 'no branch'}, not ${(evidence['branch'] as string | null) ?? 'the detached HEAD'} the commit was made on, so it changed outside the step.`,
+          evidence: { observedHead: current.commit, observedBranch: current.branch },
+        };
       return {
         kind: 'uncertain',
         explanation: `HEAD is ${current.commit.slice(0, 12)}, neither the recorded parent nor the commit Shift was making, so the workspace changed outside the step.`,
@@ -566,7 +583,7 @@ export async function reconcileGit(
     case 'git_push': {
       const remote = args['remote'] as string;
       const ref = args['remoteRef'] as string;
-      const after = await remoteHead(context, remote, ref);
+      const after = await remoteHead(context, evidence['url'] as string, ref);
       if (after === args['commit'])
         return {
           kind: 'succeeded',
