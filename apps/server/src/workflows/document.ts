@@ -537,6 +537,14 @@ export function diagnose(document: unknown): Diagnostic[] {
         if (headers.includes(name.toLowerCase()))
           add(`${at}/config/credentialHeaders/${name}`, `${name} is also set in headers.`);
     }
+    if (node.type === 'git_diff')
+      ((config['paths'] ?? []) as string[]).forEach((path, index) => {
+        if (path.startsWith('/') || path.split('/').includes('..'))
+          add(
+            `${at}/config/paths/${index}`,
+            'A path is relative to the workspace and stays inside it.',
+          );
+      });
     if (node.type === 'get_variable' && config['optional'] === true && !('fallback' in config)) {
       add(`${at}/config/fallback`, 'An optional variable needs an explicit fallback.');
     }
@@ -558,6 +566,10 @@ export function diagnose(document: unknown): Diagnostic[] {
       'url',
       'headers',
       'body',
+      'name',
+      'message',
+      'branch',
+      'remoteBranch',
     ]
       .map((field) => config[field])
       .filter((value) => value !== undefined);

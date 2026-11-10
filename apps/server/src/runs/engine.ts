@@ -14,7 +14,7 @@ import { evaluateRule, type Rule } from '../workflows/rules.js';
 import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
-import { actionTypes, freezeAction } from '../actions/config.js';
+import { actionTypes, freezeAction, workspaceTypes } from '../actions/config.js';
 import type { Credentials } from '../actions/credentials.js';
 import { EffectStore } from '../actions/effects.js';
 import type { ProcessRunner } from '../actions/process.js';
@@ -725,10 +725,10 @@ export class RunEngine {
       config = frozen as unknown as Json;
     }
     if (actionTypes.has(node.type)) {
-      // Commands work in the run's own workspace, created on first use.
+      // Commands and Git work in the run's own workspace, created on first use.
       const { baseCommit, id: projectId } = snapshot.project;
       const workspace =
-        node.type === 'command' && baseCommit !== undefined && projectId !== null
+        workspaceTypes.has(node.type) && baseCommit !== undefined && projectId !== null
           ? this.#options.workspaces.allocate({
               runId: claim.runId,
               projectId,

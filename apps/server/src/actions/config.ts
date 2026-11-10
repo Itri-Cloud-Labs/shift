@@ -46,9 +46,43 @@ export interface ScriptConfig {
   safeToRetry: boolean;
 }
 
-export type ActionConfig = CommandConfig | HttpConfig | ScriptConfig;
+export type GitAction = 'git_status' | 'git_diff' | 'git_create_branch' | 'git_commit' | 'git_push';
 
-export const actionTypes = new Set(['command', 'http', 'script']);
+export interface GitConfig {
+  action: GitAction;
+  workspaceId: string;
+  // Status
+  maxEntries?: number;
+  // Diff
+  against?: 'base' | 'head';
+  paths?: string[];
+  maxBytes?: number;
+  // Create Branch
+  name?: string;
+  // Commit
+  message?: string;
+  allowEmpty?: boolean;
+  // Push
+  remote?: string;
+  branch?: string;
+  remoteBranch?: string;
+  timeoutMs?: number;
+  safeToRetry: false;
+}
+
+export type ActionConfig = CommandConfig | HttpConfig | ScriptConfig | GitConfig;
+
+export const gitTypes = new Set([
+  'git_status',
+  'git_diff',
+  'git_create_branch',
+  'git_commit',
+  'git_push',
+]);
+export const gitReads = new Set(['git_status', 'git_diff']);
+export const actionTypes = new Set(['command', 'http', 'script', ...gitTypes]);
+// Actions that work in the run's own worktree.
+export const workspaceTypes = new Set(['command', ...gitTypes]);
 
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -168,6 +202,33 @@ export function freezeAction(
       resultSchema: (authored['resultSchema'] as Json | undefined) ?? null,
       safeToRetry: authored['safeToRetry'] === true,
     };
+  }
+  if (gitTypes.has(type)) {
+    if (!workspaceId)
+      throw new ShiftError('WORKSPACE_UNAVAILABLE', 'This run has no workspace for Git.', 422);
+    const text = (field: string) => {
+      const value = authored[field];
+      if (typeof value !== 'string') return undefined;
+      const rendered = renderText(value, bindings);
+      if (rendered.includes('\0'))
+        throw new ShiftError('INVALID_ARGUMENT', `${field} contains NUL.`, 422);
+      return rendered;
+    };
+    const config: GitConfig = { action: type as GitAction, workspaceId, safeToRetry: false };
+    for (const field of ['maxEntries', 'maxBytes', 'timeoutMs'] as const)
+      if (typeof authored[field] === 'number') config[field] = authored[field] as number;
+    if (authored['against'] === 'head' || authored['against'] === 'base')
+      config.against = authored['against'];
+    if (Array.isArray(authored['paths'])) config.paths = authored['paths'] as string[];
+    if (authored['allowEmpty'] === true) config.allowEmpty = true;
+    if (typeof authored['remote'] === 'string') config.remote = authored['remote'];
+    for (const field of ['name', 'message', 'branch', 'remoteBranch'] as const) {
+      const value = text(field);
+      if (value !== undefined) config[field] = value;
+    }
+    if (type === 'git_commit' && !config.message?.trim())
+      throw new ShiftError('INVALID_ARGUMENT', 'The commit message is empty.', 422);
+    return config;
   }
   throw new ShiftError('UNSUPPORTED_NODE', `${type} is not an action.`, 422);
 }
