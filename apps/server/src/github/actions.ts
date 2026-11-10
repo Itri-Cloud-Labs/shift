@@ -99,6 +99,11 @@ export function githubIdentity(config: GitHubConfig): Json {
   return identity;
 }
 
+// A write GitHub may have carried out: it never answered, or it failed on its side. Either way the
+// effect is decided from GitHub's records under the same operation, not retried as a new one.
+export const mayHaveApplied = (error: GitHubError) =>
+  error.providerStatus === null || error.providerStatus >= 500;
+
 export const marker = (operationId: string) => `<!-- shift-operation: ${operationId} -->`;
 
 // The body as stored on GitHub: authored text, then the marker on its own line.
@@ -312,8 +317,9 @@ export async function performPr(
       return { kind: 'succeeded', data: pullRequest(repo, pull) };
     } catch (error) {
       if (!(error instanceof GitHubError)) throw error;
-      // No answer: whether it was created is decided from GitHub's records, never assumed.
-      if (error.providerStatus === null)
+      // No answer, or a server error that may have come after the change was made: whether it
+      // was created is decided from GitHub's records under this operation, never assumed.
+      if (mayHaveApplied(error))
         return (await reconcileCreate(context, repo, args, operationId, false)) as Outcome;
       // Refused: perhaps because an earlier submission of this operation already created it.
       if (error.providerStatus === 422) {
@@ -337,7 +343,7 @@ export async function performPr(
     return { kind: 'succeeded', data: pullRequest(repo, pull) };
   } catch (error) {
     if (!(error instanceof GitHubError)) throw error;
-    if (error.providerStatus === null) {
+    if (mayHaveApplied(error)) {
       const settled = await reconcileUpdate(context, repo, args);
       return settled.kind === 'redo'
         ? { kind: 'uncertain', explanation: `GitHub did not answer the update of #${number}.` }

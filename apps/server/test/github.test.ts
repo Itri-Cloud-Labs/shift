@@ -422,6 +422,46 @@ test('a lost response to a create is settled from GitHub, and a refused duplicat
   }
 });
 
+test('a create or update GitHub made before answering 500 is settled from GitHub', async () => {
+  const { env, fake, close } = await connected();
+  try {
+    fake.failAfter.push({ match: /^POST \/repos\/acme\/widgets\/pulls$/, status: 502 });
+    const created = await settled(
+      env,
+      await run(env, actionWorkflow('github_create_pr', { head: 'work', title: 'T' })),
+    );
+    assert.equal(created.state, 'COMPLETED', JSON.stringify(created.attention));
+    assert.equal(fake.pullsOf(9001).length, 1);
+    assert.equal(step(env, created.id, 'act').operations.length, 1);
+    fake.failAfter.push({ match: /^PATCH /, status: 500 });
+    const updated = await settled(
+      env,
+      await run(env, actionWorkflow('github_update_pr', { number: '1', title: 'Renamed' })),
+    );
+    assert.equal(updated.state, 'COMPLETED', JSON.stringify(updated.attention));
+    assert.equal(step(env, updated.id, 'act').output!.data['title'], 'Renamed');
+  } finally {
+    await close();
+  }
+});
+
+test('a connect that a disconnect overtook is refused rather than undoing it', async () => {
+  const { env, close } = await connected();
+  try {
+    const installationId = env.github.apps()[0]!.installations[0]!.id;
+    const pending = env.github.connect(
+      env.projectId,
+      { installationId, repositoryId: 9001 },
+      local,
+    );
+    env.github.disconnect(env.projectId, {}, local);
+    await assert.rejects(pending, { code: 'REVISION_CONFLICT' });
+    assert.equal(env.github.connection(env.projectId), null);
+  } finally {
+    await close();
+  }
+});
+
 test('an interrupted update is recognized when it landed and sent again when it did not', async () => {
   const { env, fake } = await connected();
   const id = await run(env, prFlow, { what: 'x' });

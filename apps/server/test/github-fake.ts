@@ -96,6 +96,8 @@ export class FakeGitHub {
   // Test hooks: answer a route with an error, or perform it and then drop the connection.
   fail: Array<{ match: RegExp; status: number; message: string; times?: number }> = [];
   dropAfter: RegExp[] = [];
+  // Perform the route, then answer with a server error, as GitHub sometimes does.
+  failAfter: Array<{ match: RegExp; status: number }> = [];
   // Called before a merge is performed; may throw to refuse it as GitHub's protections would.
   mergeRule:
     | ((
@@ -258,7 +260,12 @@ export class FakeGitHub {
       return send(failure.status, { message: failure.message });
     }
     const drop = this.dropAfter.findIndex((pattern) => pattern.test(route));
+    const late = this.failAfter.findIndex((item) => item.match.test(route));
     const reply = (status: number, data: unknown) => {
+      if (late >= 0) {
+        const failed = this.failAfter.splice(late, 1)[0]!.status;
+        return send(failed, { message: 'Server Error' });
+      }
       if (drop >= 0) {
         // The request took effect; its response is lost on the way back.
         this.dropAfter.splice(drop, 1);

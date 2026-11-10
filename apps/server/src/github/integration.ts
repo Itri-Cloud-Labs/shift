@@ -643,11 +643,20 @@ export class GitHubIntegration {
     const stored = body.commandId ? this.receipts.lookup(actor, body.commandId, request) : null;
     if (stored) return stored;
     this.#project(projectId);
+    // The binding this request replaces. If another connect or a disconnect lands while the
+    // repository is being read, this one is stale and must not undo it.
+    const before = this.#connectionRow(projectId)?.id ?? null;
     const installation = this.#installationRow(body.installationId);
     const repository = await this.#observeRepository(installation, body.repositoryId);
     return this.receipts.execute(actor, body.commandId, request, () => {
       const now = this.clock.now();
       const existing = this.#connectionRow(projectId);
+      if ((existing?.id ?? null) !== before)
+        throw new ShiftError(
+          'REVISION_CONFLICT',
+          "The project's GitHub connection changed while this one was being checked. Look again and retry.",
+          409,
+        );
       if (existing)
         this.db
           .prepare(
