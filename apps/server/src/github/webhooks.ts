@@ -177,12 +177,19 @@ export class GitHubWebhooks {
     const action = typeof payload['action'] === 'string' ? payload['action'].slice(0, 64) : null;
     const installationId = payloadField(payload, 'installation', 'id');
     const repositoryId = payloadField(payload, 'repository', 'id');
-    const repository =
-      typeof repositoryId === 'number' && Number.isSafeInteger(repositoryId) && repositoryId > 0
-        ? repositoryId
-        : null;
+    const identity = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+    const invalidIdentity = (message: string) =>
+      new ShiftError('GITHUB_INVALID_IDENTITY', message, 422);
+    // Every App delivery but a ping names its installation, and one about a repository names it
+    // by ID; a delivery that does not, or names them badly, is refused rather than recorded.
+    if (event !== 'ping' && !identity(installationId))
+      throw invalidIdentity('The delivery has no valid installation ID.');
+    if (payload['repository'] !== undefined && !identity(repositoryId))
+      throw invalidIdentity('The delivery has no valid repository ID.');
+    const repository = identity(repositoryId) ? repositoryId : null;
     let installationRowId: string | null = null;
-    if (typeof installationId === 'number') {
+    if (identity(installationId)) {
       const row = this.#db
         .prepare(
           "SELECT id FROM github_installations WHERE github_app_id = ? AND installation_id = ? AND state != 'REMOVED'",
@@ -202,7 +209,7 @@ export class GitHubWebhooks {
       event,
       action,
       deliveryId,
-      installationId: typeof installationId === 'number' ? installationId : null,
+      installationId: identity(installationId) ? installationId : null,
       repository: repository
         ? {
             id: repository,
@@ -250,7 +257,7 @@ export class GitHubWebhooks {
             deliveryId,
             event,
             action,
-            typeof installationId === 'number' ? installationId : null,
+            identity(installationId) ? installationId : null,
             repository,
             body.toString('utf8'),
             createHash('sha256').update(body).digest('hex'),

@@ -360,7 +360,7 @@ A `github_trigger` starts a run for each delivery the project's repository sends
 Shift checks each delivery before it starts anything:
 
 - The `X-Hub-Signature-256` HMAC is checked over the exact bytes received, against the App's webhook secret, and during a rotation window the owner chose, the secret it replaced (`shift github rotate APP --webhook-secret --previous-minutes N`). A bad signature is `401 GITHUB_SIGNATURE_INVALID`; an App without a webhook secret is `409 GITHUB_WEBHOOK_SECRET_MISSING`.
-- The installation must be one Shift registered (`422 GITHUB_UNKNOWN_INSTALLATION` otherwise; refresh the App after installing it elsewhere). Only projects bound to the delivery's repository through that installation match.
+- Every delivery but a `ping` must name its installation, and one about a repository the repository, by positive numeric IDs (`422 GITHUB_INVALID_IDENTITY` otherwise). The installation must be one Shift registered (`422 GITHUB_UNKNOWN_INSTALLATION` otherwise; refresh the App after installing it elsewhere). Only projects bound to the delivery's repository through that installation match.
 - Bodies over 2 MiB, and deliveries whose run input would exceed 1 MiB, are refused with `413`, never acknowledged and dropped.
 - The delivery ID is recorded with the payload as received and the occurrences of the subscriptions it matched, in one transaction, before GitHub gets its `202`. A redelivery is answered `200` from that record, with `duplicate: true` and the same occurrences as they stand now: it matches nothing again, even after later publications.
 

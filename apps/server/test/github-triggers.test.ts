@@ -52,6 +52,17 @@ test('invalid signatures, identities and oversized payloads start nothing; a rec
       webhooks.receive(appRowId, stranger.headers, stranger.body),
       'GITHUB_UNKNOWN_INSTALLATION',
     );
+    // Identities that are missing or malformed are refused, not recorded.
+    for (const extra of [
+      { installation: undefined },
+      { installation: { id: '501' } },
+      { installation: { id: -1 } },
+      { repository: { name: 'widgets' } },
+      { repository: { id: 9001.5 } },
+    ] as Array<Record<string, Json>>) {
+      const odd = delivery({ extra });
+      await rejects(webhooks.receive(appRowId, odd.headers, odd.body), 'GITHUB_INVALID_IDENTITY');
+    }
     // Over the 1 MiB trigger input limit but under the 2 MiB body limit.
     const large = delivery({ extra: { filler: 'x'.repeat(1_200_000) } });
     await rejects(webhooks.receive(appRowId, large.headers, large.body), 'REQUEST_TOO_LARGE');
