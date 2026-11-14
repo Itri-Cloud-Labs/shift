@@ -236,6 +236,10 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     { kind: 'complete', data: { summary: 'done' } },
     { kind: 'extend', executions: 10 },
     { kind: 'extend', activeMs: 1_800_000 },
+    { kind: 'hold' },
+    { kind: 'hold', reason: 'Check the notes' },
+    { kind: 'abort' },
+    { kind: 'resume' },
   ])
     assert.ok(parseRequest(control(value)), JSON.stringify(value));
   for (const value of [
@@ -245,7 +249,11 @@ test('dispatch returns only public fixture records and safe errors', async () =>
     respond({ decision: '' }),
     respond({ path: '/api/v0/admin/shutdown' }),
     respond({ response: { comment: 'x'.repeat(70_000) } }),
-    control({ kind: 'resume' }),
+    // Intervention controls take only what they need: a hold's reason is text, an abort nothing.
+    control({ kind: 'resume', reason: 'go' }),
+    control({ kind: 'hold', reason: '' }),
+    control({ kind: 'abort', executionId: id }),
+    control({ kind: 'pause' }),
     control({ kind: 'retry', commandId: 'mine' }),
     control({ kind: 'fail', reason: '' }),
     control({ kind: 'extend', executions: 0 }),
