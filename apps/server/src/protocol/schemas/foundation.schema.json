@@ -3167,6 +3167,27 @@
           "minimum": 0
         }
       }
+    },
+    "SchedulePreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "instants"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "instants": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
     }
   }
 }

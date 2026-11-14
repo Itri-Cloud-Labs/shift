@@ -70,6 +70,7 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | `manual_trigger`    | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. A workflow has at most one; without it, the workflow starts only from its other triggers.                                                     | `success`                           |
 | `github_trigger`    | Required `event`; optional `actions` and `branches`. Starts a run for each matching delivery from the project's repository. See [triggers](#triggers).                                                                           | `success`                           |
+| `schedule_trigger`  | Required `schedule`: `{"kind": "cron", "expression", "timezone"}` or `{"kind": "interval", "minutes"}`; optional `misfire` (`latest`, `skip` or `replay`). See [schedule triggers](#schedule-triggers).                          | `success`                           |
 | `transform`         | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value, and [operations](#transform-operations) are computed.                                                       | `success`, `error`                  |
 | `agent`             | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema`, `limits`, `reports` and `handoffs`. See [agent nodes](#agent-nodes).                                                                | `success`, `error`                  |
 | `condition`         | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
@@ -366,6 +367,24 @@ Shift checks each delivery before it starts anything:
 
 A `check_run`, `check_suite` or `status` delivery also brings forward the next read of every [Wait for Checks](#checks-and-merging) step watching its commit in that repository, whether or not any trigger subscribes to it. The wait still decides from its own fresh read.
 
+### Schedule triggers
+
+A `schedule_trigger` starts a run at each instant of its schedule. The run's input is `scheduledFor`, the instant (ISO 8601 UTC), and `firedAt`, when Shift reached it.
+
+- **Cron:** five fields (minute, hour, day of month, month, day of week) with numbers, three-letter names (`JAN`, `MON`), `*`, ranges, lists and steps, in a named IANA time zone such as `Europe/Berlin` or `UTC`. Seconds are always zero. When both day of month and day of week are restricted, a day matching either counts. Macros (`@daily`), seconds fields and `L`, `W`, `#` and `?` are refused at publication, as are offsets and abbreviations instead of a zone name.
+- **Daylight saving:** a wall-clock time that does not exist that day (the hour skipped in spring) does not fire; a wall-clock time that happens twice (the hour repeated in autumn) fires once, at its first instant.
+- **Interval:** every `minutes` minutes as a UTC duration, counted from the minute the schedule was published, regardless of the time zone.
+
+Publication starts a new or changed schedule from that moment; republishing it unchanged keeps its place. Instants pass while the server is down or busy; one more than a minute old when Shift reaches it was missed, and `misfire` decides:
+
+| `misfire` | After missed instants                                                                        |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `latest`  | Only the newest instant fires. The default.                                                  |
+| `skip`    | Only instants that are on time fire.                                                         |
+| `replay`  | Every missed instant fires, oldest first, up to the newest 100; the ones before are skipped. |
+
+What was skipped is recorded on the trigger as `state.lastMisfire` (`policy`, `missed`, `from`, `to`, `at`) and in a `trigger.misfire` event, and on the fired occurrence's `details`. Pause discards the instants of the paused interval: unpausing starts from that moment. Each instant is an occurrence identified by its UTC time, so it can never start two runs, and its admission follows the workflow's overlap policy like any trigger. `shift schedule preview` lists upcoming instants with the same matcher.
+
 ## Workspaces
 
 When a run starts, Shift resolves the project's base ref to a commit and records it as the run's `baseCommit`. Before the first agent node runs, Shift creates a detached worktree at that commit under `<state>/workspaces/<id>`. All of the run's agents work there.
@@ -543,4 +562,4 @@ Publishing refuses these, so a document never silently ignores them:
 
 - Workspaces other than a new one per run (M08a).
 
-Schedule and authenticated HTTP triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
+Authenticated HTTP triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).

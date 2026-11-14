@@ -28,6 +28,7 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "better-sqlite3": "13.0.3",
+    "cron-parser": "5.10.3",
     "drizzle-orm": "0.45.3",
     "express": "5.2.1",
     "fs-native-extensions": "1.5.1",
