@@ -63,6 +63,11 @@ test('inspection reads a run workspace and never leaves it', async () => {
     await rejects(inspector.file(workspace.id, '../../etc/passwd'), 'INVALID_PATH');
     await rejects(inspector.file(workspace.id, '/etc/passwd'), 'INVALID_PATH');
     await rejects(inspector.file(workspace.id, '.git/config'), 'INVALID_PATH');
+    // A link into the worktree's Git metadata is refused too, for files and folders. The opened
+    // descriptor is checked the same way, so swapping a folder for such a link mid-request fails.
+    await symlink('.git', join(root, 'meta'));
+    await rejects(inspector.file(workspace.id, 'meta'), 'PATH_OUTSIDE_WORKSPACE');
+    await rejects(inspector.list(workspace.id, 'meta'), 'PATH_OUTSIDE_WORKSPACE');
     await rejects(inspector.file(workspace.id, 'src'), 'NOT_A_FILE');
     await rejects(inspector.file(workspace.id, 'pipe'), 'NOT_A_FILE');
     await rejects(inspector.file(workspace.id, 'nothing.txt'), 'NOT_FOUND');

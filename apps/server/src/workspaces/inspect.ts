@@ -42,6 +42,9 @@ export function cleanPath(path: string | undefined): string {
 }
 
 const within = (root: string, path: string) => path === root || path.startsWith(root + sep);
+// Inside the workspace and outside its Git metadata, whatever path reached it.
+const inspectable = (root: string, path: string) =>
+  within(root, path) && (path === root || path.slice(root.length + 1).split(sep)[0] !== '.git');
 
 export class WorkspaceInspector {
   constructor(private readonly workspaces: Workspaces) {}
@@ -89,7 +92,7 @@ export class WorkspaceInspector {
     }
     try {
       const opened = await readlink(`/proc/self/fd/${handle.fd}`);
-      if (!within(root, opened)) throw outside();
+      if (!inspectable(root, opened)) throw outside();
       const stat = await handle.stat();
       if (!stat.isFile())
         throw new ShiftError('NOT_A_FILE', 'Only regular files can be read.', 422);
@@ -119,7 +122,7 @@ export class WorkspaceInspector {
     let truncated = false;
     try {
       const opened = await readlink(`/proc/self/fd/${handle.fd}`);
-      if (!within(root, opened)) throw outside();
+      if (!inspectable(root, opened)) throw outside();
       const through = `/proc/self/fd/${handle.fd}`;
       const isRoot = opened === root;
       const dir = await opendir(through);
