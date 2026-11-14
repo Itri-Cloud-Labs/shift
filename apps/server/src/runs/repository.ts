@@ -2097,7 +2097,9 @@ export class RunRepository {
         const now = this.clock.now();
         const due = this.db
           .prepare(
-            "SELECT id, run_id, execution_id, reason FROM wakeups WHERE state = 'PENDING' AND due_at <= ? ORDER BY due_at, rowid",
+            // A held run's poll stays pending: reading the checks resumes its attempt, which is
+            // new work. It fires once the run is resumed.
+            "SELECT id, run_id, execution_id, reason FROM wakeups WHERE state = 'PENDING' AND due_at <= ? AND NOT (reason = 'poll' AND run_id IN (SELECT id FROM runs WHERE hold_json IS NOT NULL)) ORDER BY due_at, rowid",
           )
           .all(now) as Array<{ id: string; run_id: string; execution_id: string; reason: string }>;
         for (const wakeup of due) {
@@ -2563,7 +2565,11 @@ export class RunRepository {
   // When the earliest pending wake-up falls due, or null when nothing waits.
   nextWakeup(): number | null {
     return (
-      this.db.prepare("SELECT MIN(due_at) AS due FROM wakeups WHERE state = 'PENDING'").get() as {
+      this.db
+        .prepare(
+          "SELECT MIN(due_at) AS due FROM wakeups WHERE state = 'PENDING' AND NOT (reason = 'poll' AND run_id IN (SELECT id FROM runs WHERE hold_json IS NOT NULL))",
+        )
+        .get() as {
         due: number | null;
       }
     ).due;
@@ -3015,6 +3021,13 @@ export class RunRepository {
           run.state === 'NEEDS_HUMAN' &&
           (JSON.parse(run.attention_json ?? '{}') as { code?: string }).code === 'INTERVENING';
         const stuck = intervened ? this.#stuck(runId) : undefined;
+        // An abort is accounted for before the hold can end; until then its step may still run.
+        if (this.#holdOf(runId)?.['abortRequested'] === true)
+          throw new ShiftError(
+            'ABORT_PENDING',
+            'The step is still being stopped. Resume once it has stopped.',
+            409,
+          );
         // The owner's own turn in the run's session must end first: it owns the session until then.
         const sessions = this.db
           .prepare(

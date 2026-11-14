@@ -56,6 +56,8 @@ class FakeHarness implements HarnessAdapter {
   // Session creations that fail as if the runtime could not start.
   failCreates = 0;
   confirmCancel = true;
+  // While set, a cancellation waits for it, as a slow harness would.
+  cancelGate: Promise<void> | null = null;
   // Each turn writes both default reports first, as Shift's prompt asks, unless switched off.
   writeReports = true;
   handler!: ResultHandler;
@@ -164,6 +166,7 @@ class FakeHarness implements HarnessAdapter {
     correlation: InvocationCorrelation,
   ): Promise<CancellationObservation> {
     this.cancels++;
+    if (this.cancelGate) await this.cancelGate;
     if (!this.confirmCancel) {
       return {
         kind: 'unconfirmed',
@@ -4327,5 +4330,32 @@ test('an abort acknowledged before a restart is finished at startup, not run on'
     assert.equal((await settled(restarted, runId)).state, 'COMPLETED');
   } finally {
     await restarted.close();
+  }
+});
+
+test('resume waits until an abort has stopped its step', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (fake.turns.size > 1) await complete({ count: 2 })(turn, fake);
+  });
+  try {
+    const runId = await start(harnessed);
+    await eventually(() =>
+      view(harnessed, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+    );
+    let release!: () => void;
+    harnessed.fake.cancelGate = new Promise<void>((resolve) => (release = resolve));
+    control(harnessed, runId, 'hold');
+    control(harnessed, runId, 'abort');
+    await eventually(() => (harnessed.fake.cancels === 1 ? true : undefined));
+    // The stop is not accounted for yet: the hold, and its abort, stay.
+    assert.throws(() => control(harnessed, runId, 'resume'), { code: 'ABORT_PENDING' });
+    release();
+    await eventually(() =>
+      view(harnessed, runId).attention?.code === 'INTERVENING' ? true : undefined,
+    );
+    control(harnessed, runId, 'resume');
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
+  } finally {
+    await harnessed.close();
   }
 });
