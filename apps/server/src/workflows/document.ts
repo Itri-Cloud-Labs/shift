@@ -49,7 +49,7 @@ export interface WorkflowDocument {
   formatVersion: 1;
   execution: {
     workspace: { kind: 'new' };
-    overlap: 'allow';
+    overlap: 'skip' | 'queue' | 'allow';
     limits: { maxExecutions: number; maxActiveMs: number };
   };
   nodes: NodeDefinition[];
@@ -73,7 +73,7 @@ export function normalizeDocument(input: unknown): unknown {
     ...document,
     execution: {
       workspace: { kind: 'new' },
-      overlap: 'allow',
+      overlap: 'skip',
       ...execution,
       limits: {
         maxExecutions: 1000,
@@ -119,7 +119,7 @@ const validateShape = ajv.compile({
           required: ['kind'],
           properties: { kind: { type: 'string' } },
         },
-        overlap: { type: 'string' },
+        overlap: { enum: ['skip', 'queue', 'allow'] },
         limits: {
           type: 'object',
           additionalProperties: false,
@@ -370,9 +370,6 @@ export function diagnose(document: unknown): Diagnostic[] {
       'Only new workspaces are supported until workspace allocation (M08).',
     );
   }
-  if (doc.execution.overlap !== 'allow') {
-    add('/execution/overlap', 'Overlap policies arrive with triggers and admission (M12).');
-  }
   const ids = new Set<string>();
   const entries: string[] = [];
   doc.nodes.forEach((node, index) => {
@@ -585,9 +582,10 @@ export function diagnose(document: unknown): Diagnostic[] {
         add(`${at}/config`, `The template uses undeclared binding ${name}.`);
     }
   });
-  if (entries.length !== 1) {
-    add('/nodes', 'A workflow needs exactly one manual_trigger node.');
-  }
+  // Each trigger node is its own entry point; a run starts from one of them (specification 6.1).
+  if (entries.length === 0) add('/nodes', 'A workflow needs at least one trigger node.');
+  if (doc.nodes.filter((node) => node.type === 'manual_trigger').length > 1)
+    add('/nodes', 'A workflow has at most one manual_trigger node.');
   const connectionIds = new Set<string>();
   const usedPorts = new Set<string>();
   doc.connections.forEach((connection, index) => {

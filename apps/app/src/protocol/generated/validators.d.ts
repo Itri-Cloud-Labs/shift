@@ -33,6 +33,11 @@ import type {
   GitHubAppList,
   GitHubAppResponse,
   GitHubConnectionResponse,
+  GitHubDeliveryResponse,
+  GitHubDeliveryPage,
+  TriggerList,
+  OccurrencePage,
+  OccurrenceResponse,
   SessionList,
   SessionResponse,
   InvocationResponse,
@@ -86,6 +91,11 @@ export const validateProjectPermissionsResponse: Validator<ProjectPermissionsRes
 export const validateGitHubAppList: Validator<GitHubAppList>;
 export const validateGitHubAppResponse: Validator<GitHubAppResponse>;
 export const validateGitHubConnectionResponse: Validator<GitHubConnectionResponse>;
+export const validateGitHubDeliveryResponse: Validator<GitHubDeliveryResponse>;
+export const validateGitHubDeliveryPage: Validator<GitHubDeliveryPage>;
+export const validateTriggerList: Validator<TriggerList>;
+export const validateOccurrencePage: Validator<OccurrencePage>;
+export const validateOccurrenceResponse: Validator<OccurrenceResponse>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
 export const validateInvocationResponse: Validator<InvocationResponse>;

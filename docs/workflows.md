@@ -40,14 +40,14 @@ A minimal document needs only `nodes` and `connections`. Everything else has def
 }
 ```
 
-| Field                            | Default           | Meaning                                                                  |
-| -------------------------------- | ----------------- | ------------------------------------------------------------------------ |
-| `formatVersion`                  | `1`               | The only supported version.                                              |
-| `execution.limits.maxExecutions` | `1000`            | Executions allowed per run, across all nodes.                            |
-| `execution.limits.maxActiveMs`   | 4 hours           | Active execution time allowed per run. See [active time](#active-time).  |
-| `execution.workspace`            | `{"kind": "new"}` | Every run gets a new workspace. Other values are refused.                |
-| `execution.overlap`              | `"allow"`         | Concurrent runs of one workflow are allowed. Other policies are refused. |
-| `presentation`                   | `{}`              | Editor data. Execution ignores it.                                       |
+| Field                            | Default           | Meaning                                                                                                                |
+| -------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `formatVersion`                  | `1`               | The only supported version.                                                                                            |
+| `execution.limits.maxExecutions` | `1000`            | Executions allowed per run, across all nodes.                                                                          |
+| `execution.limits.maxActiveMs`   | 4 hours           | Active execution time allowed per run. See [active time](#active-time).                                                |
+| `execution.workspace`            | `{"kind": "new"}` | Every run gets a new workspace. Other values are refused.                                                              |
+| `execution.overlap`              | `"skip"`          | What a trigger does while a run of this workflow is unfinished: `skip`, `queue` or `allow`. See [triggers](#triggers). |
+| `presentation`                   | `{}`              | Editor data. Execution ignores it.                                                                                     |
 
 Each node has:
 
@@ -68,7 +68,8 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 
 | Type                | Config                                                                                                                                                                                                                           | Ports                               |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `manual_trigger`    | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. Each workflow has exactly one.                                                                                                                | `success`                           |
+| `manual_trigger`    | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. A workflow has at most one; without it, the workflow starts only from its other triggers.                                                     | `success`                           |
+| `github_trigger`    | Required `event`; optional `actions` and `branches`. Starts a run for each matching delivery from the project's repository. See [triggers](#triggers).                                                                           | `success`                           |
 | `transform`         | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value, and [operations](#transform-operations) are computed.                                                       | `success`, `error`                  |
 | `agent`             | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema`, `limits`, `reports` and `handoffs`. See [agent nodes](#agent-nodes).                                                                | `success`, `error`                  |
 | `condition`         | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
@@ -88,14 +89,14 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | `git_push`          | Optional `remote` (default `origin`), `branch` (default the current one), `remoteBranch` and `timeoutMs`.                                                                                                                        | `success`, `error`                  |
 | `end`               | Optional `outcome` (`COMPLETED` or `FAILED`, default `COMPLETED`) and `reason`.                                                                                                                                                  | none                                |
 
-The trigger's output is the run input. A transform's output is its rendered template, at most 1 MiB. An `end` node passes its input through and finishes the run with its declared outcome.
+A workflow needs at least one trigger node, and each is its own entry point: a run starts from one of them. The trigger's output is the run input. A transform's output is its rendered template, at most 1 MiB. An `end` node passes its input through and finishes the run with its declared outcome.
 
 ## Connections
 
 A connection joins one node's output port to another node's `input`.
 
 - Each output port has at most one connection. There is no fan-out yet, so a run follows one path.
-- Nothing may connect into the trigger.
+- Nothing may connect into a trigger.
 - When a node finishes, the run follows the connection from the port it took. A port without a connection completes the run successfully with that node's output.
 - A failed node takes its `error` port when it has a connection there. The next node receives `{"error": {"code", "category", "message"}}` as its data. Without an `error` connection the run fails.
 - Loops are ordinary connections back to an earlier node. Each pass creates a new execution. When a node reaches `limits.maxExecutionsPerRun`, or the run reaches `execution.limits.maxExecutions`, the run stops in `NEEDS_HUMAN` with `EXECUTION_LIMIT` before running anything else. `shift run extend` raises the limit for that run.
@@ -323,6 +324,48 @@ Shift never decides on its own whether a pull request is ready. The graph does, 
 
 A merge is an operation. Shift reads the pull request first only to record its head for recovery. After a crash or a lost response, a pull request merged since then with that head is the step's result. One still open with the same head is merged again with the same request, and GitHub decides again. Anything else, such as a head that moved, puts the run in `NEEDS_HUMAN`.
 
+## Triggers
+
+Publishing a version subscribes its trigger nodes. A trigger node the next version keeps, with the same ID and type, keeps its subscription, so its history (and, for later trigger types, its endpoint and credentials) carry over; one the version drops stops receiving. What a trigger receives is an **occurrence**: the event with the version that was active when it arrived and the run's input, recorded with the decision in one transaction. An occurrence always runs the version it captured, even if another is published while it waits.
+
+Each occurrence is decided by the workflow's `execution.overlap`, counted per workflow. A run is unfinished until it is `COMPLETED`, `FAILED` or `CANCELLED`, so waiting, held and needs-human runs count:
+
+| Policy  | While a run is unfinished                                                                       |
+| ------- | ----------------------------------------------------------------------------------------------- |
+| `skip`  | The occurrence is recorded as `SKIPPED` with reason `OVERLAP`. This is the default.             |
+| `queue` | The occurrence is `QUEUED` and admitted, oldest first, once the workflow has no unfinished run. |
+| `allow` | Another run starts at once.                                                                     |
+
+What an event matched, the version it runs and whether it may start are decided in the transaction that records it, before any other work, so a publication or Pause a moment later changes none of it. An occurrence that may start is `ACCEPTED` until its run exists, then `ADMITTED` (with its `runId`); the others are `QUEUED`, `SKIPPED` and `REJECTED`. An accepted occurrence counts as an unfinished run for overlap, and one left accepted by a crash gets its run after the restart. A rejection keeps the reason, such as `GITHUB_NOT_CONNECTED` when the graph needs a GitHub connection the project lacks, or `BASE_UNRESOLVED`.
+
+**Pause.** `shift workflow pause` stops every start: a manual start fails with `WORKFLOW_DISABLED`, and an automatic occurrence is recorded as `SKIPPED` with reason `WORKFLOW_PAUSED`. Occurrences queued before the Pause stay queued until `unpause`, and runs already admitted continue. **Manual starts** follow the policy too: a busy workflow refuses one with `WORKFLOW_BUSY` unless that start sets `allowOverlap` (`--allow-overlap`). A workflow without a `manual_trigger` refuses manual starts with `NO_MANUAL_TRIGGER`.
+
+### GitHub triggers
+
+A `github_trigger` starts a run for each delivery the project's repository sends through the App's webhook path, `/api/v0/github/apps/{id}/webhook`. The App's settings must subscribe to the event (Settings › Permissions & events), and the installation must grant its permission:
+
+| `event`                                                              | Installation permission | Branch filter matches |
+| -------------------------------------------------------------------- | ----------------------- | --------------------- |
+| `push`                                                               | contents read           | the pushed branch     |
+| `pull_request`, `pull_request_review`, `pull_request_review_comment` | pull requests read      | the base branch       |
+| `issues`, `issue_comment`                                            | issues read             | never                 |
+| `check_run`, `check_suite`                                           | checks read             | the head branch       |
+| `status`                                                             | statuses read           | any containing branch |
+| `workflow_run`                                                       | actions read            | the head branch       |
+| `release`                                                            | contents read           | never                 |
+| `create`, `delete`                                                   | contents read           | the branch, not a tag |
+
+`actions` limits the trigger to those values of the delivery's `action`, such as `["opened", "synchronize"]`. `branches` limits it to branch names, where `*` stands for any characters, `/` included (`release/*`); an event without a branch then never matches. The run's input, and the trigger's data, is `event`, `action`, `deliveryId`, `installationId`, `repository` (`id`, `owner`, `name`), `sender` and the whole `payload`.
+
+Shift checks each delivery before it starts anything:
+
+- The `X-Hub-Signature-256` HMAC is checked over the exact bytes received, against the App's webhook secret, and during a rotation window the owner chose, the secret it replaced (`shift github rotate APP --webhook-secret --previous-minutes N`). A bad signature is `401 GITHUB_SIGNATURE_INVALID`; an App without a webhook secret is `409 GITHUB_WEBHOOK_SECRET_MISSING`.
+- Every delivery but a `ping` must name its installation, and one about a repository the repository, by positive numeric IDs (`422 GITHUB_INVALID_IDENTITY` otherwise). The installation must be one Shift registered (`422 GITHUB_UNKNOWN_INSTALLATION` otherwise; refresh the App after installing it elsewhere). Only projects bound to the delivery's repository through that installation match.
+- Bodies over 2 MiB, and deliveries whose run input would exceed 1 MiB, are refused with `413`, never acknowledged and dropped.
+- The delivery ID is recorded with the payload as received and the occurrences of the subscriptions it matched, in one transaction, before GitHub gets its `202`. A redelivery is answered `200` from that record, with `duplicate: true` and the same occurrences as they stand now: it matches nothing again, even after later publications.
+
+A `check_run`, `check_suite` or `status` delivery also brings forward the next read of every [Wait for Checks](#checks-and-merging) step watching its commit in that repository, whether or not any trigger subscribes to it. The wait still decides from its own fresh read.
+
 ## Workspaces
 
 When a run starts, Shift resolves the project's base ref to a commit and records it as the run's `baseCommit`. Before the first agent node runs, Shift creates a detached worktree at that commit under `<state>/workspaces/<id>`. All of the run's agents work there.
@@ -498,7 +541,6 @@ A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn
 
 Publishing refuses these, so a document never silently ignores them:
 
-- Overlap policies other than `allow` (M12).
 - Workspaces other than a new one per run (M08a).
 
-GitHub event triggers, and schedule and webhook triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
+Schedule and authenticated HTTP triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).

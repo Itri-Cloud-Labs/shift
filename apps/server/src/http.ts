@@ -29,6 +29,11 @@ import {
   validateGitHubAppList,
   validateGitHubAppResponse,
   validateGitHubConnectionResponse,
+  validateGitHubDeliveryResponse,
+  validateGitHubDeliveryPage,
+  validateTriggerList,
+  validateOccurrencePage,
+  validateOccurrenceResponse,
   validateCredentialResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
@@ -56,6 +61,8 @@ import type { EventStreams } from './events/streams.js';
 import type { Device } from './devices/registry.js';
 import type { Credentials } from './actions/credentials.js';
 import type { GitHubIntegration } from './github/integration.js';
+import type { GitHubWebhooks } from './github/webhooks.js';
+import type { TriggerService } from './triggers/service.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
 import type { DefinitionRepository } from './workflows/repository.js';
@@ -76,6 +83,8 @@ export function createHttpServer(options: {
   workspaces?: WorkspaceService;
   credentials?: Credentials;
   github?: GitHubIntegration;
+  triggers?: TriggerService;
+  webhooks?: GitHubWebhooks;
   devices?: DeviceService;
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
@@ -213,6 +222,13 @@ export function createHttpServer(options: {
     };
     const query = (req: express.Request, name: string) =>
       typeof req.query[name] === 'string' ? (req.query[name] as string) : undefined;
+    const cursor = (req: express.Request, name: string, max: number) => {
+      const value = query(req, name);
+      if (value === undefined) return undefined;
+      if (!/^[1-9][0-9]{0,15}$/.test(value) || Number(value) > max)
+        throw new ShiftError('INVALID_REQUEST', `Invalid ${name}.`, 422, false, [`/${name}`]);
+      return Number(value);
+    };
     router.post('/projects', guard, json, async (req, res) => {
       command(res, await service.addProject(body(req), actorOf(res)), validateProjectResponse);
     });
@@ -305,6 +321,43 @@ export function createHttpServer(options: {
           validateGitHubConnectionResponse,
         );
       });
+      const webhooks = options.webhooks;
+      if (webhooks)
+        router.get('/github/apps/:appId/deliveries', guard, (req, res) => {
+          const before = cursor(req, 'before', Number.MAX_SAFE_INTEGER);
+          const limit = cursor(req, 'limit', 200);
+          const page = webhooks.deliveries(String(req.params['appId']), {
+            ...(before ? { before } : {}),
+            ...(limit ? { limit } : {}),
+          });
+          reply(res, 200, page, validateGitHubDeliveryPage);
+        });
+    }
+    const triggers = options.triggers;
+    if (triggers) {
+      router.get('/workflows/:id/triggers', guard, (req, res) => {
+        reply(res, 200, { triggers: triggers.triggers(id(req)) }, validateTriggerList);
+      });
+      router.get('/occurrences', guard, (req, res) => {
+        const workflowId = query(req, 'workflowId');
+        const triggerId = query(req, 'triggerId');
+        const before = cursor(req, 'before', Number.MAX_SAFE_INTEGER);
+        const limit = cursor(req, 'limit', 200);
+        reply(
+          res,
+          200,
+          triggers.occurrences({
+            ...(workflowId ? { workflowId } : {}),
+            ...(triggerId ? { triggerId } : {}),
+            ...(before ? { before } : {}),
+            ...(limit ? { limit } : {}),
+          }),
+          validateOccurrencePage,
+        );
+      });
+      router.get('/occurrences/:id', guard, (req, res) => {
+        reply(res, 200, { occurrence: triggers.occurrence(id(req)) }, validateOccurrenceResponse);
+      });
     }
     router.post('/workflows', guard, json, (req, res) => {
       command(res, service.createWorkflow(body(req), actorOf(res)), validateWorkflowResponse);
@@ -339,6 +392,17 @@ export function createHttpServer(options: {
     router.post('/workflows/:id/publish', guard, json, (req, res) => {
       command(res, service.publish(id(req), body(req), actorOf(res)), validateWorkflowResponse);
     });
+    for (const [path, enabled] of [
+      ['pause', false],
+      ['unpause', true],
+    ] as const)
+      router.post(`/workflows/:id/${path}`, guard, json, (req, res) => {
+        command(
+          res,
+          service.setEnabled(id(req), enabled, body(req), actorOf(res)),
+          validateWorkflowResponse,
+        );
+      });
     router.post('/runs', guard, json, async (req, res) => {
       command(res, await engine.startRun(body(req), actorOf(res)), validateRunResponse);
     });
@@ -659,6 +723,23 @@ export function createHttpServer(options: {
         kind: 'device' as const,
         id: (res.locals['device'] as Device).id,
       });
+      // GitHub signs its deliveries; the raw body is what the signature covers.
+      const webhooks = options.webhooks;
+      if (webhooks)
+        app.post(
+          '/api/v0/github/apps/:id/webhook',
+          express.raw({ type: () => true, limit: '2mb' }),
+          async (req, res) => {
+            const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+            const result = await webhooks.receive(String(req.params['id']), req.headers, body);
+            send(
+              res,
+              result.status,
+              { delivery: result.delivery, duplicate: result.duplicate },
+              validateGitHubDeliveryResponse,
+            );
+          },
+        );
       const deviceResources = resources(authenticated, caller, true);
       if (deviceResources) app.use('/api/v0', deviceResources);
       app.get('/api/v0/devices', authenticated, (_req, res) => {

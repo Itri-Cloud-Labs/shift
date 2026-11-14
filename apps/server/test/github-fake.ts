@@ -67,6 +67,7 @@ const levels: Record<string, number> = { read: 1, write: 2, admin: 3 };
 
 export class FakeGitHub {
   readonly appId = 4242;
+  events: string[] = ['push', 'pull_request', 'check_run', 'check_suite', 'status'];
   privateKey: string;
   #publicKey: KeyObject;
   installations = [
@@ -280,7 +281,12 @@ export class FakeGitHub {
       if (!this.#jwt(authorization))
         return send(401, { message: 'A JSON web token could not be decoded' });
       if (route === 'GET /app')
-        return send(200, { id: this.appId, slug: 'shift-test', name: 'Shift Test' });
+        return send(200, {
+          id: this.appId,
+          slug: 'shift-test',
+          name: 'Shift Test',
+          events: this.events,
+        });
       if (route === 'GET /app/installations') {
         const page = Number(url.searchParams.get('page') ?? '1');
         const perPage = Number(url.searchParams.get('per_page') ?? '30');

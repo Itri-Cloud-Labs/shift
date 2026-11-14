@@ -2,6 +2,7 @@
 // node's type version; a type version this server does not implement fails publication and start.
 import { credentialName, type ActionPermission } from '../actions/credentials.js';
 import type { Json } from '../harness/types.js';
+import { githubEvents } from '../triggers/github-events.js';
 import { defaultOutcomes } from './forms.js';
 import { ruleDefs, ruleRef } from './rules.js';
 
@@ -14,6 +15,8 @@ export interface NodeTypeDefinition {
   portsFor?: (config: Json) => readonly string[];
   // Entry nodes start runs and cannot be connection targets.
   entry?: boolean;
+  // Entry nodes that start runs on their own, through a subscription published with the version.
+  trigger?: 'github' | 'schedule' | 'webhook';
   // Only these may return variable writes (specification 6.5).
   writesVariables?: boolean;
   // The project permission an action needs (specification 8).
@@ -64,6 +67,36 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
       type: 'object',
       additionalProperties: false,
       properties: { inputSchema: schema },
+    },
+  },
+  {
+    // Starts a run for each matching verified delivery from the project's GitHub repository.
+    type: 'github_trigger',
+    version: 1,
+    entry: true,
+    trigger: 'github',
+    ports: ['success'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['event'],
+      properties: {
+        event: { enum: Object.keys(githubEvents) },
+        actions: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+          items: { type: 'string', pattern: '^[a-z_]{1,50}$' },
+        },
+        branches: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+          items: branchText,
+        },
+      },
     },
   },
   {

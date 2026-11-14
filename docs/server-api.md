@@ -58,56 +58,63 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 
 ## Endpoints
 
-| Method and path                                         | CLI                         | Purpose                                           |
-| ------------------------------------------------------- | --------------------------- | ------------------------------------------------- |
-| `GET /api/v0/info`                                      | `shift info`                | Server identity, protocol range and capabilities  |
-| `GET /api/v0/health`                                    | `shift health`              | Liveness and readiness                            |
-| `GET /api/v0/ready`                                     | `shift ready`               | Readiness; `503` when not ready                   |
-| `POST /api/v0/admin/shutdown`                           | `shift stop`                | Graceful shutdown                                 |
-| `POST /api/v0/pair`                                     | none                        | Pair a device with a phrase (TCP, no token)       |
-| `GET /api/v0/devices`                                   | none                        | Paired devices (TCP, token)                       |
-| `POST /api/v0/devices/{id}/revoke`                      | none                        | Revoke a device (TCP, token)                      |
-| `POST /api/v0/pairing`                                  | none                        | Issue a pairing phrase (TCP, token)               |
-| `POST /api/v0/admin/pairing`                            | `shift device pair`         | Issue a pairing phrase                            |
-| `GET /api/v0/admin/devices`                             | `shift device list`         | Paired devices                                    |
-| `POST /api/v0/admin/devices/{id}/revoke`                | `shift device revoke`       | Revoke a device                                   |
-| `GET /api/v0/commands/{commandId}`                      | none                        | The device's own command receipt (TCP, token)     |
-| `GET /api/v0/admin/commands/{commandId}`                | none                        | The CLI's own command receipt                     |
-| `GET /api/v0/snapshot`                                  | none                        | State with the cursor to stream from (TCP, token) |
-| `GET /api/v0/events`                                    | `shift event list`          | Event history (`/admin/events` on the socket)     |
-| `GET /api/v0/events/stream`                             | none                        | SSE event stream (TCP, token)                     |
-| `POST /api/v0/admin/projects`                           | `shift project add`         | Register a repository                             |
-| `GET /api/v0/admin/projects`                            | `shift project list`        | List projects                                     |
-| `POST /api/v0/admin/workflows`                          | `shift workflow create`     | Create a workflow with a draft                    |
-| `GET /api/v0/admin/workflows[?projectId=]`              | `shift workflow list`       | List workflows                                    |
-| `GET /api/v0/admin/workflows/{id}`                      | `shift workflow show`       | Workflow with its draft and versions              |
-| `GET /api/v0/admin/workflows/{id}/versions/{versionId}` | none                        | A published version's document                    |
-| `PUT /api/v0/admin/workflows/{id}/draft`                | `shift workflow save`       | Replace the draft at an expected revision         |
-| `POST /api/v0/admin/workflows/{id}/publish`             | `shift workflow publish`    | Publish the draft as a version                    |
-| `POST /api/v0/admin/runs`                               | `shift run start`           | Start a run of the active version                 |
-| `GET /api/v0/admin/runs`                                | `shift run list`            | List runs                                         |
-| `GET /api/v0/admin/runs/{id}`                           | `shift run show`            | Run with executions and invocations               |
-| `GET /api/v0/admin/runs/{id}/executions`                | `shift run executions`      | A page of a run's execution history               |
-| `GET /api/v0/admin/runs/{id}/variables`                 | `shift run variables`       | A run's variables and every revision              |
-| `GET /api/v0/admin/sessions[?projectId=]`               | `shift session list`        | Agent sessions, newest first                      |
-| `GET /api/v0/admin/sessions/{id}`                       | `shift session show`        | A session with its executions and invocations     |
-| `POST /api/v0/admin/sessions/{id}/goals`                | `shift session send`        | Send the owner's goal to a session                |
-| `GET /api/v0/admin/sessions/{id}/transcript`            | `shift session transcript`  | A session's normalized conversation               |
-| `GET /api/v0/admin/invocations/{id}`                    | `shift invocation show`     | One prompt with its outcome and reports           |
-| `GET /api/v0/admin/runs/{id}/artifacts`                 | `shift artifact list`       | A run's reports, oldest first                     |
-| `GET /api/v0/admin/artifacts/{id}`                      | `shift artifact show`       | One artifact's metadata                           |
-| `GET /api/v0/admin/artifacts/{id}/content`              | `shift artifact get`        | An artifact's bytes                               |
-| `POST /api/v0/admin/runs/{id}/cancel`                   | `shift run cancel`          | Cancel a run                                      |
-| `POST /api/v0/admin/runs/{id}/retry`                    | `shift run retry`           | Retry a stuck step                                |
-| `POST /api/v0/admin/runs/{id}/fail`                     | `shift run fail`            | Abandon a stuck step                              |
-| `POST /api/v0/admin/runs/{id}/complete`                 | `shift run complete`        | Record a verified result for a stuck step         |
-| `POST /api/v0/admin/runs/{id}/extend`                   | `shift run extend`          | Raise the limit a run reached                     |
-| `GET /api/v0/admin/interactions[?all=true]`             | `shift interaction list`    | Pending human requests                            |
-| `GET /api/v0/admin/interactions/{id}`                   | `shift interaction show`    | One request with its response                     |
-| `POST /api/v0/admin/interactions/{id}/respond`          | `shift interaction respond` | Answer a form or approval                         |
-| `GET /api/v0/admin/workspaces[?projectId=]`             | `shift workspace list`      | List run workspaces                               |
-| `GET /api/v0/admin/workspaces/{id}`                     | `shift workspace show`      | One workspace                                     |
-| `POST /api/v0/admin/workspaces/{id}/remove`             | `shift workspace remove`    | Remove a finished run's worktree                  |
+| Method and path                                          | CLI                         | Purpose                                           |
+| -------------------------------------------------------- | --------------------------- | ------------------------------------------------- |
+| `GET /api/v0/info`                                       | `shift info`                | Server identity, protocol range and capabilities  |
+| `GET /api/v0/health`                                     | `shift health`              | Liveness and readiness                            |
+| `GET /api/v0/ready`                                      | `shift ready`               | Readiness; `503` when not ready                   |
+| `POST /api/v0/admin/shutdown`                            | `shift stop`                | Graceful shutdown                                 |
+| `POST /api/v0/pair`                                      | none                        | Pair a device with a phrase (TCP, no token)       |
+| `GET /api/v0/devices`                                    | none                        | Paired devices (TCP, token)                       |
+| `POST /api/v0/devices/{id}/revoke`                       | none                        | Revoke a device (TCP, token)                      |
+| `POST /api/v0/pairing`                                   | none                        | Issue a pairing phrase (TCP, token)               |
+| `POST /api/v0/admin/pairing`                             | `shift device pair`         | Issue a pairing phrase                            |
+| `GET /api/v0/admin/devices`                              | `shift device list`         | Paired devices                                    |
+| `POST /api/v0/admin/devices/{id}/revoke`                 | `shift device revoke`       | Revoke a device                                   |
+| `GET /api/v0/commands/{commandId}`                       | none                        | The device's own command receipt (TCP, token)     |
+| `GET /api/v0/admin/commands/{commandId}`                 | none                        | The CLI's own command receipt                     |
+| `GET /api/v0/snapshot`                                   | none                        | State with the cursor to stream from (TCP, token) |
+| `GET /api/v0/events`                                     | `shift event list`          | Event history (`/admin/events` on the socket)     |
+| `GET /api/v0/events/stream`                              | none                        | SSE event stream (TCP, token)                     |
+| `POST /api/v0/admin/projects`                            | `shift project add`         | Register a repository                             |
+| `GET /api/v0/admin/projects`                             | `shift project list`        | List projects                                     |
+| `POST /api/v0/admin/workflows`                           | `shift workflow create`     | Create a workflow with a draft                    |
+| `GET /api/v0/admin/workflows[?projectId=]`               | `shift workflow list`       | List workflows                                    |
+| `GET /api/v0/admin/workflows/{id}`                       | `shift workflow show`       | Workflow with its draft and versions              |
+| `GET /api/v0/admin/workflows/{id}/versions/{versionId}`  | none                        | A published version's document                    |
+| `PUT /api/v0/admin/workflows/{id}/draft`                 | `shift workflow save`       | Replace the draft at an expected revision         |
+| `POST /api/v0/admin/workflows/{id}/publish`              | `shift workflow publish`    | Publish the draft as a version                    |
+| `POST /api/v0/admin/workflows/{id}/pause`                | `shift workflow pause`      | Stop every start of the workflow                  |
+| `POST /api/v0/admin/workflows/{id}/unpause`              | `shift workflow unpause`    | Allow starts again                                |
+| `GET /api/v0/admin/workflows/{id}/triggers`              | `shift workflow triggers`   | The workflow's trigger subscriptions              |
+| `GET /api/v0/admin/occurrences[?workflowId=&triggerId=]` | `shift occurrence list`     | Trigger occurrences, newest first                 |
+| `GET /api/v0/admin/occurrences/{id}`                     | `shift occurrence show`     | One occurrence with its captured input            |
+| `POST /api/v0/github/apps/{id}/webhook`                  | none                        | GitHub deliveries (TCP, signed by GitHub)         |
+| `GET /api/v0/admin/github/apps/{id}/deliveries`          | `shift github deliveries`   | Verified deliveries, newest first                 |
+| `POST /api/v0/admin/runs`                                | `shift run start`           | Start a run of the active version                 |
+| `GET /api/v0/admin/runs`                                 | `shift run list`            | List runs                                         |
+| `GET /api/v0/admin/runs/{id}`                            | `shift run show`            | Run with executions and invocations               |
+| `GET /api/v0/admin/runs/{id}/executions`                 | `shift run executions`      | A page of a run's execution history               |
+| `GET /api/v0/admin/runs/{id}/variables`                  | `shift run variables`       | A run's variables and every revision              |
+| `GET /api/v0/admin/sessions[?projectId=]`                | `shift session list`        | Agent sessions, newest first                      |
+| `GET /api/v0/admin/sessions/{id}`                        | `shift session show`        | A session with its executions and invocations     |
+| `POST /api/v0/admin/sessions/{id}/goals`                 | `shift session send`        | Send the owner's goal to a session                |
+| `GET /api/v0/admin/sessions/{id}/transcript`             | `shift session transcript`  | A session's normalized conversation               |
+| `GET /api/v0/admin/invocations/{id}`                     | `shift invocation show`     | One prompt with its outcome and reports           |
+| `GET /api/v0/admin/runs/{id}/artifacts`                  | `shift artifact list`       | A run's reports, oldest first                     |
+| `GET /api/v0/admin/artifacts/{id}`                       | `shift artifact show`       | One artifact's metadata                           |
+| `GET /api/v0/admin/artifacts/{id}/content`               | `shift artifact get`        | An artifact's bytes                               |
+| `POST /api/v0/admin/runs/{id}/cancel`                    | `shift run cancel`          | Cancel a run                                      |
+| `POST /api/v0/admin/runs/{id}/retry`                     | `shift run retry`           | Retry a stuck step                                |
+| `POST /api/v0/admin/runs/{id}/fail`                      | `shift run fail`            | Abandon a stuck step                              |
+| `POST /api/v0/admin/runs/{id}/complete`                  | `shift run complete`        | Record a verified result for a stuck step         |
+| `POST /api/v0/admin/runs/{id}/extend`                    | `shift run extend`          | Raise the limit a run reached                     |
+| `GET /api/v0/admin/interactions[?all=true]`              | `shift interaction list`    | Pending human requests                            |
+| `GET /api/v0/admin/interactions/{id}`                    | `shift interaction show`    | One request with its response                     |
+| `POST /api/v0/admin/interactions/{id}/respond`           | `shift interaction respond` | Answer a form or approval                         |
+| `GET /api/v0/admin/workspaces[?projectId=]`              | `shift workspace list`      | List run workspaces                               |
+| `GET /api/v0/admin/workspaces/{id}`                      | `shift workspace show`      | One workspace                                     |
+| `POST /api/v0/admin/workspaces/{id}/remove`              | `shift workspace remove`    | Remove a finished run's worktree                  |
 
 The CLI prints the resource from each response as one JSON line: the `project`, `workflow`, `run`, or list, without the envelope. On failure it prints the error object to stderr and exits with status 1.
 
@@ -186,11 +193,13 @@ GitHub nodes use the owner's own GitHub App. It is registered once and can serve
 
 `POST /api/v0/admin/github/apps` with `appId`, `privateKey` (the App's PEM key), optional `webhookSecret` (16 to 256 characters), `host` (default `https://github.com`; a GitHub Enterprise Server origin is reached at `<host>/api/v3`) and `commandId`. Shift verifies the key with `GET /app`, reads the installations and the repositories each can reach, and stores the key and secret sealed. Status `201` with `{"app": GitHubApp}`: `id`, `appId`, `host`, `slug`, `name`, `privateKey: "configured"`, `webhookSecret`, `webhookPath` (`/api/v0/github/apps/{id}/webhook`, shared by every project bound through the App), `verifiedAt`, `revision` and `installations` (`id`, `installationId`, `account`, `accountType`, `state`, `permissions`, `repositories` with `id`, `owner`, `name`, `defaultBranch`, `private`). Errors: `INVALID_PRIVATE_KEY`, `GITHUB_AUTH_FAILED` (GitHub refused the key), `GITHUB_APP_MISMATCH`, `GITHUB_APP_EXISTS`, `GITHUB_UNREACHABLE`.
 
-`GET /api/v0/admin/github/apps` returns `{"apps": [GitHubApp, …]}`. `POST /api/v0/admin/github/apps/{id}/rotate` with `privateKey` and/or `webhookSecret` replaces them; a new key is verified with GitHub first, and tokens minted with the old one are discarded. `POST /api/v0/admin/github/apps/{id}/refresh` verifies the key again and rereads installations.
+`GET /api/v0/admin/github/apps` returns `{"apps": [GitHubApp, …]}`. A `GitHubApp` also has `events`, the events the App's settings subscribe to as GitHub last reported them (null before), and `previousWebhookSecretUntil`. `POST /api/v0/admin/github/apps/{id}/rotate` with `privateKey` and/or `webhookSecret` replaces them; a new key is verified with GitHub first, and tokens minted with the old one are discarded. With `webhookSecret`, `previousSecretMinutes` (up to 10080) keeps the replaced secret valid for deliveries that long, while GitHub's settings are changed; by default it stops at once. `POST /api/v0/admin/github/apps/{id}/refresh` verifies the key again and rereads installations.
 
 `POST /api/v0/admin/projects/{id}/github` with `installationId` (the installation's Shift `id`), `repositoryId` and `commandId` binds the project, after reading the repository through the installation (`GITHUB_REPOSITORY_UNAVAILABLE` otherwise). It replaces an earlier binding. `GET` the same path returns `{"connection": GitHubConnection | null}`: `id`, `projectId`, `appId`, `installationId`, `repository` (`id`, `owner`, `name`, `defaultBranch`), `verifiedAt` (null when the last check failed or the installation is not active), `revision` and `diagnostics`, the permissions each GitHub node needs that the installation lacks. `POST …/github/verify` checks the App, the installation and the repository again and refreshes the repository's name. `POST …/github/disconnect` removes the binding.
 
-CLI: `shift github apps|register|rotate|refresh`, `shift github connect|status|verify|disconnect --project`. `register` and `rotate` read the key from `--key-file` and, with `--webhook-secret`, the secret from standard input.
+**Deliveries.** `POST /api/v0/github/apps/{id}/webhook` is the App's webhook URL on the TCP listener. It needs no device token: GitHub signs each delivery (see [GitHub triggers](workflows.md#github-triggers) for the checks). The answer is `202` with `{"delivery": GitHubDelivery, "duplicate": false}` once the delivery and its occurrences are committed, or `200` with the original record and `duplicate: true` for a redelivery. A `GitHubDelivery` is `id`, `deliveryId`, `event`, `action`, `repositoryId`, `receivedAt` and `occurrences` (`id`, `triggerId`, `workflowId`, `state`, `reason`, `runId`): the occurrences captured on arrival, in their current state. `GET /api/v0/admin/github/apps/{id}/deliveries[?before=&limit=]` pages them newest first, with `nextBefore`. Shift keeps each verified delivery's payload as received, with its SHA-256, whether or not it matched.
+
+CLI: `shift github apps|register|rotate|refresh|deliveries`, `shift github connect|status|verify|disconnect --project`. `register` and `rotate` read the key from `--key-file` and, with `--webhook-secret`, the secret from standard input.
 
 ### Workflows
 
@@ -230,23 +239,32 @@ A `Workflow`:
 }
 ```
 
-`hash` is the SHA-256 of the version's canonical JSON. Key order does not affect it. `GET /api/v0/admin/workflows` returns a summary per workflow (`id`, `projectId`, `name`, `activeVersionId`). Filter by project with `?projectId=`. `GET /api/v0/admin/workflows/{id}` returns the full `Workflow`. `GET /api/v0/admin/workflows/{id}/versions/{versionId}` returns one published version with its frozen document as `{"version": {"id", "workflowId", "number", "hash", "createdAt", "document"}}`, so a run can be shown with the graph it started on; a version of another workflow is `404 NOT_FOUND`.
+`hash` is the SHA-256 of the version's canonical JSON. Key order does not affect it. `GET /api/v0/admin/workflows` returns a summary per workflow (`id`, `projectId`, `name`, `enabled`, `activeVersionId`). Filter by project with `?projectId=`. `GET /api/v0/admin/workflows/{id}` returns the full `Workflow`. `GET /api/v0/admin/workflows/{id}/versions/{versionId}` returns one published version with its frozen document as `{"version": {"id", "workflowId", "number", "hash", "createdAt", "document"}}`, so a run can be shown with the graph it started on; a version of another workflow is `404 NOT_FOUND`.
 
 `PUT /api/v0/admin/workflows/{id}/draft` replaces the draft: `{"revision": N, "draft": {…}, "commandId"?}`. It succeeds only if the draft is still at revision `N`, and the revision then increases by one. Otherwise it fails with `409 REVISION_CONFLICT`. Read the workflow again and reapply your change.
 
 `POST /api/v0/admin/workflows/{id}/publish` validates the draft and makes it the active version: `{"revision"?: N, "commandId"?}`. With `revision`, publishing fails with `REVISION_CONFLICT` if the draft has moved on, so you publish exactly what you reviewed. A draft identical to the active version (same hash) returns the workflow unchanged instead of numbering a duplicate. Errors: `INVALID_WORKFLOW`, with one diagnostic per problem.
 
+`POST /api/v0/admin/workflows/{id}/pause` and `…/unpause`, with an optional `commandId`, set `enabled` and return the `Workflow`. Pause stops every start, manual or automatic; runs already admitted, and their responses and recovery, continue. Repeating the current state changes nothing.
+
+### Triggers and occurrences
+
+Publishing subscribes the version's trigger nodes ([Triggers](workflows.md#triggers)). `GET /api/v0/admin/workflows/{id}/triggers` returns `{"triggers": [Trigger, …]}`: `id`, `workflowId`, `nodeId`, `kind` (`github`), `config`, `versionId` (the version that last published it), `state`, `nextFireAt`, `createdAt` and `updatedAt`.
+
+`GET /api/v0/admin/occurrences` pages occurrences newest first, filtered by `workflowId` or `triggerId`, with `before` (the previous page's `nextBefore`) and `limit` (up to 200). An `Occurrence` is `id`, `triggerId`, `workflowId`, `versionId` (the version it captured), `nodeId`, `kind`, `dedupKey` (the GitHub delivery ID), `occurredAt`, `receivedAt`, `state` (`ACCEPTED`, `ADMITTED`, `QUEUED`, `SKIPPED` or `REJECTED`), `reason`, `details`, `runId` and `decidedAt`. `GET /api/v0/admin/occurrences/{id}` adds its captured `input`.
+
 ### Runs
 
-`POST /api/v0/admin/runs` starts the workflow's active version.
+`POST /api/v0/admin/runs` starts the workflow's active version from its `manual_trigger`.
 
-| Field        | Type             | Notes                                                                                           |
-| ------------ | ---------------- | ----------------------------------------------------------------------------------------------- |
-| `workflowId` | string, required |                                                                                                 |
-| `input`      | any JSON         | Trigger input, `{}` by default. It must satisfy the trigger node's `inputSchema` if one is set. |
-| `commandId`  | string           |                                                                                                 |
+| Field          | Type             | Notes                                                                                           |
+| -------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
+| `workflowId`   | string, required |                                                                                                 |
+| `input`        | any JSON         | Trigger input, `{}` by default. It must satisfy the trigger node's `inputSchema` if one is set. |
+| `allowOverlap` | boolean          | Start even though the workflow's overlap policy would not, for this start only.                 |
+| `commandId`    | string           |                                                                                                 |
 
-On admission Shift resolves the project's base ref to a commit and records it in the run's snapshot as `baseCommit`, together with the version's document, the project and the defaults. The run never reads the workflow or the project again. Status `201` with `{"run": Run}`. Inline nodes such as the trigger have already completed by the time the response is sent. Agent nodes run in the background, so poll `GET /runs/{id}` (or use `shift run start --wait`). Errors: `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_FOUND`, `COMMAND_CONFLICT`, `SERVER_STOPPING`, `INVALID_REQUEST`.
+On admission Shift resolves the project's base ref to a commit and records it in the run's snapshot as `baseCommit`, together with the version's document, the project and the defaults. The run never reads the workflow or the project again. Status `201` with `{"run": Run}`. Inline nodes such as the trigger have already completed by the time the response is sent. Agent nodes run in the background, so poll `GET /runs/{id}` (or use `shift run start --wait`). Errors: `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKFLOW_BUSY` (an unfinished run and a `skip` or `queue` policy), `NO_MANUAL_TRIGGER`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_FOUND`, `COMMAND_CONFLICT`, `SERVER_STOPPING`, `INVALID_REQUEST`. A `Run` names the trigger node it started from as `entryNodeId`, and the occurrence that admitted it as `occurrenceId` (null for a manual start).
 
 A `Run`, abridged from a completed run:
 
@@ -559,19 +577,19 @@ The master key lives in `<state>/secrets/master.key`, mode `0600`, created on fi
 
 HTTP errors returned by the endpoints above:
 
-| Status | Codes                                                                                                                                                                                                                                                                                                                     |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                                   |
-| 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`                                                                                                                                                                                                                                             |
-| 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                                                |
-| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`, `COMMAND_NOT_FOUND`                                                                                                                                                             |
-| 409    | `RESYNC_REQUIRED`, `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
-| 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                                     |
-| 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB or a workflow document over 1 MiB                                                                                                                                                                                                                                                  |
-| 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`                                                                                                                                        |
-| 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                                           |
-| 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                                         |
-| 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                                         |
+| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `INVALID_REQUEST`: the body is not JSON, or a body was sent to a route that takes none.                                                                                                                                                                                                                                                                                                                                      |
+| 401    | `DEVICE_UNAUTHORIZED` (missing, unknown or revoked token), `PAIRING_REJECTED`, `GITHUB_SIGNATURE_INVALID`                                                                                                                                                                                                                                                                                                                    |
+| 403    | `INVALID_REQUEST`: the request carries a browser `Origin`.                                                                                                                                                                                                                                                                                                                                                                   |
+| 404    | `NOT_FOUND` (an unknown route, project or workflow), `RUN_NOT_FOUND`, `WORKSPACE_NOT_FOUND`, `INTERACTION_NOT_FOUND`, `DEVICE_NOT_FOUND`, `COMMAND_NOT_FOUND`                                                                                                                                                                                                                                                                |
+| 409    | `RESYNC_REQUIRED`, `COMMAND_CONFLICT`, `REVISION_CONFLICT`, `RUN_STATE_CONFLICT`, `RUN_CANCEL_REQUESTED`, `NOTHING_TO_RETRY`, `NOTHING_TO_COMPLETE`, `NOTHING_TO_EXTEND`, `PROJECT_EXISTS`, `WORKFLOW_EXISTS`, `WORKFLOW_UNPUBLISHED`, `WORKFLOW_DISABLED`, `WORKFLOW_BUSY`, `NO_MANUAL_TRIGGER`, `GITHUB_WEBHOOK_SECRET_MISSING`, `DUPLICATE_EVENT_CONFLICT`, `WORKSPACE_IN_USE`, `WORKSPACE_DIRTY`, `INTERACTION_CONFLICT` |
+| 410    | `INTERACTION_RETIRED`                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 413    | `REQUEST_TOO_LARGE`: a body over 2 MiB, a workflow document over 1 MiB, or a trigger input over 1 MiB                                                                                                                                                                                                                                                                                                                        |
+| 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`, `GITHUB_INVALID_IDENTITY`, `GITHUB_UNKNOWN_INSTALLATION`                                                                                                                                                                                 |
+| 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                                                                                                                                              |
+| 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                                                                                                                                            |
+| 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 The CLI adds errors of its own: `ADMIN_UNAVAILABLE` (no server is listening on the socket), `UNSAFE_STATE_DIRECTORY`, `ADMIN_INVALID_RESPONSE` and `INVALID_CONFIGURATION` (bad options). `shift serve` itself can fail at startup with `INSTANCE_ALREADY_RUNNING`, `INVALID_CONFIGURATION`, `SQLITE_*`, `MIGRATION_*` or `UNSAFE_STATE_*` codes.
 
