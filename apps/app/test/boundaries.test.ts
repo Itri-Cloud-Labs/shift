@@ -342,3 +342,34 @@ test('generated public protocol copies stay byte-identical and pure', async () =
     assert.ok(own.equals(server), file);
   }
 });
+
+test('trigger reads reach the server with exactly the filters asked for', async () => {
+  const paths: string[] = [];
+  const recording = {
+    resource: async (_kind: string, path: string) => {
+      paths.push(path);
+      return { value: {}, stale: false, fetchedAt: 0 };
+    },
+  } as unknown as ClientCore;
+  const workflowId = '00000000-0000-4000-8000-000000000001';
+  const triggerId = '00000000-0000-4000-8000-000000000002';
+  for (const request of [
+    { kind: 'data.occurrences', workflowId },
+    { kind: 'data.occurrences', workflowId, triggerId },
+    {
+      kind: 'data.schedulePreview',
+      schedule: { kind: 'cron', expression: '0 9 * * 1-5', timezone: 'Europe/Berlin' },
+    },
+  ])
+    await dispatch(recording, trusted, request, async () => assert.fail());
+  assert.deepEqual(paths, [
+    `/api/v0/occurrences?workflowId=${workflowId}&limit=30`,
+    `/api/v0/occurrences?workflowId=${workflowId}&triggerId=${triggerId}&limit=30`,
+    '/api/v0/schedules/preview?kind=cron&expression=0+9+*+*+1-5&timezone=Europe%2FBerlin&count=5',
+  ]);
+  // A trigger ID that is not an ID never reaches main.
+  assert.equal(
+    parseRequest({ kind: 'data.occurrences', workflowId, triggerId: '../x' }),
+    undefined,
+  );
+});

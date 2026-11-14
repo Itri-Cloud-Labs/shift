@@ -244,7 +244,9 @@ export async function dispatch(
               : request.kind === 'data.occurrences'
                 ? ([
                     'occurrences',
-                    `/api/v0/occurrences?workflowId=${request.workflowId}&limit=30`,
+                    // One trigger's own history when it names one, so a busier trigger of the
+                    // same workflow never crowds it out of the page.
+                    `/api/v0/occurrences?workflowId=${request.workflowId}${request.triggerId === undefined ? '' : `&triggerId=${request.triggerId}`}&limit=30`,
                   ] as const)
                 : request.kind === 'data.triggerCredentials'
                   ? ([
