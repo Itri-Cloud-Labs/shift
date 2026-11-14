@@ -954,7 +954,10 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                     : type === 'webhook_trigger'
                       ? 'an HTTP request'
                       : 'a trigger';
-              return `Started by ${by} (${started.entryNodeId})`;
+              return {
+                label: `from ${started.entryNodeId}`,
+                title: `Started by ${by} (${started.entryNodeId})`,
+              };
             })()}
             resolve={decidable ? () => setResolveFor(runValue.id) : null}
             confirming={cancelling}

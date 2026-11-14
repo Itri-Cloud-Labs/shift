@@ -122,8 +122,12 @@ export async function runCapture(window: BrowserWindow, core: ClientCore): Promi
     }
     if (step.close) window.close();
     await delay(step.wait ?? 1200);
-    if (step.expect && !(await contents.executeJavaScript(step.expect)))
+    if (step.expect && !(await contents.executeJavaScript(step.expect))) {
+      // The screen as it was, to see why.
+      const failed = await contents.capturePage();
+      await writeFile(join(directory, `${step.name}-failed.png`), failed.toPNG());
       throw new Error(`Capture step ${step.name}: ${step.expect} does not hold`);
+    }
     if (step.report)
       console.log(
         `SHIFT_REPORT ${step.name} ${JSON.stringify(await contents.executeJavaScript(step.report))}`,

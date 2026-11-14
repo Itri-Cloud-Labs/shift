@@ -182,8 +182,9 @@ export function RunStatus({
   run: Run;
   live: boolean;
   now: number;
-  // What started the run, when a trigger did rather than the owner.
-  origin?: string | null;
+  // What started the run, when a trigger did rather than the owner: a short label and the
+  // sentence shown on hover.
+  origin?: { label: string; title: string } | null;
   // Opens the owner's decisions, when the run is stopped for one.
   resolve: (() => void) | null;
   // Held by the workspace, so ⌘K can ask too.
@@ -210,8 +211,12 @@ export function RunStatus({
         <StatusIcon status={tone} />
         {runStateLabels[run.state]}
       </span>
+      {origin && (
+        <span className="origin" title={origin.title}>
+          {origin.label}
+        </span>
+      )}
       {(pending ?? reason) && <span className="reason">{pending ?? reason}</span>}
-      {origin && <span className="reason origin">{origin}</span>}
       <span className="time" title="Active time used of the run's limit">
         {clock(run.activeTime.usedMs)} / {clock(run.activeTime.limitMs)}
       </span>

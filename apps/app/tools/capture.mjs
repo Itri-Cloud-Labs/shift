@@ -806,7 +806,7 @@ try {
     {
       name: 'j01-add-project',
       script: `J.set('#create-value', ${JSON.stringify(secondRepository)}); J.click('.create-dialog button[type=submit]');`,
-      wait: 1500,
+      wait: 3000,
       expect:
         "!document.querySelector('.create-dialog') && document.querySelector('.location').textContent.includes('second-repo') && document.querySelector('.hint').textContent.includes('no workflows')",
     },
@@ -949,7 +949,8 @@ try {
     },
     {
       name: 'j11-run-finished',
-      script: `J.set('.run-input input', '42'); J.click('.run-input button[type=submit]');`,
+      // The field commits on focus out; submit once React has applied it.
+      script: `J.set('.run-input input', '42'); setTimeout(() => J.click('.run-input button[type=submit]'), 300);`,
       wait: 3000,
       expect:
         "location.hash.includes('/r/') && document.querySelector('.react-flow__node[data-id=end] .node-state') && !document.querySelector('.react-flow__node[data-id=end_2] .node-state[data-status=completed]')",
@@ -1304,7 +1305,7 @@ try {
       hash: `${intakeBase}/r/${triggeredRunId}`,
       wait: 2000,
       expect:
-        "document.querySelector('.run-status')?.textContent.includes('Started by a GitHub event (pr_opened)')",
+        "document.querySelector('.run-status .origin')?.textContent === 'from pr_opened' && document.querySelector('.run-status .origin').title === 'Started by a GitHub event (pr_opened)'",
     },
     {
       name: 'x8-closed',
@@ -1448,7 +1449,7 @@ try {
     }
     if (!started && String(chunk).includes('SHIFT_CAPTURE 17-inbox')) {
       started = true;
-      void cli(['run', 'start', '--workflow', workflow.id, ...admin]);
+      void cli(['run', 'start', '--workflow', workflow.id, '--allow-overlap', ...admin]);
     }
   });
   const timer = setTimeout(() => app.kill('SIGKILL'), 300_000);

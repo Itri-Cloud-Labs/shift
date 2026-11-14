@@ -2667,5 +2667,7 @@ textarea {
 }
 
 .run-status .origin {
+  flex: none;
   color: var(--ink-muted);
+  font-size: var(--text-sm);
 }
