@@ -110,11 +110,13 @@ const post = (url: string, body: string, headers: Record<string, string>) =>
     headers: { 'content-type': 'application/json', ...headers },
   });
 
-const signed = (secret: string, body: string, at = Date.now()) => {
+// A signed request's headers: the signature covers the timestamp, the event ID and the body.
+const signed = (secret: string, body: string, at = Date.now(), eventId = 'evt-1') => {
   const timestamp = String(Math.floor(at / 1000));
   return {
+    'x-shift-event-id': eventId,
     'x-shift-timestamp': timestamp,
-    'x-shift-signature': `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`,
+    'x-shift-signature': `sha256=${createHmac('sha256', secret).update(`${timestamp}.${eventId}.${body}`).digest('hex')}`,
   };
 };
 
@@ -164,10 +166,11 @@ test('a local sender starts a general graph with an authenticated event, which s
     served = await serve(current);
     // The restarted test clock starts at its default; move it to the real clock to sign.
     current.clock.advance(Date.now() - current.clock.now());
-    const replay = await post(served.url(trigger.id), '{"name":"Ada"}', {
-      'x-shift-event-id': 'order-1',
-      ...signed(secret, '{"name":"Ada"}'),
-    });
+    const replay = await post(
+      served.url(trigger.id),
+      '{"name":"Ada"}',
+      signed(secret, '{"name":"Ada"}', Date.now(), 'order-1'),
+    );
     assert.equal(replay.status, 200);
     const body = (await replay.json()) as {
       duplicate: boolean;
@@ -246,7 +249,20 @@ test('bad, revoked and expired credentials, invalid input and oversized bodies a
       401,
     );
     assert.equal((await post(signedUrl, ok, signed(key, `${ok} `, env.clock.now()))).status, 401);
-    assert.equal((await post(signedUrl, ok, signed(key, ok, env.clock.now()))).status, 202);
+    const valid = signed(key, ok, env.clock.now(), 'evt-signed');
+    assert.equal((await post(signedUrl, ok, valid)).status, 202);
+    // A captured request cannot be sent again as another event: changing or removing the signed
+    // event ID breaks the signature, and the same request again is the same event.
+    assert.equal(
+      (await post(signedUrl, ok, { ...valid, 'x-shift-event-id': 'evt-other' })).status,
+      401,
+    );
+    const { 'x-shift-event-id': _removed, ...withoutId } = valid;
+    assert.equal((await post(signedUrl, ok, withoutId)).status, 401);
+    const again = await post(signedUrl, ok, valid);
+    assert.equal(again.status, 200);
+    assert.equal(((await again.json()) as { duplicate: boolean }).duplicate, true);
+    assert.equal(occurrencesOf(env, signedFlow).length, 1);
     // An unknown trigger.
     assert.equal(
       (await post(served.url('00000000-0000-4000-8000-000000000000'), ok, bearer(key))).status,

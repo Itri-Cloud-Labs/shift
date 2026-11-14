@@ -6,7 +6,7 @@
 //     [--signature | --bearer] [--event-id ID]
 // URL is http(s)://HOST:PORT/api/v0/triggers/TRIGGER_ID/events. Without --file the event is
 // read from standard input.
-import { createHmac } from 'node:crypto';
+import crypto, { createHmac } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 
@@ -35,10 +35,13 @@ else {
 const headers = { 'content-type': 'application/json' };
 if (values['event-id']) headers['x-shift-event-id'] = values['event-id'];
 if (values.signature) {
+  // A signed request needs an event ID: the signature covers it, so a replay is the same event.
+  const eventId = values['event-id'] ?? crypto.randomUUID();
+  headers['x-shift-event-id'] = eventId;
   const timestamp = String(Math.floor(Date.now() / 1000));
   headers['x-shift-timestamp'] = timestamp;
   headers['x-shift-signature'] =
-    `sha256=${createHmac('sha256', secret).update(`${timestamp}.`).update(body).digest('hex')}`;
+    `sha256=${createHmac('sha256', secret).update(`${timestamp}.${eventId}.`).update(body).digest('hex')}`;
 } else headers['authorization'] = `Bearer ${secret}`;
 const response = await fetch(url, { method: 'POST', headers, body });
 const text = await response.text();

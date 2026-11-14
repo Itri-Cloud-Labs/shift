@@ -395,7 +395,7 @@ A `webhook_trigger` starts a run for each authenticated `POST` to `/api/v0/trigg
 **Sending an event.** Send `Content-Type: application/json` and either:
 
 - `auth: "bearer"`: `Authorization: Bearer <secret>`.
-- `auth: "signature"`: `X-Shift-Timestamp: <Unix seconds>` and `X-Shift-Signature: sha256=<hex>`, the HMAC-SHA256 with the secret of the timestamp, a `.`, and the exact body bytes. A timestamp more than five minutes from the server's clock is refused, so a captured request cannot be replayed later. The secret never travels.
+- `auth: "signature"`: `X-Shift-Event-Id`, `X-Shift-Timestamp: <Unix seconds>` and `X-Shift-Signature: sha256=<hex>`, the HMAC-SHA256 with the secret of the timestamp, a `.`, the event ID, a `.`, and the exact body bytes. The event ID is required and signed, so a captured request can only be sent again as itself, and then answers with the first event. A timestamp more than five minutes from the server's clock is refused. The secret never travels.
 
 `apps/server/tools/send-trigger-event.mjs` does both, reading the secret from `SHIFT_TRIGGER_SECRET`:
 
@@ -404,7 +404,7 @@ SHIFT_TRIGGER_SECRET=… node apps/server/tools/send-trigger-event.mjs \
   http://127.0.0.1:8484/api/v0/triggers/TRIGGER_ID/events --file event.json --signature --event-id order-17
 ```
 
-**Event IDs.** With `X-Shift-Event-Id` (1 to 200 letters, digits, `.`, `_`, `:` or `-`), a repeated request with the same body gets the original occurrence back, `200` with `duplicate: true`, even after a restart or a later publication, and even if the first answer never arrived. The same ID with a different body is `409 DUPLICATE_EVENT_CONFLICT`. Without an ID, every request is a new event, so a sender that retries after a lost answer can start two runs; send an ID whenever retries are possible.
+**Event IDs.** With `X-Shift-Event-Id` (required for signed requests) (1 to 200 letters, digits, `.`, `_`, `:` or `-`), a repeated request with the same body gets the original occurrence back, `200` with `duplicate: true`, even after a restart or a later publication, and even if the first answer never arrived. The same ID with a different body is `409 DUPLICATE_EVENT_CONFLICT`. Without an ID, which only a bearer request may omit, every request is a new event, so a sender that retries after a lost answer can start two runs; send an ID whenever retries are possible.
 
 **Answers.** `202` with `{"occurrence": …, "duplicate": false}` once the occurrence and its decision are committed (and, when admitted, its run created). Refusals record nothing: `401 TRIGGER_UNAUTHORIZED` (missing, wrong, expired or revoked credential, bad signature or stale timestamp), `404` (unknown or removed trigger), `415 UNSUPPORTED_MEDIA_TYPE`, `400` (not JSON), `422 INVALID_INPUT` (fails `inputSchema`), `413 REQUEST_TOO_LARGE` (a body over 2 MiB or input over 1 MiB), `409` (event ID conflict). A paused workflow answers `202` with the occurrence `SKIPPED`.
 

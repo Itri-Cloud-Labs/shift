@@ -239,6 +239,7 @@ export class HttpTriggers {
     config: WebhookConfig,
     headers: IncomingHttpHeaders,
     body: Buffer,
+    eventId: string | null,
   ): void {
     const refuse = (message: string) => new ShiftError('TRIGGER_UNAUTHORIZED', message, 401);
     const secrets = this.#active(triggerId).map((row) =>
@@ -261,11 +262,18 @@ export class HttpTriggers {
         !/^sha256=[0-9a-f]{64}$/.test(signature)
       )
         throw refuse('Send X-Shift-Timestamp and X-Shift-Signature: sha256=<hex>.');
+      // The event ID is signed and required, so a request captured within the tolerance can only
+      // be replayed as itself, and a replay returns the first answer instead of another run.
+      if (eventId === null)
+        throw refuse('A signed request names its X-Shift-Event-Id, which the signature covers.');
       if (Math.abs(this.#clock.now() - Number(timestamp) * 1000) > signatureToleranceMs)
         throw refuse('The X-Shift-Timestamp is more than five minutes from the server clock.');
       const given = Buffer.from(signature.slice('sha256='.length), 'hex');
       for (const secret of secrets) {
-        const expected = createHmac('sha256', secret).update(`${timestamp}.`).update(body).digest();
+        const expected = createHmac('sha256', secret)
+          .update(`${timestamp}.${eventId}.`)
+          .update(body)
+          .digest();
         if (timingSafeEqual(expected, given)) valid = true;
       }
     }
@@ -288,10 +296,6 @@ export class HttpTriggers {
     };
     if (!workflow.activeVersionId) throw new ShiftError('NOT_FOUND', 'Trigger not found.', 404);
     const config = trigger.config as unknown as WebhookConfig;
-    this.#authenticate(triggerId, config, headers, body);
-    const contentType = header(headers, 'content-type') ?? '';
-    if (!/^application\/json\b/i.test(contentType))
-      throw new ShiftError('UNSUPPORTED_MEDIA_TYPE', 'Send the event as application/json.', 415);
     const eventId = header(headers, 'x-shift-event-id');
     if (eventId !== null && !/^[A-Za-z0-9._:-]{1,200}$/.test(eventId))
       throw new ShiftError(
@@ -299,6 +303,10 @@ export class HttpTriggers {
         'X-Shift-Event-Id is 1 to 200 letters, digits, ., _, : or -.',
         400,
       );
+    this.#authenticate(triggerId, config, headers, body, eventId);
+    const contentType = header(headers, 'content-type') ?? '';
+    if (!/^application\/json\b/i.test(contentType))
+      throw new ShiftError('UNSUPPORTED_MEDIA_TYPE', 'Send the event as application/json.', 415);
     const requestHash = digest(body).toString('hex');
     let input: Json;
     try {
