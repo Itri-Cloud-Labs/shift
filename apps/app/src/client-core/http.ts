@@ -136,6 +136,57 @@ export class ServerHttp {
     return { status: response.status, text };
   }
 
+  // Hands an answer's bytes to `write` as they arrive, up to `maxBytes`, for a download saved to
+  // disk. Nothing is kept in memory, and the bytes never reach the renderer.
+  async requestToSink(
+    base: string,
+    path: string,
+    init: {
+      bearer: string;
+      signal?: AbortSignal;
+      maxBytes: number;
+      write: (chunk: Uint8Array) => Promise<void>;
+    },
+  ): Promise<{ status: number; bytes: number }> {
+    // Large files take longer than ordinary requests.
+    const timeout = AbortSignal.timeout(Math.max(this.options.timeoutMs, 10 * 60_000));
+    const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    let response: FetchResponse;
+    try {
+      response = await this.fetch(`${base}${path}`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${init.bearer}` },
+        signal,
+        redirect: 'error',
+      });
+    } catch {
+      throw new TransportFailure('unreachable');
+    }
+    if (response.status !== 200) {
+      await response.body?.cancel().catch(() => undefined);
+      return { status: response.status, bytes: 0 };
+    }
+    if (!response.body) throw new TransportFailure('invalid');
+    const reader = response.body.getReader();
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > init.maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new TransportFailure('invalid');
+        }
+        await init.write(value);
+      }
+    } catch (error) {
+      if (error instanceof TransportFailure) throw error;
+      throw new TransportFailure('unreachable');
+    }
+    return { status: 200, bytes: size };
+  }
+
   // Opens a long-lived SSE stream. It has no overall timeout: the caller watches keepalives and
   // aborts the signal to close it.
   async stream(

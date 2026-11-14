@@ -6,6 +6,9 @@ import type { Interaction } from '../protocol/generated/types.js';
 export interface Announcement {
   id: string;
   body: string;
+  // Where it is: the run, and the step a request belongs to.
+  runId: string;
+  nodeId: string | null;
 }
 
 export function announcements(
@@ -16,10 +19,15 @@ export function announcements(
   const open: Announcement[] = [
     ...interactions
       .filter((item) => item.state === 'PENDING')
-      .map((item) => ({ id: item.id, body: item.title })),
+      .map((item) => ({ id: item.id, body: item.title, runId: item.runId, nodeId: item.node })),
     ...runs
       .filter((run) => run.state === 'NEEDS_HUMAN')
-      .map((run) => ({ id: run.id, body: 'A run needs your decision' })),
+      .map((run) => ({
+        id: run.id,
+        body: 'A run needs your decision',
+        runId: run.id,
+        nodeId: null,
+      })),
   ];
   return {
     // Only what is open now: a run that resumes and stops again needs the owner again.

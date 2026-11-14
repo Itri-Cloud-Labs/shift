@@ -1,7 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import * as v from 'valibot';
 import {
   CHANGE_CHANNEL,
   IPC_CHANNEL,
+  OPEN_CHANNEL,
+  openSchema,
+  type OpenTarget,
   parseRequest,
   parseResponse,
   type Answer,
@@ -22,6 +26,9 @@ import {
   validateOccurrencePage,
   validateTriggerCredentialList,
   validateSchedulePreview,
+  validateWorkspaceListing,
+  validateWorkspaceFileResponse,
+  validateWorkspaceGitResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -52,6 +59,9 @@ const resourceValidators = {
   occurrences: validateOccurrencePage,
   triggerCredentials: validateTriggerCredentialList,
   schedulePreview: validateSchedulePreview,
+  workspaceFiles: validateWorkspaceListing,
+  workspaceFile: validateWorkspaceFileResponse,
+  workspaceGit: validateWorkspaceGitResponse,
 };
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
@@ -135,6 +145,22 @@ const bridge: DesktopBridge = {
         | { kind: 'interval'; minutes: number },
     ) => invoke({ kind: 'data.schedulePreview', schedule } as DesktopRequest),
   }),
+  workspace: Object.freeze({
+    files: (workspaceId: string, path: string) =>
+      invoke({ kind: 'data.workspaceFiles', workspaceId, path }),
+    file: (workspaceId: string, path: string) =>
+      invoke({ kind: 'data.workspaceFile', workspaceId, path }),
+    status: (workspaceId: string) => invoke({ kind: 'data.workspaceStatus', workspaceId }),
+    diff: (workspaceId: string, against: 'base' | 'head', path?: string) =>
+      invoke({
+        kind: 'data.workspaceDiff',
+        workspaceId,
+        against,
+        ...(path === undefined ? {} : { path }),
+      } as DesktopRequest),
+    download: (workspaceId: string, path: string) =>
+      invoke({ kind: 'workspace.download', workspaceId, path }),
+  }),
   trigger: Object.freeze({
     rotate: (triggerId: string, previousMinutes?: number) =>
       invoke({
@@ -195,6 +221,13 @@ const bridge: DesktopBridge = {
         ...(allowOverlap ? { allowOverlap: true } : {}),
       } as DesktopRequest),
     cancel: (runId: string) => invoke({ kind: 'run.cancel', runId }),
+    message: (runId: string, message: string, sessionId?: string) =>
+      invoke({
+        kind: 'run.message',
+        runId,
+        message,
+        ...(sessionId === undefined ? {} : { sessionId }),
+      } as DesktopRequest),
     control: (runId: string, control: RunControl) =>
       invoke({ kind: 'run.control', runId, control }),
   }),
@@ -244,6 +277,18 @@ const bridge: DesktopBridge = {
     ipcRenderer.on(CHANGE_CHANNEL, handler);
     return () => {
       ipcRenderer.removeListener(CHANGE_CHANNEL, handler);
+    };
+  },
+  // Only a well-formed run reference reaches the listener.
+  onOpen: (listener: (target: OpenTarget) => void) => {
+    if (typeof listener !== 'function') return () => undefined;
+    const handler = (_event: unknown, value: unknown) => {
+      const parsed = v.safeParse(openSchema, value);
+      if (parsed.success) listener(parsed.output);
+    };
+    ipcRenderer.on(OPEN_CHANNEL, handler);
+    return () => {
+      ipcRenderer.removeListener(OPEN_CHANNEL, handler);
     };
   },
   setSamples: (enabled) => invoke({ kind: 'samples.set', enabled }),

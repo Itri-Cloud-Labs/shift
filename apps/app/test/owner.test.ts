@@ -5,7 +5,7 @@ import type { Interaction, Run } from '../src/protocol/generated/types.js';
 import type { Overview, Preferences } from '../src/shared/contracts.js';
 import { announcements, announcer } from '../src/client-core/announcements.js';
 import { MemoryPreferenceStore, PreferenceRuntime } from '../src/client-core/preferences.js';
-import { readDocument } from '../src/client-ui/graph.js';
+import { readDocument, runReason } from '../src/client-ui/graph.js';
 import { paletteEntries, paletteView } from '../src/client-ui/commands.js';
 import {
   actorLabel,
@@ -384,18 +384,30 @@ test('a palette query searches everything and ranks label matches first', () => 
 });
 
 test('only attention items that appear after the first look are announced', () => {
-  const request = { id: ids(1), state: 'PENDING', title: 'Ship it?' } as Interaction;
+  const request = {
+    id: ids(1),
+    state: 'PENDING',
+    title: 'Ship it?',
+    runId: ids(5),
+    node: 'review',
+  } as Interaction;
   const first = announcements(null, [request], []);
   assert.deepEqual(first.fresh, []);
   const stuck = { id: ids(2), state: 'NEEDS_HUMAN' };
   const second = announcements(first.known, [request], [stuck, { id: ids(3), state: 'RUNNING' }]);
-  assert.deepEqual(second.fresh, [{ id: ids(2), body: 'A run needs your decision' }]);
+  // Each says where it is, so a click can open it.
+  assert.deepEqual(second.fresh, [
+    { id: ids(2), body: 'A run needs your decision', runId: ids(2), nodeId: null },
+  ]);
   assert.deepEqual(announcements(second.known, [], [stuck]).fresh, []);
   // A run that resumes and stops again is announced again.
   const resumed = announcements(second.known, [request], [{ ...stuck, state: 'RUNNING' }]);
   assert.deepEqual(resumed.fresh, []);
   assert.deepEqual(announcements(resumed.known, [request], [stuck]).fresh, [
-    { id: ids(2), body: 'A run needs your decision' },
+    { id: ids(2), body: 'A run needs your decision', runId: ids(2), nodeId: null },
+  ]);
+  assert.deepEqual(announcements(new Set(), [request], []).fresh, [
+    { id: ids(1), body: 'Ship it?', runId: ids(5), nodeId: 'review' },
   ]);
   const settled = { id: ids(4), state: 'RESPONDED', title: 'Done' } as unknown as Interaction;
   assert.deepEqual(announcements(second.known, [settled], []).fresh, []);
@@ -441,15 +453,49 @@ test('preference saves run one at a time, and the last choice is what stays', as
 
 test('switching servers starts a new first look, whatever order the projection changes in', () => {
   const request = (n: number) =>
-    ({ id: ids(n), state: 'PENDING', title: `Request ${n}` }) as Interaction;
+    ({
+      id: ids(n),
+      state: 'PENDING',
+      title: `Request ${n}`,
+      runId: ids(9),
+      node: 'ask',
+    }) as Interaction;
   const announce = announcer();
   const at = (...interactions: Interaction[]) => ({ interactions, runs: [] });
   assert.deepEqual(announce('a', at(request(1))), []);
-  assert.deepEqual(announce('a', at(request(1), request(2))), [{ id: ids(2), body: 'Request 2' }]);
+  assert.deepEqual(announce('a', at(request(1), request(2))), [
+    { id: ids(2), body: 'Request 2', runId: ids(9), nodeId: 'ask' },
+  ]);
   // The new profile's cache arrives with what was already open there.
   assert.deepEqual(announce('b', at(request(3))), []);
-  assert.deepEqual(announce('b', at(request(3), request(4))), [{ id: ids(4), body: 'Request 4' }]);
+  assert.deepEqual(announce('b', at(request(3), request(4))), [
+    { id: ids(4), body: 'Request 4', runId: ids(9), nodeId: 'ask' },
+  ]);
   // Forgotten and paired again.
   assert.deepEqual(announce(null, null), []);
   assert.deepEqual(announce('b', at(request(3))), []);
+});
+
+test('a held run explains itself, and a step stopped to intervene is resumed, not decided', () => {
+  const held = {
+    ...baseRun,
+    state: 'HELD',
+    hold: { at: 1, actor: { kind: 'device', id: 'd' }, activeWork: true },
+  } as unknown as Run;
+  assert.equal(runReason(held, 0), 'Held: a step is still finishing');
+  assert.equal(
+    runReason({ ...held, hold: { ...held.hold!, activeWork: false } } as Run, 0),
+    'Held for you: nothing new starts until you resume',
+  );
+  const stopped = {
+    ...baseRun,
+    state: 'NEEDS_HUMAN',
+    attention: { code: 'INTERVENING', explanation: 'You stopped this step.' },
+    executions: [{ ...baseRun.executions[0]!, state: 'WAITING' }],
+  } as unknown as Run;
+  const controls = runControls(stopped);
+  assert.deepEqual(
+    [controls.retry, controls.fail, controls.complete, controls.extend],
+    [false, false, false, null],
+  );
 });

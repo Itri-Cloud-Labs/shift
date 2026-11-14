@@ -831,6 +831,22 @@ export class SyncRuntime {
     return exchange;
   }
 
+  // A download written through `write` as it arrives, from the live server.
+  async queryToSink(
+    path: string,
+    maxBytes: number,
+    write: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<{ status: number; bytes: number }> {
+    const target = this.#target;
+    if (!target || this.#state.status !== 'live') throw new SyncFailure('NOT_LIVE');
+    return this.#http.requestToSink(target.url, path, {
+      bearer: target.bearer,
+      signal: target.signal,
+      maxBytes,
+      write,
+    });
+  }
+
   // A text download, such as a report's bytes, from the live server.
   async queryText(path: string, maxBytes: number): Promise<{ status: number; text: string }> {
     const target = this.#target;

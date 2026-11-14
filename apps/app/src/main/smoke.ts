@@ -34,7 +34,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     const wait = async (predicate) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 30)); } throw new Error('UI wait timed out'); };
     assert(location.href === '${APP_URL}', 'Wrong document');
     assert(typeof require === 'undefined' && typeof process === 'undefined' && typeof Buffer === 'undefined', 'Node leaked');
-    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,credential,data,device,github,interaction,onChange,openDocumentation,preferences,project,queryServer,readShell,recovery,run,session,setSamples,sync,trigger,workflow', 'Broad bridge');
+    assert(window.shift && Object.keys(window.shift).sort().join(',') === 'connection,credential,data,device,github,interaction,onChange,onOpen,openDocumentation,preferences,project,queryServer,readShell,recovery,run,session,setSamples,sync,trigger,workflow,workspace', 'Broad bridge');
     assert(Object.keys(window.shift.workflow).sort().join(',') === 'create,enable,publish,save', 'Broad workflow bridge');
     assert(Object.keys(window.shift.project).sort().join(',') === 'create,permissions', 'Broad project bridge');
     assert(Object.keys(window.shift.recovery).sort().join(',') === 'forget,keep,list', 'Broad recovery bridge');
@@ -60,7 +60,12 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.device.revoke('../../admin')).code === 'INVALID_REQUEST', 'Path-like device ID accepted');
     assert((await window.shift.data.devices()).code === 'DISCONNECTED', 'Devices listed without a connection');
     assert((await window.shift.preferences.set({ theme: 'neon', notifications: false })).code === 'INVALID_REQUEST', 'Unknown theme accepted');
-    assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,control,start', 'Broad run bridge');
+    assert(Object.keys(window.shift.run).sort().join(',') === 'cancel,control,message,start', 'Broad run bridge');
+    assert(Object.keys(window.shift.workspace).sort().join(',') === 'diff,download,file,files,status', 'Broad workspace bridge');
+    assert((await window.shift.workspace.files('../x', '')).code === 'INVALID_REQUEST', 'Path-like workspace ID accepted');
+    assert((await window.shift.workspace.download('00000000-0000-4000-8000-000000000000', '')).code === 'INVALID_REQUEST', 'Empty download path accepted');
+    assert((await window.shift.run.message('00000000-0000-4000-8000-000000000000', '')).code === 'INVALID_REQUEST', 'Empty message accepted');
+    assert(typeof window.shift.onOpen(() => {}) === 'function', 'onOpen returns no unsubscribe');
     assert(Object.keys(window.shift.interaction).sort().join(',') === 'list,respond', 'Broad interaction bridge');
     assert(Object.keys(window.shift.sync).join(',') === 'read', 'Broad sync bridge');
     assert(Object.keys(window.shift.connection).sort().join(',') === 'abandonPairing,changeAddress,clear,connect,pair,read', 'Broad connection bridge');

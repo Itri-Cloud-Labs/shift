@@ -17,6 +17,9 @@ import {
   validateOccurrencePage,
   validateTriggerCredentialList,
   validateSchedulePreview,
+  validateWorkspaceListing,
+  validateWorkspaceFileResponse,
+  validateWorkspaceGitResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -72,6 +75,9 @@ const validators: Record<ResourceKind, (value: unknown) => boolean> = {
   occurrences: validateOccurrencePage,
   triggerCredentials: validateTriggerCredentialList,
   schedulePreview: validateSchedulePreview,
+  workspaceFiles: validateWorkspaceListing,
+  workspaceFile: validateWorkspaceFileResponse,
+  workspaceGit: validateWorkspaceGitResponse,
 };
 
 // The largest report the server stores.
@@ -214,6 +220,27 @@ export class ClientCore {
       if (error instanceof SyncFailure) throw new ClientFailure('DISCONNECTED');
       throw error;
     }
+  }
+
+  // Writes a server file's bytes through `write`, up to `maxBytes`.
+  async download(
+    path: string,
+    maxBytes: number,
+    write: (chunk: Uint8Array) => Promise<void>,
+  ): Promise<number> {
+    let answer;
+    try {
+      answer = await this.sync.queryToSink(path, maxBytes, write);
+    } catch (error) {
+      throw new ClientFailure(
+        error instanceof TransportFailure && error.kind === 'invalid'
+          ? 'INVALID_RESPONSE'
+          : 'DISCONNECTED',
+      );
+    }
+    if (answer.status === 404) throw new ClientFailure('NOT_FOUND');
+    if (answer.status !== 200) throw new ClientFailure('INVALID_RESPONSE');
+    return answer.bytes;
   }
 
   // Drops the stored answer of a command, such as one that carried a secret already handed on.

@@ -13,7 +13,7 @@ import {
   type BindingEditing,
 } from './Builders.js';
 import { unknownConfig, withMethod } from './config.js';
-import { addableTypes, advancedTypes, type DraftProblem } from './draft.js';
+import { addableTypes, advancedTypes, diagnose, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import {
   outputPorts,
@@ -360,6 +360,138 @@ function Advanced({ node }: { node: DocumentNode }) {
         publish.
       </p>
       <pre>{JSON.stringify(hidden, null, 2)}</pre>
+    </details>
+  );
+}
+
+type Checked =
+  | { kind: 'problem'; message: string }
+  | {
+      kind: 'ready';
+      config: Record<string, unknown>;
+      changes: Array<{ key: string; change: 'added' | 'removed' | 'changed' }>;
+      problems: string[];
+    };
+
+// Advanced mode (client specification 6.3): the node's whole configuration as JSON. It is parsed
+// and checked, its changes previewed, and only Apply replaces the configuration; the node's name,
+// position and connections stay the editor's. Invalid input never touches the node, and settings
+// the forms do not show survive later form edits.
+function AdvancedConfig({
+  node,
+  apply,
+}: {
+  node: DocumentNode;
+  apply: (config: Record<string, unknown>) => void;
+}) {
+  const current = JSON.stringify(node.config, null, 2);
+  const [text, setText] = useState(current);
+  const [checked, setChecked] = useState<Checked | null>(null);
+  useEffect(() => {
+    setText(current);
+    setChecked(null);
+  }, [current]);
+  const check = (): Checked => {
+    if (new TextEncoder().encode(text).byteLength > 1024 * 1024)
+      return { kind: 'problem', message: 'The configuration is larger than 1 MiB.' };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      return { kind: 'problem', message: `Not JSON: ${(error as Error).message}` };
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+      return { kind: 'problem', message: 'A configuration is a JSON object.' };
+    const config = parsed as Record<string, unknown>;
+    const keys = new Set([...Object.keys(node.config), ...Object.keys(config)]);
+    const changes = [...keys]
+      .map((key) => ({
+        key,
+        change: !(key in node.config)
+          ? ('added' as const)
+          : !(key in config)
+            ? ('removed' as const)
+            : JSON.stringify(node.config[key]) !== JSON.stringify(config[key])
+              ? ('changed' as const)
+              : null,
+      }))
+      .filter((item): item is { key: string; change: 'added' | 'removed' | 'changed' } =>
+        Boolean(item.change),
+      );
+    // The editor's own checks of this node with the new configuration; the server's at publish
+    // are what count.
+    const problems = diagnose({
+      nodes: [{ id: node.id, type: node.type, config, bindings: node.bindings }],
+      connections: [],
+    })
+      .filter((item) => item.nodeId === node.id && item.severity === 'error')
+      .map((item) => item.message);
+    return { kind: 'ready', config, changes, problems };
+  };
+  return (
+    <details className="field-group advanced advanced-config">
+      <summary>Edit the whole configuration (Advanced)</summary>
+      <p className="note">
+        Paste or edit the node’s configuration as JSON. Its name, position and connections are not
+        part of it. Nothing changes until you apply, and publishing stays a separate step.
+      </p>
+      <textarea
+        id={`${node.id}-advanced-config`}
+        aria-label="Configuration as JSON"
+        className="mono"
+        rows={10}
+        spellCheck={false}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          setChecked(null);
+        }}
+      />
+      {checked?.kind === 'problem' && <p className="field-error">{checked.message}</p>}
+      {checked?.kind === 'ready' && (
+        <div className="advanced-preview" aria-live="polite">
+          {checked.changes.length === 0 ? (
+            <p className="note">No change.</p>
+          ) : (
+            <ul>
+              {checked.changes.map((item) => (
+                <li key={item.key}>
+                  <span className="mono">{item.key}</span> {item.change}
+                </li>
+              ))}
+            </ul>
+          )}
+          {checked.problems.map((problem, index) => (
+            <p key={index} className="field-error">
+              {problem}
+            </p>
+          ))}
+        </div>
+      )}
+      <div className="actions">
+        <button className="button" onClick={() => setChecked(check())}>
+          Check
+        </button>
+        <button
+          className="button"
+          disabled={checked?.kind !== 'ready' || checked.changes.length === 0}
+          onClick={() => {
+            if (checked?.kind === 'ready') apply(checked.config);
+          }}
+        >
+          Apply
+        </button>
+        <button
+          className="button quiet"
+          disabled={text === current}
+          onClick={() => {
+            setText(current);
+            setChecked(null);
+          }}
+        >
+          Discard edits
+        </button>
+      </div>
     </details>
   );
 }
@@ -1249,6 +1381,7 @@ export function NodeEditor({
           />
         )}
         <Advanced node={node} />
+        <AdvancedConfig node={node} apply={(config) => editing.setNode('config', config)} />
       </Typing.Provider>
       {entry && node.type !== 'manual_trigger' && <TriggerHistory node={node} context={trigger} />}
       {ports.length > 0 && (

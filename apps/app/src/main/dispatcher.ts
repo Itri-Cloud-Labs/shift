@@ -1,3 +1,4 @@
+import { open as openFile, rm } from 'node:fs/promises';
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
   validateArtifactList,
@@ -10,6 +11,9 @@ import {
   validateTriggerCredentialList,
   validateTriggerCredentialIssued,
   validateSchedulePreview,
+  validateWorkspaceListing,
+  validateWorkspaceFileResponse,
+  validateWorkspaceGitResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -113,14 +117,25 @@ export function validResource(kind: ResourceKind, value: unknown): boolean {
       return validateTriggerCredentialList(value);
     case 'schedulePreview':
       return validateSchedulePreview(value);
+    case 'workspaceFiles':
+      return validateWorkspaceListing(value);
+    case 'workspaceFile':
+      return validateWorkspaceFileResponse(value);
+    case 'workspaceGit':
+      return validateWorkspaceGitResponse(value);
   }
 }
+
+// The largest workspace file the server sends.
+const downloadLimit = 100 * 1024 * 1024;
 
 export async function dispatch(
   core: ClientCore,
   sender: SenderContext,
   value: unknown,
   openExternal: (url: string) => Promise<void>,
+  // Main's save dialog: the chosen path, or null when the owner cancelled.
+  saveAs: (name: string) => Promise<string | null> = async () => null,
 ): Promise<DesktopResponse> {
   if (!validSender(sender))
     return {
@@ -272,6 +287,76 @@ export async function dispatch(
                     ] as const);
         const read = await core.resource(kind, path);
         response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'data.workspaceFiles':
+      case 'data.workspaceFile':
+      case 'data.workspaceStatus':
+      case 'data.workspaceDiff': {
+        const base = `/api/v0/workspaces/${request.workspaceId}`;
+        const [kind, path] =
+          request.kind === 'data.workspaceFiles'
+            ? ([
+                'workspaceFiles',
+                `${base}/files?${new URLSearchParams({ path: request.path })}`,
+              ] as const)
+            : request.kind === 'data.workspaceFile'
+              ? ([
+                  'workspaceFile',
+                  `${base}/file?${new URLSearchParams({ path: request.path })}`,
+                ] as const)
+              : request.kind === 'data.workspaceStatus'
+                ? (['workspaceGit', `${base}/status`] as const)
+                : ([
+                    'workspaceGit',
+                    `${base}/diff?${new URLSearchParams({
+                      against: request.against,
+                      ...(request.path ? { path: request.path } : {}),
+                    })}`,
+                  ] as const);
+        const read = await core.resource(kind, path);
+        response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'workspace.download': {
+        // The owner chooses where; the bytes go straight from the server to that file.
+        const name = request.path.split('/').pop() || 'download';
+        const target = await saveAs(name);
+        if (!target) {
+          response = { kind: 'saved', saved: false, bytes: 0 };
+          break;
+        }
+        const file = await openFile(target, 'w', 0o600);
+        let bytes = 0;
+        try {
+          bytes = await core.download(
+            `/api/v0/workspaces/${request.workspaceId}/download?${new URLSearchParams({ path: request.path })}`,
+            downloadLimit,
+            async (chunk) => {
+              await file.write(chunk);
+            },
+          );
+        } catch (error) {
+          await file.close();
+          // A partial file is not left behind looking complete.
+          await rm(target, { force: true });
+          throw error;
+        }
+        await file.close();
+        response = { kind: 'saved', saved: true, bytes };
+        break;
+      }
+      case 'run.message': {
+        const { command, response: answer } = await core.command(
+          'POST',
+          `/api/v0/runs/${request.runId}/messages`,
+          {
+            message: request.message,
+            ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+          },
+        );
+        void answer;
+        response = { kind: 'command', command, runId: request.runId };
         break;
       }
       case 'workflow.enable': {
