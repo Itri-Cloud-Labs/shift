@@ -13,7 +13,13 @@ import {
   type BindingEditing,
 } from './Builders.js';
 import { unknownConfig, withMethod } from './config.js';
-import { addableTypes, advancedTypes, diagnose, type DraftProblem } from './draft.js';
+import {
+  addableTypes,
+  advancedTypes,
+  checkAdvanced,
+  type AdvancedCheck as Checked,
+  type DraftProblem,
+} from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import {
   outputPorts,
@@ -364,24 +370,18 @@ function Advanced({ node }: { node: DocumentNode }) {
   );
 }
 
-type Checked =
-  | { kind: 'problem'; message: string }
-  | {
-      kind: 'ready';
-      config: Record<string, unknown>;
-      changes: Array<{ key: string; change: 'added' | 'removed' | 'changed' }>;
-      problems: string[];
-    };
-
 // Advanced mode (client specification 6.3): the node's whole configuration as JSON. It is parsed
 // and checked, its changes previewed, and only Apply replaces the configuration; the node's name,
 // position and connections stay the editor's. Invalid input never touches the node, and settings
 // the forms do not show survive later form edits.
 function AdvancedConfig({
   node,
+  document,
   apply,
 }: {
   node: DocumentNode;
+  // The draft it belongs to, for checks that look at other nodes.
+  document: GraphDocument;
   apply: (config: Record<string, unknown>) => void;
 }) {
   const current = JSON.stringify(node.config, null, 2);
@@ -391,43 +391,7 @@ function AdvancedConfig({
     setText(current);
     setChecked(null);
   }, [current]);
-  const check = (): Checked => {
-    if (new TextEncoder().encode(text).byteLength > 1024 * 1024)
-      return { kind: 'problem', message: 'The configuration is larger than 1 MiB.' };
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch (error) {
-      return { kind: 'problem', message: `Not JSON: ${(error as Error).message}` };
-    }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-      return { kind: 'problem', message: 'A configuration is a JSON object.' };
-    const config = parsed as Record<string, unknown>;
-    const keys = new Set([...Object.keys(node.config), ...Object.keys(config)]);
-    const changes = [...keys]
-      .map((key) => ({
-        key,
-        change: !(key in node.config)
-          ? ('added' as const)
-          : !(key in config)
-            ? ('removed' as const)
-            : JSON.stringify(node.config[key]) !== JSON.stringify(config[key])
-              ? ('changed' as const)
-              : null,
-      }))
-      .filter((item): item is { key: string; change: 'added' | 'removed' | 'changed' } =>
-        Boolean(item.change),
-      );
-    // The editor's own checks of this node with the new configuration; the server's at publish
-    // are what count.
-    const problems = diagnose({
-      nodes: [{ id: node.id, type: node.type, config, bindings: node.bindings }],
-      connections: [],
-    })
-      .filter((item) => item.nodeId === node.id && item.severity === 'error')
-      .map((item) => item.message);
-    return { kind: 'ready', config, changes, problems };
-  };
+  const check = (): Checked => checkAdvanced(document, node.id, text);
   return (
     <details className="field-group advanced advanced-config">
       <summary>Edit the whole configuration (Advanced)</summary>
@@ -1389,7 +1353,11 @@ export function NodeEditor({
           />
         )}
         <Advanced node={node} />
-        <AdvancedConfig node={node} apply={(config) => editing.setNode('config', config)} />
+        <AdvancedConfig
+          node={node}
+          document={document}
+          apply={(config) => editing.setNode('config', config)}
+        />
       </Typing.Provider>
       {entry && node.type !== 'manual_trigger' && <TriggerHistory node={node} context={trigger} />}
       {ports.length > 0 && (

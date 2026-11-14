@@ -1012,3 +1012,63 @@ export function serverProblems(
     };
   });
 }
+
+export type AdvancedCheck =
+  | { kind: 'problem'; message: string }
+  | {
+      kind: 'ready';
+      config: Record<string, unknown>;
+      changes: Array<{ key: string; change: 'added' | 'removed' | 'changed' }>;
+      problems: string[];
+    };
+
+// Advanced mode (client specification 6.3): a node's whole configuration as JSON, parsed and
+// checked in the full draft with this configuration in place, so its references to other nodes
+// resolve as they will. Only its configuration can change; identity, position and connections
+// are not part of it.
+export function checkAdvanced(
+  document: { nodes: DocumentNode[]; connections: unknown[] },
+  nodeId: string,
+  text: string,
+): AdvancedCheck {
+  const node = document.nodes.find((item) => item.id === nodeId);
+  if (!node) return { kind: 'problem', message: 'The node is gone.' };
+  if (new TextEncoder().encode(text).byteLength > 1024 * 1024)
+    return { kind: 'problem', message: 'The configuration is larger than 1 MiB.' };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    return { kind: 'problem', message: `Not JSON: ${(error as Error).message}` };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    return { kind: 'problem', message: 'A configuration is a JSON object.' };
+  const config = parsed as Record<string, unknown>;
+  const keys = new Set([...Object.keys(node.config), ...Object.keys(config)]);
+  const changes = [...keys]
+    .map((key) => ({
+      key,
+      change: !(key in node.config)
+        ? ('added' as const)
+        : !(key in config)
+          ? ('removed' as const)
+          : JSON.stringify(node.config[key]) !== JSON.stringify(config[key])
+            ? ('changed' as const)
+            : null,
+    }))
+    .filter((item): item is { key: string; change: 'added' | 'removed' | 'changed' } =>
+      Boolean(item.change),
+    );
+  const draft = {
+    nodes: document.nodes.map(({ extra, ...item }) => ({
+      ...extra,
+      ...item,
+      ...(item.id === nodeId ? { config } : {}),
+    })),
+    connections: document.connections,
+  };
+  const problems = diagnose(draft)
+    .filter((item) => item.nodeId === nodeId && item.severity === 'error')
+    .map((item) => item.message);
+  return { kind: 'ready', config, changes, problems };
+}
