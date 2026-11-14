@@ -69,20 +69,24 @@ export class EventLog {
   }
 
   // Events after `after`, oldest first.
-  after(after: number, limit: number): EventView[] {
+  // With `runId`, only that run's events: a run's own timeline, paged like the rest.
+  after(after: number, limit: number, runId?: string): EventView[] {
     return (
       this.db
-        .prepare('SELECT * FROM events WHERE sequence > ? ORDER BY sequence LIMIT ?')
-        .all(after, limit) as EventRow[]
+        .prepare(
+          'SELECT * FROM events WHERE sequence > ? AND (? IS NULL OR run_id = ?) ORDER BY sequence LIMIT ?',
+        )
+        .all(after, runId ?? null, runId ?? null, limit) as EventRow[]
     ).map((row) => this.#view(row));
   }
 
   page(
     after: number,
     limit: number,
+    runId?: string,
   ): { events: EventView[]; next: string | null; highWater: string } {
     return this.db.transaction(() => {
-      const events = this.after(after, limit + 1);
+      const events = this.after(after, limit + 1, runId);
       const more = events.length > limit;
       const page = events.slice(0, limit);
       return {

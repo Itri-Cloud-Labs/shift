@@ -23,6 +23,9 @@ import type {
   RunList,
   InteractionList,
   WorkspaceList,
+  WorkspaceListing,
+  WorkspaceFileResponse,
+  WorkspaceGitResponse,
   ExecutionPage,
   RunVariables,
   ArtifactList,
@@ -85,6 +88,9 @@ export const validateWorkflowList: Validator<WorkflowList>;
 export const validateRunList: Validator<RunList>;
 export const validateInteractionList: Validator<InteractionList>;
 export const validateWorkspaceList: Validator<WorkspaceList>;
+export const validateWorkspaceListing: Validator<WorkspaceListing>;
+export const validateWorkspaceFileResponse: Validator<WorkspaceFileResponse>;
+export const validateWorkspaceGitResponse: Validator<WorkspaceGitResponse>;
 export const validateExecutionPage: Validator<ExecutionPage>;
 export const validateRunVariables: Validator<RunVariables>;
 export const validateArtifactList: Validator<ArtifactList>;

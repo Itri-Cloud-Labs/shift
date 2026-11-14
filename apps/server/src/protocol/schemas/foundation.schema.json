@@ -1040,7 +1040,17 @@
                 "$ref": "#/$defs/Uuid"
               },
               "kind": {
-                "enum": ["cancel", "retry", "fail", "complete", "extend"]
+                "enum": [
+                  "cancel",
+                  "retry",
+                  "fail",
+                  "complete",
+                  "extend",
+                  "hold",
+                  "abort",
+                  "message",
+                  "resume"
+                ]
               },
               "executionId": {
                 "anyOf": [
@@ -1075,6 +1085,46 @@
             }
           },
           "maxItems": 100000
+        },
+        "hold": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["at", "actor", "activeWork"],
+              "properties": {
+                "at": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "actor": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "id"],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "maxLength": 40
+                    },
+                    "id": {
+                      "type": "string",
+                      "maxLength": 100
+                    }
+                  }
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 4000
+                },
+                "activeWork": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -3274,6 +3324,112 @@
         },
         "duplicate": {
           "type": "boolean"
+        }
+      }
+    },
+    "WorkspaceListing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "listing"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "listing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "entries", "truncated"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "entries": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "kind", "size"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "kind": {
+                    "enum": ["file", "directory", "symlink", "other"]
+                  },
+                  "size": {
+                    "type": ["integer", "null"],
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "WorkspaceFileResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "file"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "file": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "size", "binary", "truncated", "text"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "binary": {
+              "type": "boolean"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": ["string", "null"],
+              "maxLength": 524288
+            }
+          }
+        }
+      }
+    },
+    "WorkspaceGitResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "status": {
+          "type": "object"
+        },
+        "diff": {
+          "type": "object"
         }
       }
     }

@@ -56,6 +56,8 @@ class FakeHarness implements HarnessAdapter {
   // Session creations that fail as if the runtime could not start.
   failCreates = 0;
   confirmCancel = true;
+  // While set, a cancellation waits for it, as a slow harness would.
+  cancelGate: Promise<void> | null = null;
   // Each turn writes both default reports first, as Shift's prompt asks, unless switched off.
   writeReports = true;
   handler!: ResultHandler;
@@ -164,6 +166,7 @@ class FakeHarness implements HarnessAdapter {
     correlation: InvocationCorrelation,
   ): Promise<CancellationObservation> {
     this.cancels++;
+    if (this.cancelGate) await this.cancelGate;
     if (!this.confirmCancel) {
       return {
         kind: 'unconfirmed',
@@ -2260,7 +2263,7 @@ test('a run stored by the fixed-graph slice still finishes after the upgrade', a
 const control = (
   harnessed: Harnessed,
   id: string,
-  kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend',
+  kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend' | 'hold' | 'abort' | 'resume',
   body: Record<string, unknown> = {},
 ) => (harnessed.engine.controlRun(id, kind, body).body as { run: RunView }).run;
 
@@ -4113,6 +4116,245 @@ test('get variable reads the current value, or its fallback, and fails without o
     assert.deepEqual(fallback.outcome, { data: 'none' });
     const missing = await startNow(harnessed, await publish(harnessed, workflow({}, false)));
     assert.equal(missing.executions.at(-1)!.error?.code, 'VARIABLE_MISSING');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+// start -> first -> second -> end, two agent steps in a row.
+const twoAgents: Json = {
+  nodes: [
+    { id: 'start', type: 'manual_trigger' },
+    { id: 'first', type: 'agent', config: { goal: 'First step.' } },
+    { id: 'second', type: 'agent', config: { goal: 'Second step.' } },
+    { id: 'end', type: 'end' },
+  ],
+  connections: [
+    { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'first', toPort: 'input' },
+    { id: 'c2', fromNodeId: 'first', fromPort: 'success', toNodeId: 'second', toPort: 'input' },
+    { id: 'c3', fromNodeId: 'second', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+  ],
+} as Json;
+
+type HeldRun = ControlledRun & {
+  hold: { at: number; actor: { kind: string }; reason?: string; activeWork: boolean } | null;
+};
+
+const message = (harnessed: Harnessed, runId: string, text: string, commandId?: string) =>
+  (
+    harnessed.engine.messageRun(runId, { message: text, ...(commandId ? { commandId } : {}) })
+      .body as { invocation: InvocationDetail }
+  ).invocation;
+
+test('a hold lets the active step finish, starts nothing new, survives restart and resumes', async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const behave: Behaviour = async (turn, fake) => {
+    if (turn.prompt.includes('First step.')) await released;
+    if (turn.prompt === 'Look again at the notes.') turn.status = 'ended';
+    else await complete({ ok: true })(turn, fake);
+  };
+  const harnessed = await engineFor(behave);
+  let current = harnessed;
+  try {
+    const workflowId = await publish(harnessed, twoAgents);
+    const runId = (
+      (await harnessed.engine.startRun({ workflowId })).body as { run: { id: string } }
+    ).run.id;
+    await eventually(() =>
+      view(harnessed, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+    );
+    const held = control(harnessed, runId, 'hold', {
+      reason: 'Check the notes first',
+      commandId: 'hold-command-1',
+    }) as unknown as HeldRun;
+    assert.equal(held.state, 'HELD');
+    assert.equal(held.hold?.reason, 'Check the notes first');
+    assert.equal(held.hold?.activeWork, true);
+    // The hold is in place before any message, and the running step keeps its session.
+    assert.throws(() => message(harnessed, runId, 'Look again at the notes.'), {
+      code: 'RUN_ACTIVE',
+    });
+    release();
+    await eventually(() =>
+      view(harnessed, runId).executions.find((entry) => entry.node === 'first')?.state ===
+      'COMPLETED'
+        ? true
+        : undefined,
+    );
+    await delay(300);
+    const waiting = view(harnessed, runId) as unknown as HeldRun;
+    assert.equal(waiting.state, 'HELD');
+    assert.equal(waiting.hold?.activeWork, false);
+    assert.equal(waiting.executions.find((entry) => entry.node === 'second')?.state, 'PENDING');
+    assert.equal(harnessed.fake.turns.size, 1, 'the next step did not start');
+    // A restart keeps the hold; nothing resumes on its own.
+    await harnessed.close();
+    current = await engineFor(behave, { state: harnessed.state, fake: harnessed.fake });
+    await delay(300);
+    assert.equal(view(current, runId).state, 'HELD');
+    assert.equal(current.fake.turns.size, 1);
+    // A manual message goes to the run's session as the owner's own turn.
+    const sent = message(current, runId, 'Look again at the notes.', 'message-1');
+    assert.equal(sent.manual, true);
+    assert.equal(message(current, runId, 'Look again at the notes.', 'message-1').id, sent.id);
+    await eventually(() => (goalState(current, sent.id) === 'COMPLETED' ? true : undefined));
+    const resumed = control(current, runId, 'resume', { commandId: 'resume-1' });
+    assert.equal(resumed.state, 'RUNNING');
+    const run = (await settled(current, runId)) as HeldRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.equal(run.hold, null);
+    assert.deepEqual(
+      run.controls.map((entry) => entry.kind),
+      ['hold', 'message', 'resume'],
+    );
+    // The manual turn never became a step result.
+    assert.deepEqual(
+      run.executions
+        .filter((entry) => entry.node === 'first' || entry.node === 'second')
+        .map((entry) => (entry.output as { data: unknown }).data),
+      [{ ok: true }, { ok: true }],
+    );
+    // A finished run cannot be held or resumed.
+    assert.throws(() => control(current, runId, 'resume'), { code: 'RUN_NOT_HELD' });
+    assert.throws(() => control(current, runId, 'hold'), { code: 'RUN_STATE_CONFLICT' });
+  } finally {
+    await current.close();
+  }
+});
+
+test('an abort stops the held step, and resume runs it again in the same session', async () => {
+  let releaseManual!: () => void;
+  const manualReleased = new Promise<void>((resolve) => (releaseManual = resolve));
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (turn.prompt === 'Use the shorter count.') {
+      await manualReleased;
+      turn.status = 'ended';
+    }
+    // The first turn runs until it is stopped; the continuation completes.
+    else if (fake.turns.size > 1) await complete({ count: 7 })(turn, fake);
+  });
+  try {
+    const runId = await start(harnessed);
+    await eventually(() =>
+      view(harnessed, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+    );
+    assert.throws(() => control(harnessed, runId, 'abort'), { code: 'RUN_NOT_HELD' });
+    control(harnessed, runId, 'hold');
+    // Holding again changes nothing.
+    assert.equal(control(harnessed, runId, 'hold').state, 'HELD');
+    control(harnessed, runId, 'abort', { commandId: 'abort-command-1' });
+    const stopped = (await eventually(() => {
+      const run = view(harnessed, runId);
+      return run.state === 'NEEDS_HUMAN' ? run : undefined;
+    })) as HeldRun;
+    assert.equal(stopped.attention?.code, 'INTERVENING');
+    assert.ok(stopped.hold);
+    assert.equal(harnessed.fake.cancels, 1);
+    assert.throws(() => control(harnessed, runId, 'abort'), { code: 'NOTHING_TO_ABORT' });
+    const sent = message(harnessed, runId, 'Use the shorter count.');
+    // The owner's turn owns the session until it ends: resume waits for it.
+    assert.throws(() => control(harnessed, runId, 'resume'), { code: 'MANUAL_ACTIVE' });
+    releaseManual();
+    await eventually(() => (goalState(harnessed, sent.id) === 'COMPLETED' ? true : undefined));
+    control(harnessed, runId, 'resume');
+    const run = (await settled(harnessed, runId)) as HeldRun;
+    assert.equal(run.state, 'COMPLETED');
+    assert.deepEqual(run.outcome, { data: { count: 7 } });
+    const turns = [...harnessed.fake.turns.values()];
+    assert.equal(new Set(turns.map((turn) => turn.handle.harnessSessionId)).size, 1);
+    assert.match(turns.at(-1)!.prompt, /what it changed is unknown/);
+    const agent = run.executions.find((entry) => entry.node === 'agent')!;
+    assert.deepEqual(
+      agent.attempts.map((attempt) => attempt.state),
+      ['INTERRUPTED', 'COMPLETED'],
+    );
+    assert.deepEqual(
+      run.controls.map((entry) => entry.kind),
+      ['hold', 'abort', 'message', 'resume'],
+    );
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('a held run accepts an approval response but advances only after resume', async () => {
+  const harnessed = await engineFor(() => {});
+  try {
+    const workflowId = await publish(harnessed, approvalWorkflow());
+    const waiting = (await startNow(harnessed, workflowId, { input: { name: 'v2' } })) as TimedRun;
+    assert.equal(waiting.state, 'WAITING');
+    assert.equal(control(harnessed, waiting.id, 'hold').state, 'HELD');
+    const [request] = pendingInteractions(harnessed);
+    // There is no agent session to message.
+    assert.throws(() => message(harnessed, waiting.id, 'Hello'), { code: 'SESSION_NOT_FOUND' });
+    respond(harnessed, request!.id, { revision: request!.revision, decision: 'approved' });
+    await delay(300);
+    const held = view(harnessed, waiting.id) as unknown as HeldRun;
+    assert.equal(held.state, 'HELD');
+    assert.equal(held.executions.find((entry) => entry.node === 'done')?.state, 'PENDING');
+    control(harnessed, waiting.id, 'resume');
+    assert.equal((await settled(harnessed, waiting.id)).state, 'COMPLETED');
+  } finally {
+    await harnessed.close();
+  }
+});
+
+test('an abort acknowledged before a restart is finished at startup, not run on', async () => {
+  const first = await engineFor(() => {});
+  const runId = await start(first);
+  await eventually(() =>
+    view(first, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+  );
+  control(first, runId, 'hold');
+  // As if the server stopped right after acknowledging the abort, before stopping the step.
+  first.engine.repository.requestAbort(runId, { kind: 'cli', id: 'local' }, undefined);
+  await first.close();
+  const restarted = await engineFor(complete({ count: 3 }), {
+    state: first.state,
+    fake: first.fake,
+  });
+  try {
+    const stopped = await eventually(() => {
+      const run = view(restarted, runId);
+      return run.state === 'NEEDS_HUMAN' ? run : undefined;
+    });
+    assert.equal(stopped.attention?.code, 'INTERVENING');
+    await delay(300);
+    assert.equal(restarted.fake.turns.size, 1, 'the step was not continued');
+    assert.deepEqual(
+      stopped.executions.find((entry) => entry.node === 'agent')!.attempts.map((a) => a.state),
+      ['INTERRUPTED'],
+    );
+    control(restarted, runId, 'resume');
+    assert.equal((await settled(restarted, runId)).state, 'COMPLETED');
+  } finally {
+    await restarted.close();
+  }
+});
+
+test('resume waits until an abort has stopped its step', async () => {
+  const harnessed = await engineFor(async (turn, fake) => {
+    if (fake.turns.size > 1) await complete({ count: 2 })(turn, fake);
+  });
+  try {
+    const runId = await start(harnessed);
+    await eventually(() =>
+      view(harnessed, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+    );
+    let release!: () => void;
+    harnessed.fake.cancelGate = new Promise<void>((resolve) => (release = resolve));
+    control(harnessed, runId, 'hold');
+    control(harnessed, runId, 'abort');
+    await eventually(() => (harnessed.fake.cancels === 1 ? true : undefined));
+    // The stop is not accounted for yet: the hold, and its abort, stay.
+    assert.throws(() => control(harnessed, runId, 'resume'), { code: 'ABORT_PENDING' });
+    release();
+    await eventually(() =>
+      view(harnessed, runId).attention?.code === 'INTERVENING' ? true : undefined,
+    );
+    control(harnessed, runId, 'resume');
+    assert.equal((await settled(harnessed, runId)).state, 'COMPLETED');
   } finally {
     await harnessed.close();
   }

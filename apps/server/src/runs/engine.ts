@@ -86,6 +86,10 @@ const controlSchemas = {
       activeMs: { type: 'integer', minimum: 1000, maximum: 30 * 24 * 60 * 60 * 1000 },
     },
   },
+  // Manual intervention (specification 6.6).
+  hold: { properties: { reason } },
+  abort: { properties: {} },
+  resume: { properties: {} },
 } as const;
 export type RunControlKind = keyof typeof controlSchemas;
 const validateRespond = ajv.compile({
@@ -224,6 +228,13 @@ export class RunEngine {
       this.#options.store.workerGeneration,
     )) {
       this.#stopForCancel(runId, claims);
+    }
+    // So is an abort the owner asked for: its step is stopped, never run on.
+    for (const { runId, claims } of this.repository.reclaimAborts(
+      this.#options.store.workerGeneration,
+    )) {
+      if (claims.length === 0) this.repository.settleAbort(runId);
+      else this.#stopAttempts(runId, claims, () => this.repository.settleAbort(runId));
     }
     for (const claim of this.repository.reclaimOrphanedAttempts(
       this.#options.store.workerGeneration,
@@ -479,6 +490,7 @@ export class RunEngine {
       );
     }
     let stops: Claim[] = [];
+    let aborts: Claim[] = [];
     const response = this.#options.receipts.execute(
       actor,
       id,
@@ -503,12 +515,74 @@ export class RunEngine {
               ...(body.activeMs === undefined ? {} : { activeMs: body.activeMs }),
             });
             break;
+          case 'hold':
+            this.repository.hold(runId, actor, id, body.reason);
+            break;
+          case 'abort':
+            aborts = this.repository.requestAbort(runId, actor, id);
+            break;
+          case 'resume':
+            this.repository.resumeHold(runId, actor, id);
+            break;
         }
         return { status: 200, body: { run: this.repository.run(runId) } };
       },
     );
     if (stops.length > 0) this.#stopForCancel(runId, stops);
+    // An abort stops the held run's attempts the way a cancellation does, but leaves the run to
+    // the owner instead of cancelling it.
+    if (aborts.length > 0)
+      this.#stopAttempts(runId, aborts, () => this.repository.settleAbort(runId));
     this.#pump();
+    return response;
+  }
+
+  // A manual message to a held run's agent session. It runs as the owner's own turn in that
+  // session, after any active work was accounted for, and never commits the step's result: resume
+  // returns the step to its own contract (specification 6.6).
+  messageRun(runId: string, input: unknown, actor: Actor = local): CommandResponse {
+    if (this.#stopping) throw new ShiftError('SERVER_STOPPING', 'The server is stopping.', 503);
+    const body = (input ?? {}) as { message?: unknown; sessionId?: unknown; commandId?: unknown };
+    if (
+      typeof body.message !== 'string' ||
+      body.message.trim() === '' ||
+      body.message.length > 20_000 ||
+      (body.sessionId !== undefined && typeof body.sessionId !== 'string') ||
+      (body.commandId !== undefined && typeof body.commandId !== 'string')
+    )
+      throw new ShiftError(
+        'INVALID_REQUEST',
+        'A message is text of 1 to 20000 characters.',
+        422,
+        false,
+        ['/message'],
+      );
+    const id = body.commandId as string | undefined;
+    const request = {
+      op: 'run.message',
+      runId,
+      message: body.message,
+      ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+    };
+    const stored = id === undefined ? null : this.#options.receipts.lookup(actor, id, request);
+    if (stored) return stored;
+    let created: InvocationRow | undefined;
+    const response = this.#options.receipts.execute(actor, id, request, () => {
+      const sessionId = this.repository.heldSession(runId, body.sessionId as string | undefined);
+      const invocationId = randomUUID();
+      created = this.repository.createManualGoal(
+        sessionId,
+        {
+          id: invocationId,
+          correlationId: this.#options.adapter.correlate(invocationId).providerMessageId!,
+          prompt: body.message as string,
+        },
+        runId,
+      );
+      this.repository.recordMessage(runId, actor, id, sessionId, invocationId);
+      return { status: 202, body: { invocation: this.repository.invocationDetail(invocationId) } };
+    });
+    if (created) this.#launchManual(created);
     return response;
   }
 

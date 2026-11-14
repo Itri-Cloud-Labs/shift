@@ -54,6 +54,9 @@ shift run retry RUN_ID [--wait]
 shift run fail RUN_ID [--reason TEXT]
 shift run complete RUN_ID --file DATA.json
 shift run extend RUN_ID (--executions N | --active-minutes N) [--wait]
+shift run hold RUN_ID [--reason TEXT]
+shift run abort|resume RUN_ID [--wait]
+shift run message RUN_ID --message TEXT [--session SESSION_ID]
 shift project permissions PROJECT_ID [--allow ACTIONS] [--deny ACTIONS]
 shift credential list --project PROJECT_ID
 shift credential set --project PROJECT_ID --name NAME   (value on standard input)
@@ -68,6 +71,9 @@ shift github status|verify|disconnect --project PROJECT_ID
 shift workspace list [--project PROJECT_ID]
 shift workspace show WORKSPACE_ID
 shift workspace remove WORKSPACE_ID [--force]
+shift workspace files|file WORKSPACE_ID [--path PATH]
+shift workspace status WORKSPACE_ID
+shift workspace diff WORKSPACE_ID [--against base|head] [--path PATH]
 shift event list [--after CURSOR] [--limit N]
 shift device pair
 shift device list
@@ -83,6 +89,9 @@ A run in NEEDS_HUMAN continues with retry (run the stuck step again; its agent i
 told earlier effects are unknown), fail (abandon the step), complete (record a
 result you verified, as JSON matching the step's result schema) or extend (raise
 the execution or active-time limit it reached). cancel stops a run at any point.
+hold pauses one run for your intervention: nothing new starts, a running step
+finishes unless you abort it, and message then talks to its agent session.
+resume continues it; an aborted step runs again in the same session.
 A run WAITING for a human form or approval continues with interaction respond:
 --decision picks an approval outcome, and --file holds the form response as JSON.
 Each run works in its own detached worktree of the project, under the state

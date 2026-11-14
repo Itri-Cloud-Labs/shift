@@ -268,7 +268,8 @@ export interface Run {
    */
   controls: {
     id: Uuid;
-    kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend';
+    kind:
+      'cancel' | 'retry' | 'fail' | 'complete' | 'extend' | 'hold' | 'abort' | 'message' | 'resume';
     executionId: Uuid | null;
     actor: {
       kind: string;
@@ -277,6 +278,15 @@ export interface Run {
     payload: unknown;
     createdAt: number;
   }[];
+  hold?: null | {
+    at: number;
+    actor: {
+      kind: string;
+      id: string;
+    };
+    reason?: string;
+    activeWork: boolean;
+  };
 }
 export interface Execution {
   id: Uuid;

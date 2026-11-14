@@ -411,3 +411,32 @@ test('a lost or failed merge response is settled from GitHub', async () => {
     await close();
   }
 });
+
+test('a held run reads no checks until it is resumed', async () => {
+  const { env, fake, close } = await connected();
+  try {
+    fake.checkRuns.push({
+      id: 1,
+      name: 'build',
+      head_sha: sha,
+      status: 'in_progress',
+      conclusion: null,
+    });
+    const id = await run(env, waitFlow(), { commit: sha });
+    await waiting(env, id, 1);
+    env.engine.controlRun(id, 'hold', {});
+    const reads = checkReads(fake);
+    env.clock.advance(5 * minute);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    assert.equal(checkReads(fake), reads, 'no read while held');
+    assert.equal(view(env, id).state, 'HELD');
+    fake.checkRuns[0]!.status = 'completed';
+    fake.checkRuns[0]!.conclusion = 'success';
+    env.engine.controlRun(id, 'resume', {});
+    const done = await settled(env, id);
+    assert.equal(done.state, 'COMPLETED');
+    assert.ok(checkReads(fake) > reads);
+  } finally {
+    await close();
+  }
+});

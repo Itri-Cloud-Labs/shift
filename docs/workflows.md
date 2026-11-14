@@ -563,6 +563,17 @@ A run waits in `NEEDS_HUMAN` when Shift cannot tell what happened, for example a
 
 Every decision is recorded in the run's `controls`, and the stopped attempt stays in history as Shift observed it. A cancellation that cannot confirm that the agent stopped waits in `NEEDS_HUMAN` with `CANCEL_UNCONFIRMED`. Check the workspace, then cancel again. While a cancellation is pending, only cancel is accepted. A cancellation interrupted by a restart finishes on the next start.
 
+## Intervening in a run
+
+To step into a run yourself, hold it first. A hold is recorded before anything else, and it stays until you resume, whether or not a client is connected or the server restarts:
+
+- `shift run hold <run> [--reason]`: nothing new starts. A step already running finishes on its own; until it does, the run shows `HELD` with `hold.activeWork: true` and its session cannot be messaged. A human request can still be answered, and its answer is kept, but the run moves on only after resume.
+- `shift run abort <run>`: stops the held run's running step, the way a cancellation stops it, without cancelling the run. The attempt is `INTERRUPTED`, and the run waits in `NEEDS_HUMAN` with `INTERVENING`.
+- `shift run message <run> --message TEXT [--session ID]`: sends your own message to the run's agent session (by default the latest one the run used) as a turn of yours. Nothing of the run may be running. A message never becomes a step's result.
+- `shift run resume <run>`: ends the hold, once your message's turn has ended. A step you aborted runs again in the same session, told that the earlier attempt's effects are unknown, so the agent sees your messages and inspects the workspace before acting. Anything that finished while held just continues.
+
+A held run is unfinished, so it counts against the workflow's [overlap policy](#triggers). Holds, aborts, messages and resumes are recorded in the run's `controls`.
+
 ## Crashes and restarts
 
 Runs, executions, attempts, agent sessions, prompts and result submissions are stored in SQLite. Every step that leaves Shift is recorded as an intent before it happens. Stopping or killing either process is handled as follows:
