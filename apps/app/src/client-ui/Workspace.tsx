@@ -371,14 +371,18 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const published = Boolean(workflow?.value.activeVersionId);
   // A published version without a manual trigger starts only from its other triggers.
   const manual = !active?.value || trigger !== undefined;
-  const canRun = live && published && manual;
+  // A paused workflow starts nothing; the server would refuse.
+  const paused = workflow?.value.enabled === false;
+  const canRun = live && published && manual && !paused;
   const runHint = !published
     ? 'Publish a version of this workflow before running it.'
-    : !manual
-      ? 'This workflow has no manual trigger: it starts from its other triggers only.'
-      : !live
-        ? 'Runs start once the server is connected.'
-        : 'Start a run of the published version';
+    : paused
+      ? 'This workflow is paused. Resume new runs from the run list first.'
+      : !manual
+        ? 'This workflow has no manual trigger: it starts from its other triggers only.'
+        : !live
+          ? 'Runs start once the server is connected.'
+          : 'Start a run of the published version';
 
   const start = async (input: unknown, allowOverlap = false) => {
     if (!workflowId) return;

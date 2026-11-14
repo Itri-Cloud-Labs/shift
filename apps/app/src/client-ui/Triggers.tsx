@@ -492,6 +492,9 @@ function WebhookSetup({ node, context }: { node: DocumentNode; context: TriggerC
   const triggers = useTriggers(context.workflowId, context.published);
   const trigger = triggers?.find((item) => item.nodeId === node.id && item.kind === 'webhook');
   const [issued, setIssued] = useState<string | null>(null);
+  // Bumped after a change to reload the credentials; the secret itself is never a dependency, so
+  // no hook keeps a copy of it once the reveal closes.
+  const [reloads, setReloads] = useState(0);
   const [keepMinutes, setKeepMinutes] = useState<number | undefined>();
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -503,7 +506,7 @@ function WebhookSetup({ node, context }: { node: DocumentNode; context: TriggerC
     return answer.kind === 'resource'
       ? (answer.value as { credentials: Credential[] }).credentials
       : null;
-  }, [trigger?.id, issued]);
+  }, [trigger?.id, reloads]);
   if (!trigger)
     return (
       <p className="note">
@@ -519,6 +522,7 @@ function WebhookSetup({ node, context }: { node: DocumentNode; context: TriggerC
     setFailed(null);
     const answer = await ask(bridge().trigger.rotate(trigger.id, keepMinutes));
     setBusy(false);
+    setReloads((count) => count + 1);
     if (answer.kind === 'issued' && answer.secret) setIssued(answer.secret);
     else if (answer.kind === 'issued')
       setFailed(
@@ -539,6 +543,7 @@ function WebhookSetup({ node, context }: { node: DocumentNode; context: TriggerC
     await ask(bridge().trigger.revoke(trigger.id));
     setBusy(false);
     setIssued(null);
+    setReloads((count) => count + 1);
   };
   const signed = node.config['auth'] !== 'bearer';
   return (
