@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ShiftError } from '../src/domain/errors.js';
@@ -72,6 +72,22 @@ test('inspection reads a run workspace and never leaves it', async () => {
     for await (const chunk of download.stream) chunks.push(chunk as Buffer);
     assert.deepEqual(Buffer.concat(chunks), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
     await rejects(inspector.download(workspace.id, 'escape'), 'PATH_OUTSIDE_WORKSPACE');
+    // An empty file downloads as nothing, and no download, read or abandoned, keeps its file open.
+    await writeFile(join(root, 'empty.txt'), '');
+    const empty = await inspector.download(workspace.id, 'empty.txt');
+    const parts: Buffer[] = [];
+    for await (const chunk of empty.stream) parts.push(chunk as Buffer);
+    assert.equal(Buffer.concat(parts).length, 0);
+    const openFiles = async () => (await readdir('/proc/self/fd')).length;
+    const before = await openFiles();
+    for (let index = 0; index < 20; index++) {
+      const read = await inspector.download(workspace.id, 'notes.txt');
+      for await (const chunk of read.stream) void chunk;
+      const abandoned = await inspector.download(workspace.id, 'large.txt');
+      abandoned.stream.destroy();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok((await openFiles()) <= before + 1, 'downloads keep no file open');
 
     // Git sees the live workspace.
     const status = (await inspector.status(workspace.id)) as {

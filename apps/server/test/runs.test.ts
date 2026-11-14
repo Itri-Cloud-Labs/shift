@@ -4221,8 +4221,13 @@ test('a hold lets the active step finish, starts nothing new, survives restart a
 });
 
 test('an abort stops the held step, and resume runs it again in the same session', async () => {
+  let releaseManual!: () => void;
+  const manualReleased = new Promise<void>((resolve) => (releaseManual = resolve));
   const harnessed = await engineFor(async (turn, fake) => {
-    if (turn.prompt === 'Use the shorter count.') turn.status = 'ended';
+    if (turn.prompt === 'Use the shorter count.') {
+      await manualReleased;
+      turn.status = 'ended';
+    }
     // The first turn runs until it is stopped; the continuation completes.
     else if (fake.turns.size > 1) await complete({ count: 7 })(turn, fake);
   });
@@ -4245,6 +4250,9 @@ test('an abort stops the held step, and resume runs it again in the same session
     assert.equal(harnessed.fake.cancels, 1);
     assert.throws(() => control(harnessed, runId, 'abort'), { code: 'NOTHING_TO_ABORT' });
     const sent = message(harnessed, runId, 'Use the shorter count.');
+    // The owner's turn owns the session until it ends: resume waits for it.
+    assert.throws(() => control(harnessed, runId, 'resume'), { code: 'MANUAL_ACTIVE' });
+    releaseManual();
     await eventually(() => (goalState(harnessed, sent.id) === 'COMPLETED' ? true : undefined));
     control(harnessed, runId, 'resume');
     const run = (await settled(harnessed, runId)) as HeldRun;
@@ -4286,5 +4294,38 @@ test('a held run accepts an approval response but advances only after resume', a
     assert.equal((await settled(harnessed, waiting.id)).state, 'COMPLETED');
   } finally {
     await harnessed.close();
+  }
+});
+
+test('an abort acknowledged before a restart is finished at startup, not run on', async () => {
+  const first = await engineFor(() => {});
+  const runId = await start(first);
+  await eventually(() =>
+    view(first, runId).invocations[0]?.state === 'RUNNING' ? true : undefined,
+  );
+  control(first, runId, 'hold');
+  // As if the server stopped right after acknowledging the abort, before stopping the step.
+  first.engine.repository.requestAbort(runId, { kind: 'cli', id: 'local' }, undefined);
+  await first.close();
+  const restarted = await engineFor(complete({ count: 3 }), {
+    state: first.state,
+    fake: first.fake,
+  });
+  try {
+    const stopped = await eventually(() => {
+      const run = view(restarted, runId);
+      return run.state === 'NEEDS_HUMAN' ? run : undefined;
+    });
+    assert.equal(stopped.attention?.code, 'INTERVENING');
+    await delay(300);
+    assert.equal(restarted.fake.turns.size, 1, 'the step was not continued');
+    assert.deepEqual(
+      stopped.executions.find((entry) => entry.node === 'agent')!.attempts.map((a) => a.state),
+      ['INTERRUPTED'],
+    );
+    control(restarted, runId, 'resume');
+    assert.equal((await settled(restarted, runId)).state, 'COMPLETED');
+  } finally {
+    await restarted.close();
   }
 });

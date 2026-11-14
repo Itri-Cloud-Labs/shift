@@ -682,6 +682,8 @@ export function createHttpServer(options: {
           'Content-Length': String(file.size),
           'Content-Disposition': `attachment; filename="${file.name.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
         });
+        // A client that goes away releases the file at once.
+        res.on('close', () => file.stream.destroy());
         file.stream.on('error', () => res.destroy());
         file.stream.pipe(res);
       });

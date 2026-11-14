@@ -229,6 +229,13 @@ export class RunEngine {
     )) {
       this.#stopForCancel(runId, claims);
     }
+    // So is an abort the owner asked for: its step is stopped, never run on.
+    for (const { runId, claims } of this.repository.reclaimAborts(
+      this.#options.store.workerGeneration,
+    )) {
+      if (claims.length === 0) this.repository.settleAbort(runId);
+      else this.#stopAttempts(runId, claims, () => this.repository.settleAbort(runId));
+    }
     for (const claim of this.repository.reclaimOrphanedAttempts(
       this.#options.store.workerGeneration,
     )) {

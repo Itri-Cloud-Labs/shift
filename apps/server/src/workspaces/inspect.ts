@@ -1,4 +1,5 @@
-import { constants, createReadStream, type ReadStream } from 'node:fs';
+import { constants } from 'node:fs';
+import { Readable } from 'node:stream';
 import { lstat, open, opendir, readlink, realpath, type FileHandle } from 'node:fs/promises';
 import { basename, isAbsolute, join, normalize, sep } from 'node:path';
 import { ShiftError } from '../domain/errors.js';
@@ -105,34 +106,45 @@ export class WorkspaceInspector {
   ): Promise<{ path: string; entries: Entry[]; truncated: boolean }> {
     const { root } = await this.#root(id);
     const relative = cleanPath(path);
-    const directory = await this.#resolve(root, relative);
-    const entries: Entry[] = [];
-    let truncated = false;
-    let dir;
+    const real = await this.#resolve(root, relative);
+    // The directory is opened once and confirmed through its descriptor; its entries are read and
+    // examined through that descriptor, so a link swapped in for a path above it changes nothing.
+    let handle: FileHandle;
     try {
-      dir = await opendir(directory);
+      handle = await open(real, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     } catch {
       throw new ShiftError('NOT_A_DIRECTORY', 'The path is not a directory.', 422);
     }
-    for await (const item of dir) {
-      if (directory === root && item.name === '.git') continue;
-      if (entries.length === maxListing) {
-        truncated = true;
-        break;
+    const entries: Entry[] = [];
+    let truncated = false;
+    try {
+      const opened = await readlink(`/proc/self/fd/${handle.fd}`);
+      if (!within(root, opened)) throw outside();
+      const through = `/proc/self/fd/${handle.fd}`;
+      const isRoot = opened === root;
+      const dir = await opendir(through);
+      for await (const item of dir) {
+        if (isRoot && item.name === '.git') continue;
+        if (entries.length === maxListing) {
+          truncated = true;
+          break;
+        }
+        // Links are shown as links, never followed.
+        const stat = await lstat(`${through}/${item.name}`).catch(() => null);
+        entries.push({
+          name: item.name,
+          kind: stat?.isDirectory()
+            ? 'directory'
+            : stat?.isSymbolicLink()
+              ? 'symlink'
+              : stat?.isFile()
+                ? 'file'
+                : 'other',
+          size: stat?.isFile() ? stat.size : null,
+        });
       }
-      // Links are shown as links, never followed.
-      const stat = await lstat(join(directory, item.name)).catch(() => null);
-      entries.push({
-        name: item.name,
-        kind: stat?.isDirectory()
-          ? 'directory'
-          : stat?.isSymbolicLink()
-            ? 'symlink'
-            : stat?.isFile()
-              ? 'file'
-              : 'other',
-        size: stat?.isFile() ? stat.size : null,
-      });
+    } finally {
+      await handle.close();
     }
     entries.sort((a, b) =>
       a.kind === 'directory' && b.kind !== 'directory'
@@ -186,7 +198,7 @@ export class WorkspaceInspector {
   async download(
     id: string,
     path: string | undefined,
-  ): Promise<{ name: string; size: number; stream: ReadStream }> {
+  ): Promise<{ name: string; size: number; stream: Readable }> {
     const { root } = await this.#root(id);
     const relative = cleanPath(path);
     if (relative === '') throw refuse('Name a file.');
@@ -195,9 +207,13 @@ export class WorkspaceInspector {
       await handle.close();
       throw new ShiftError('FILE_TOO_LARGE', 'The file is larger than 100 MiB.', 413);
     }
-    // The stream reads from the descriptor already checked, not the path again.
-    const stream = createReadStream('', { fd: handle.fd, autoClose: false, end: size - 1 });
-    stream.on('close', () => void handle.close());
+    // The stream reads from the descriptor already checked, not the path again, and owns it: it
+    // closes it at the end, on an error, or when the caller destroys it.
+    if (size === 0) {
+      await handle.close();
+      return { name: basename(relative), size, stream: Readable.from([]) };
+    }
+    const stream = handle.createReadStream({ start: 0, end: size - 1, autoClose: true });
     return { name: basename(relative), size, stream };
   }
 

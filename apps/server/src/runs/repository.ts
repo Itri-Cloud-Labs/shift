@@ -1624,12 +1624,13 @@ export class RunRepository {
       'SELECT 1 FROM resource_claims WHERE resource_type = ? AND resource_id = ? AND execution_id = ?',
     );
     const blocked = targets.find((target) => {
+      // An owner's goal holds the session until its turn ends, even against the execution that
+      // claimed it before a hold, so a resumed step never shares the session with that turn.
+      if (target.type === 'session' && this.#manualActive(target.id)) return true;
       // An execution that already holds a resource keeps it: a retry after a backoff or an owner
       // retry resumes its own work and never queues behind executions waiting for that claim.
       if (holds.get(target.type, target.id, executionId)) return false;
       if (this.#heldByOther(target.type, target.id, executionId)) return true;
-      // An owner's goal holds the session until its turn ends.
-      if (target.type === 'session' && this.#manualActive(target.id)) return true;
       // The run that created a workspace works in it without claims until it ends.
       if (target.type === 'workspace' && this.#workspaceRunActive(target.id)) return true;
       const ahead = this.db
@@ -2851,6 +2852,30 @@ export class RunRepository {
       throw new ShiftError('RUN_NOT_HELD', 'Hold the run before intervening.', 409);
   }
 
+  // Aborts an earlier worker generation acknowledged but did not settle, with their running
+  // attempts reclaimed under a new fence, so startup stops them again rather than running them on.
+  reclaimAborts(workerGeneration: string): Array<{ runId: string; claims: Claim[] }> {
+    return this.db
+      .transaction(() => {
+        const runs = this.db
+          .prepare(
+            "SELECT id FROM runs WHERE json_extract(hold_json, '$.abortRequested') = 1 AND state NOT IN ('CANCEL_REQUESTED', 'CANCELLED', 'COMPLETED', 'FAILED') ORDER BY created_at",
+          )
+          .all() as Array<{ id: string }>;
+        return runs.map(({ id }) => {
+          for (const claim of this.#runningClaims(id))
+            this.#chargeRecovered(id, claim.executionId, claim.attemptId);
+          this.db
+            .prepare(
+              "UPDATE node_attempts SET fence = fence + 1, worker_generation = ? WHERE state = 'RUNNING' AND execution_id IN (SELECT id FROM node_executions WHERE run_id = ?)",
+            )
+            .run(workerGeneration, id);
+          return { runId: id, claims: this.#runningClaims(id) };
+        });
+      })
+      .immediate();
+  }
+
   // Asks the held run's active attempts to stop. The engine stops them and then settles.
   requestAbort(runId: string, actor: ControlActor, commandId: string | undefined): Claim[] {
     return this.db
@@ -2862,6 +2887,13 @@ export class RunRepository {
         if (claims.length === 0)
           throw new ShiftError('NOTHING_TO_ABORT', 'Nothing is running in this run.', 409);
         this.#control(runId, 'abort', actor, commandId, claims[0]!.executionId, {});
+        // Recorded with the hold, so a restart before the stop is settled finishes it instead of
+        // running the step on.
+        this.db
+          .prepare(
+            "UPDATE runs SET hold_json = json_set(hold_json, '$.abortRequested', json('true')), revision = revision + 1 WHERE id = ?",
+          )
+          .run(runId);
         this.#event('run.abort_requested', { runId, executionId: claims[0]!.executionId }, {});
         return claims;
       })
@@ -2875,6 +2907,11 @@ export class RunRepository {
     this.db
       .transaction(() => {
         if (this.#runState(runId) === 'CANCEL_REQUESTED' || !this.#holdOf(runId)) return;
+        this.db
+          .prepare(
+            "UPDATE runs SET hold_json = json_remove(hold_json, '$.abortRequested') WHERE id = ?",
+          )
+          .run(runId);
         const now = this.clock.now();
         let uncertain = false;
         let stopped = 0;
@@ -2978,6 +3015,18 @@ export class RunRepository {
           run.state === 'NEEDS_HUMAN' &&
           (JSON.parse(run.attention_json ?? '{}') as { code?: string }).code === 'INTERVENING';
         const stuck = intervened ? this.#stuck(runId) : undefined;
+        // The owner's own turn in the run's session must end first: it owns the session until then.
+        const sessions = this.db
+          .prepare(
+            'SELECT DISTINCT agent_session_id FROM node_executions WHERE run_id = ? AND agent_session_id IS NOT NULL',
+          )
+          .all(runId) as Array<{ agent_session_id: string }>;
+        if (sessions.some((row) => this.#manualActive(row.agent_session_id)))
+          throw new ShiftError(
+            'MANUAL_ACTIVE',
+            'Your message to this run’s session is still being answered. Resume once it ends.',
+            409,
+          );
         this.#control(runId, 'resume', actor, commandId, stuck?.id ?? null, {});
         this.db
           .prepare('UPDATE runs SET hold_json = NULL, revision = revision + 1 WHERE id = ?')
