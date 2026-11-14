@@ -32,11 +32,24 @@ const notFound = (what: string) => new ShiftError('NOT_FOUND', `${what} not foun
 
 // Synchronous definition storage. Drafts are mutable under compare-and-swap revisions; published
 // versions are immutable (database triggers reject updates and deletes).
+export interface DefinitionObserver {
+  // Called in the publishing transaction with the new active version.
+  published(workflowId: string, versionId: string, document: WorkflowDocument): void;
+  // Called in the transaction that pauses or unpauses the workflow.
+  enabled(workflowId: string, enabled: boolean): void;
+}
+
 export class DefinitionRepository {
+  #observers: DefinitionObserver[] = [];
+
   constructor(
     private readonly db: Database.Database,
     private readonly clock: Clock,
   ) {}
+
+  observe(observer: DefinitionObserver): void {
+    this.#observers.push(observer);
+  }
 
   #event(type: string, payload: Json): void {
     this.db
@@ -173,6 +186,22 @@ export class DefinitionRepository {
       .prepare('UPDATE workflows SET active_version_id = ?, revision = revision + 1 WHERE id = ?')
       .run(versionId, id);
     this.#event('workflow.published', { workflowId: id, versionId, number });
+    for (const observer of this.#observers) observer.published(id, versionId, document);
+    return this.workflow(id);
+  }
+
+  // Workflow Pause changes admission only (specification 6.6): runs already admitted continue.
+  // Repeating the current state changes nothing.
+  setEnabled(id: string, enabled: boolean): Json {
+    const changed = this.db
+      .prepare(
+        'UPDATE workflows SET enabled = ?, revision = revision + 1 WHERE id = ? AND enabled = ? AND archived_at IS NULL',
+      )
+      .run(enabled ? 1 : 0, id, enabled ? 0 : 1).changes;
+    if (changed === 1) {
+      this.#event(enabled ? 'workflow.unpaused' : 'workflow.paused', { workflowId: id });
+      for (const observer of this.#observers) observer.enabled(id, enabled);
+    }
     return this.workflow(id);
   }
 
@@ -270,18 +299,20 @@ export class DefinitionRepository {
     return (
       this.db
         .prepare(
-          'SELECT id, project_id, name, active_version_id FROM workflows WHERE archived_at IS NULL AND (? IS NULL OR project_id = ?) ORDER BY created_at',
+          'SELECT id, project_id, name, enabled, active_version_id FROM workflows WHERE archived_at IS NULL AND (? IS NULL OR project_id = ?) ORDER BY created_at',
         )
         .all(projectId ?? null, projectId ?? null) as Array<{
         id: string;
         project_id: string;
         name: string;
+        enabled: number;
         active_version_id: string | null;
       }>
     ).map((row) => ({
       id: row.id,
       projectId: row.project_id,
       name: row.name,
+      enabled: row.enabled === 1,
       activeVersionId: row.active_version_id,
     }));
   }

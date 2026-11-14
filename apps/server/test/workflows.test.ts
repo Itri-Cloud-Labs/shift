@@ -90,7 +90,12 @@ test('validation rejects graphs the executor cannot run', () => {
     ],
     ['missing port', (d) => (d.connections[1].fromPort = 'maybe'), /has no port maybe/],
     ['dangling target', (d) => (d.connections[1].toNodeId = 'ghost'), /No node ghost/],
-    ['no entry node', (d) => d.nodes.splice(0, 1), /exactly one manual_trigger/],
+    ['no entry node', (d) => d.nodes.splice(0, 1), /at least one trigger node/],
+    [
+      'two manual triggers',
+      (d) => d.nodes.push({ id: 'again', type: 'manual_trigger' }),
+      /at most one manual_trigger/,
+    ],
     [
       'undeclared template binding',
       (d) => (d.nodes[1].config.data = { $binding: 'other' }),
@@ -129,7 +134,7 @@ test('validation rejects graphs the executor cannot run', () => {
       (d) => (d.nodes[1].retry = { maxAttempts: 3, initialDelayMs: 5000, maxDelayMs: 1000 }),
       /shorter than the initial delay/,
     ],
-    ['overlap policy', (d) => (d.execution = { overlap: 'skip' }), /M12/],
+    ['unknown overlap policy', (d) => (d.execution = { overlap: 'sometimes' }), /allowed values/],
     [
       'wait without a deadline',
       (d) => d.nodes.splice(1, 1, { id: 'pause', type: 'wait', config: {} }),

@@ -44,6 +44,11 @@ const validators = {
     additionalProperties: false,
     properties: { revision: { type: 'integer', minimum: 0 }, commandId },
   }),
+  enablement: ajv.compile({
+    type: 'object',
+    additionalProperties: false,
+    properties: { commandId },
+  }),
 };
 
 function check<T>(validate: (typeof validators)[keyof typeof validators], input: unknown): T {
@@ -146,6 +151,25 @@ export class DefinitionService {
       () => ({
         status: 200,
         body: { workflow: this.definitions.publish(workflowId, request.revision) },
+      }),
+    );
+  }
+
+  // Pause stops future starts, manual and automatic; unpause allows them again.
+  setEnabled(
+    workflowId: string,
+    enabled: boolean,
+    input: unknown,
+    actor: Actor = local,
+  ): CommandResponse {
+    const request = check<{ commandId?: string }>(validators.enablement, input ?? {});
+    return this.receipts.execute(
+      actor,
+      request.commandId,
+      { op: enabled ? 'workflow.unpause' : 'workflow.pause', workflowId },
+      () => ({
+        status: 200,
+        body: { workflow: this.definitions.setEnabled(workflowId, enabled) },
       }),
     );
   }

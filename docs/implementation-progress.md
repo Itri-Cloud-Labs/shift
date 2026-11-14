@@ -745,3 +745,18 @@ Status: the desktop part of prompts 22 and 23, which completes them, except for 
   - In the screenshots, Settings shows the App, Configured secrets, the webhook URL and the connected `acme/widgets` with no missing permissions; the page contains neither the key nor the webhook secret. The run is Waiting with the poll in the run bar and inspector, and the pull request step shows `#1 in acme/widgets` with its operation. The Merge and Wait forms show their values.
   - Unit tests cover the new diagnostics.
 - **Not verified:** a real GitHub App, installation and repository (release prerequisite).
+
+## GitHub event triggers (24)
+
+Status: prompt 24's server work (M11b). Desktop forms and history follow with 25 and 26. Date: 2026-11-14.
+
+- **Changed:** migration `0017_triggers` (`triggers`, `trigger_occurrences`, `trigger_credentials` for 26, `github_deliveries`; `runs.occurrence_id`; the App's previous webhook secret, its window and its subscribed events). `src/triggers/service.ts` (subscriptions, capture, admission, queue drain), `src/triggers/github-events.ts` (events, permissions, branch filters), `src/github/webhooks.ts` (the App-scoped endpoint). Node type `github_trigger`. Documents accept `skip`, `queue` and `allow` overlap and several trigger nodes. Workflow Pause and unpause. Runs show `entryNodeId` and `occurrenceId`. Manual starts check overlap and accept `allowOverlap`. HTTP routes, `shift workflow pause|unpause|triggers`, `shift occurrence list|show`, `shift github deliveries` and `rotate --previous-minutes`; protocol schemas for triggers, occurrences and deliveries.
+- **Verified** (`test/github-triggers.test.ts`, against the fake GitHub):
+  - Forged and tampered signatures, an unregistered installation and a delivery over the 1 MiB input limit start nothing and record nothing; a repository no project binds is recorded without matches. Over HTTP, the raw body is verified byte for byte, a body over 2 MiB is `413`, an unsigned one `401`, and the run exists when `202` arrives.
+  - A valid delivery admits a run from the GitHub trigger with the event as its input. After a restart, its redelivery gets the original answer and starts nothing.
+  - The same delivery received twice at once is matched once. After a publication adds a second matching trigger, a redelivery still has one occurrence of the first version; a new delivery gets one occurrence per trigger of the new version. Event, action and branch-pattern filters.
+  - One App serves two projects bound to two repositories through one installation and one webhook path; each delivery reaches only its repository's workflow, and unbinding a project stops its deliveries.
+  - `skip`, `queue` and `allow` per workflow. A queued occurrence waits through a new publication and a Pause (when new ones are skipped as `WORKFLOW_PAUSED` and a manual start is refused), then after unpause starts the version it captured, once, however often the queue is drained. Manual starts are refused with `WORKFLOW_BUSY` unless overridden, and with `NO_MANUAL_TRIGGER` without a manual trigger.
+  - A rotated webhook secret's predecessor verifies only inside the chosen window, and not at all without one.
+  - A `check_run` delivery brings a Wait for Checks read forward only for its repository, and the wait completes on the read.
+- **Not verified:** deliveries from real GitHub (the release prerequisite from 22). Recovery after a crash inside the delivery transaction relies on SQLite atomicity; it has no subprocess kill test.

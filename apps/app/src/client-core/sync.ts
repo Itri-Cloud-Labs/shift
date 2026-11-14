@@ -712,8 +712,8 @@ export class SyncRuntime {
     if (exchange.status === 200) {
       const body = exchange.body;
       if (resource.kind === 'workflow' && validateWorkflowResponse(body)) {
-        const { id, projectId, name, activeVersionId } = body.workflow;
-        return { resource, ticket, value: { id, projectId, name, activeVersionId } };
+        const { id, projectId, name, enabled, activeVersionId } = body.workflow;
+        return { resource, ticket, value: { id, projectId, name, enabled, activeVersionId } };
       }
       if (resource.kind === 'run' && validateRunResponse(body)) {
         const { id, state, workflowId, createdAt, finishedAt } = body.run;

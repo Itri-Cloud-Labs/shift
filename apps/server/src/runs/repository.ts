@@ -407,19 +407,24 @@ export class RunRepository {
   }
 
   // The entry trigger completes immediately with the trigger input, and its successor becomes the
-  // run's single pending activation, in one transaction.
-  createRun(snapshot: RunSnapshot, triggerInput: Json): string {
+  // run's single pending activation, in one transaction. A run admitted for a trigger occurrence
+  // records it; the unique index makes a second run for the same occurrence impossible.
+  createRun(
+    snapshot: RunSnapshot,
+    triggerInput: Json,
+    from: { entryNodeId: string; occurrenceId: string | null },
+  ): string {
     const runId = randomUUID();
     const now = this.clock.now();
     const entry = snapshot.document.nodes.find(
-      (node) => nodeType(node.type, node.typeVersion)?.entry,
+      (node) => node.id === from.entryNodeId && nodeType(node.type, node.typeVersion)?.entry,
     );
     if (!entry) throw new ShiftError('INVALID_WORKFLOW', 'The workflow has no entry node.', 422);
     this.db
       .transaction(() => {
         this.db
           .prepare(
-            "INSERT INTO runs (id, snapshot_json, state, revision, created_at, project_id, workflow_id, workflow_version_id, trigger_input_json) VALUES (?, ?, 'RUNNING', 0, ?, ?, ?, ?, ?)",
+            "INSERT INTO runs (id, snapshot_json, state, revision, created_at, project_id, workflow_id, workflow_version_id, trigger_input_json, occurrence_id) VALUES (?, ?, 'RUNNING', 0, ?, ?, ?, ?, ?, ?)",
           )
           .run(
             runId,
@@ -429,6 +434,7 @@ export class RunRepository {
             snapshot.workflowId,
             snapshot.versionId,
             JSON.stringify(triggerInput),
+            from.occurrenceId,
           );
         const triggerId = randomUUID();
         const output = envelope(triggerInput);
@@ -446,11 +452,31 @@ export class RunRepository {
             now,
             now,
           );
-        this.#event('run.created', { runId }, { versionId: snapshot.versionId });
+        this.#event(
+          'run.created',
+          { runId },
+          {
+            versionId: snapshot.versionId,
+            entryNodeId: entry.id,
+            ...(from.occurrenceId ? { occurrenceId: from.occurrenceId } : {}),
+          },
+        );
         this.#schedule(runId, snapshot, { id: triggerId, nodeId: entry.id }, 'success', output);
       })
       .immediate();
     return runId;
+  }
+
+  // Runs of a workflow that have not finished. Waiting, held and needs-human runs are unfinished,
+  // so they count against a workflow's overlap policy (specification 12.1).
+  unfinishedRuns(workflowId: string): number {
+    return (
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM runs WHERE workflow_id = ? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+        )
+        .get(workflowId) as { n: number }
+    ).n;
   }
 
   // Follows the selected port's single connection: a successor activation, a leaf completion, or
@@ -3256,12 +3282,14 @@ export class RunRepository {
   run(runId: string): Json {
     const run = this.db
       .prepare(
-        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, r.cancel_requested_at, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
+        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, r.cancel_requested_at, r.occurrence_id, (SELECT e.node_id FROM node_executions e WHERE e.run_id = r.id AND e.sequence = 1) AS entry_node_id, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
       )
       .get(runId) as
       | {
           id: string;
           state: string;
+          occurrence_id: string | null;
+          entry_node_id: string | null;
           cancel_requested_at: number | null;
           workspace_id: string | null;
           workspace_path: string | null;
@@ -3340,6 +3368,9 @@ export class RunRepository {
       workflowId: snapshot.workflowId,
       versionId: snapshot.versionId,
       versionNumber: snapshot.versionNumber,
+      // The trigger node it started from, and the trigger occurrence that admitted it, if any.
+      entryNodeId: run.entry_node_id,
+      occurrenceId: run.occurrence_id,
       repository: snapshot.project.repositoryPath,
       baseCommit: snapshot.project.baseCommit ?? null,
       workspace:

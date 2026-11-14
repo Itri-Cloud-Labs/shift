@@ -12,7 +12,7 @@ import { parseDeadline, validateDocument } from '../workflows/document.js';
 import { defaultApprovalForm, defaultOutcomes, freezeForm } from '../workflows/forms.js';
 import { evaluateRule, type Rule } from '../workflows/rules.js';
 import { nodeType } from '../workflows/nodes.js';
-import type { DefinitionRepository } from '../workflows/repository.js';
+import type { DefinitionRepository, VersionRow } from '../workflows/repository.js';
 import type { Workspaces } from '../workspaces/workspaces.js';
 import { actionTypes, freezeAction, workspaceTypes } from '../actions/config.js';
 import { levels, type Permissions } from '../github/api.js';
@@ -64,7 +64,13 @@ const validateStart = new Ajv2020({ strict: true, coerceTypes: false }).compile(
   type: 'object',
   additionalProperties: false,
   required: ['workflowId'],
-  properties: { workflowId: { type: 'string', maxLength: 100 }, input: {}, commandId },
+  properties: {
+    workflowId: { type: 'string', maxLength: 100 },
+    input: {},
+    // An explicit, per-start override of the workflow's overlap policy (specification 12.1).
+    allowOverlap: { type: 'boolean' },
+    commandId,
+  },
 });
 
 const ajv = new Ajv2020({ strict: true, coerceTypes: false });
@@ -309,14 +315,21 @@ export class RunEngine {
     const {
       workflowId,
       input: triggerInput = {},
+      allowOverlap = false,
       commandId: id,
     } = input as {
       workflowId: string;
       input?: Json;
+      allowOverlap?: boolean;
       commandId?: string;
     };
     const { definitions, receipts, workspaces } = this.#options;
-    const request = { op: 'run.start', workflowId, triggerInput };
+    const request = {
+      op: 'run.start',
+      workflowId,
+      triggerInput,
+      ...(allowOverlap ? { allowOverlap } : {}),
+    };
     const stored = id === undefined ? null : receipts.lookup(actor, id, request);
     if (stored) return stored;
     const admitted = definitions.activeVersion(workflowId);
@@ -327,46 +340,81 @@ export class RunEngine {
     );
     const response = receipts.execute(actor, id, request, () => {
       const version = definitions.activeVersion(workflowId);
-      // Recheck against this server's registry: a removed node type version fails the start.
-      const document = validateDocument(version.document);
-      const project = definitions.project(version.projectId);
-      if (project.id !== admittedProject.id) {
+      if (version.projectId !== admittedProject.id) {
         throw new ShiftError('REVISION_CONFLICT', 'The workflow changed project; retry.', 409);
       }
-      const entry = document.nodes.find((node) => nodeType(node.type, node.typeVersion)?.entry)!;
-      const inputSchema = (entry.config as { inputSchema?: Json }).inputSchema;
-      const invalid = inputSchema === undefined ? null : checkValue(inputSchema, triggerInput);
-      if (invalid) throw new ShiftError('INVALID_INPUT', `Invalid trigger input: ${invalid}`, 422);
-      const github = this.#githubAuthority(project.id, document.nodes);
-      const snapshot: RunSnapshot = {
-        formatVersion: 2,
-        workflowId,
-        versionId: version.id,
-        versionNumber: version.number,
-        document,
-        project: {
-          id: project.id,
-          name: project.name,
-          repositoryPath: project.repositoryPath,
-          baseRef: project.baseRef,
-          baseCommit,
-        },
-        defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
-        // The run keeps the permissions and credentials it was admitted with; later revocations
-        // still apply when an action runs.
-        authority: {
-          ...(this.#options.credentials?.authority(project.id) ?? {
-            denied: [],
-            credentials: {},
-          }),
-          ...(github ? { github } : {}),
-        },
-      };
-      const runId = this.repository.createRun(snapshot, triggerInput);
+      const entry = version.document.nodes.find((node) => node.type === 'manual_trigger');
+      if (!entry)
+        throw new ShiftError(
+          'NO_MANUAL_TRIGGER',
+          'This workflow has no manual trigger, so it starts only from its other triggers.',
+          409,
+        );
+      if (!allowOverlap && version.document.execution.overlap !== 'allow') {
+        const busy = this.repository.unfinishedRuns(workflowId);
+        if (busy > 0)
+          throw new ShiftError(
+            'WORKFLOW_BUSY',
+            `The workflow has ${busy} unfinished run${busy === 1 ? '' : 's'}; its overlap policy is ${version.document.execution.overlap}. Start anyway with an explicit overlap override.`,
+            409,
+          );
+      }
+      const runId = this.admit(version, entry.id, triggerInput, baseCommit, null);
       return { status: 201, body: { run: this.repository.run(runId) } };
     });
     this.#pump();
     return response;
+  }
+
+  // Creates a run of a version from one of its entry nodes, inside the caller's transaction. A
+  // manual start and every trigger occurrence come through here, so they are checked alike.
+  admit(
+    version: VersionRow,
+    entryNodeId: string,
+    triggerInput: Json,
+    baseCommit: string,
+    occurrenceId: string | null,
+  ): string {
+    // Recheck against this server's registry: a removed node type version fails the start.
+    const document = validateDocument(version.document);
+    const project = this.#options.definitions.project(version.projectId);
+    const entry = document.nodes.find((node) => node.id === entryNodeId);
+    if (!entry || !nodeType(entry.type, entry.typeVersion)?.entry)
+      throw new ShiftError('INVALID_WORKFLOW', `No entry node ${entryNodeId}.`, 422);
+    const inputSchema = (entry.config as { inputSchema?: Json }).inputSchema;
+    const invalid = inputSchema === undefined ? null : checkValue(inputSchema, triggerInput);
+    if (invalid) throw new ShiftError('INVALID_INPUT', `Invalid trigger input: ${invalid}`, 422);
+    const github = this.#githubAuthority(project.id, document.nodes);
+    const snapshot: RunSnapshot = {
+      formatVersion: 2,
+      workflowId: version.workflowId,
+      versionId: version.id,
+      versionNumber: version.number,
+      document,
+      project: {
+        id: project.id,
+        name: project.name,
+        repositoryPath: project.repositoryPath,
+        baseRef: project.baseRef,
+        baseCommit,
+      },
+      defaults: this.#options.defaultModel ? { model: this.#options.defaultModel } : {},
+      // The run keeps the permissions and credentials it was admitted with; later revocations
+      // still apply when an action runs.
+      authority: {
+        ...(this.#options.credentials?.authority(project.id) ?? {
+          denied: [],
+          credentials: {},
+        }),
+        ...(github ? { github } : {}),
+      },
+    };
+    return this.repository.createRun(snapshot, triggerInput, { entryNodeId, occurrenceId });
+  }
+
+  // Admits pending work now, for example after a trigger admitted a run.
+  wake(): void {
+    this.#pump();
   }
 
   // The GitHub connection a run starts with, checked now when one of its nodes needs it: a start

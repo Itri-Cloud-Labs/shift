@@ -15,6 +15,8 @@ import { createHttpServer } from './http.js';
 import { Credentials } from './actions/credentials.js';
 import { GitHubApi } from './github/api.js';
 import { GitHubIntegration } from './github/integration.js';
+import { GitHubWebhooks } from './github/webhooks.js';
+import { TriggerService } from './triggers/service.js';
 import { ProcessRunner } from './actions/process.js';
 import { SystemdScopes } from './harness/containment.js';
 import { namespaceId, namespaceLayout } from './harness/opencode/namespace.js';
@@ -93,6 +95,7 @@ export async function startServer(
   let store: Store | undefined;
   let runtime: OpenCodeRuntime | undefined;
   let engine: RunEngine | undefined;
+  let triggers: TriggerService | undefined;
   let tcp: Server | undefined;
   let admin: Server | undefined;
   let sweeper: NodeJS.Timeout | undefined;
@@ -114,7 +117,12 @@ export async function startServer(
     streams?.closeAll();
     const remaining = () => Math.max(0, deadline - Date.now());
     // The engine cancels active turns through the harness while the store is still open.
-    for (const step of [() => engine?.stop(remaining()), () => runtime?.stop(remaining())]) {
+    // Admission stops first, so no trigger starts a run the engine is about to stop.
+    for (const step of [
+      () => triggers?.stop(),
+      () => engine?.stop(remaining()),
+      () => runtime?.stop(remaining()),
+    ]) {
       try {
         await step();
       } catch (error) {
@@ -249,6 +257,26 @@ export async function startServer(
       ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     handleResult = engine.agents.handleResult;
+    const triggerService = new TriggerService({
+      db: store.db,
+      clock,
+      definitions,
+      logger,
+      resolveBase: async (projectId) => {
+        const project = definitions.project(projectId);
+        return workspaces.resolveBase(project.repositoryPath, project.baseRef);
+      },
+    });
+    triggers = triggerService;
+    const startedEngine = engine;
+    triggerService.attach(startedEngine);
+    const webhooks = new GitHubWebhooks({
+      db: store.db,
+      clock,
+      github,
+      triggers: triggerService,
+      wake: () => startedEngine.wake(),
+    });
     // Only the proven instance-lock owner may remove a crash-left socket. Never delete a file/symlink.
     if (await inspectOwnedFile(state.adminSocket, 'socket')) await unlink(state.adminSocket);
     admin = createHttpServer({
@@ -263,6 +291,7 @@ export async function startServer(
       workspaces: workspaceService,
       credentials,
       github,
+      triggers: triggerService,
       devices,
       receipts,
       events,
@@ -284,6 +313,8 @@ export async function startServer(
       workspaces: workspaceService,
       credentials,
       github,
+      triggers: triggerService,
+      webhooks,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {
@@ -308,6 +339,7 @@ export async function startServer(
     readiness.ready();
     // Recovery inspects harness state outside any transaction; it runs after the server is ready.
     engine.start();
+    triggerService.start();
     logger.info(
       {
         event: 'server.ready',

@@ -273,7 +273,9 @@ test('the inbox lists pending requests and stuck runs from the projection, oldes
   const items = attentionItems(
     {
       projects: [{ id: projectId, name: 'payments' }],
-      workflows: [{ id: workflowId, projectId, name: 'Release review', activeVersionId: null }],
+      workflows: [
+        { id: workflowId, projectId, name: 'Release review', enabled: true, activeVersionId: null },
+      ],
       runs: [run(1, 'WAITING', 5), run(2, 'NEEDS_HUMAN', 3), run(3, 'COMPLETED', 1)],
       attention: 2,
     },
@@ -303,8 +305,8 @@ const emptyOverview: Overview = { projects: [], workflows: [], runs: [], attenti
 const paletteOverview: Overview = {
   projects: [{ id: ids(1), name: 'Billing' }],
   workflows: [
-    { id: ids(2), projectId: ids(1), name: 'Deploy', activeVersionId: null },
-    { id: ids(3), projectId: ids(1), name: 'Nightly report', activeVersionId: null },
+    { id: ids(2), projectId: ids(1), name: 'Deploy', enabled: true, activeVersionId: null },
+    { id: ids(3), projectId: ids(1), name: 'Nightly report', enabled: true, activeVersionId: null },
   ],
   runs: [
     { id: ids(4), state: 'FAILED', workflowId: ids(3), createdAt: 100, finishedAt: 110 },

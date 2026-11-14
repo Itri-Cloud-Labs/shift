@@ -256,7 +256,15 @@ const name = v.pipe(v.string(), v.maxLength(200));
 export const overviewSchema = v.strictObject({
   projects: v.pipe(v.array(v.strictObject({ id: uuid, name })), v.maxLength(10000)),
   workflows: v.pipe(
-    v.array(v.strictObject({ id: uuid, projectId: uuid, name, activeVersionId: v.nullable(uuid) })),
+    v.array(
+      v.strictObject({
+        id: uuid,
+        projectId: uuid,
+        name,
+        enabled: v.boolean(),
+        activeVersionId: v.nullable(uuid),
+      }),
+    ),
     v.maxLength(10000),
   ),
   runs: v.pipe(

@@ -35,6 +35,9 @@ const options = {
   'webhook-secret': { type: 'boolean' },
   installation: { type: 'string' },
   repository: { type: 'string' },
+  'previous-minutes': { type: 'string' },
+  before: { type: 'string' },
+  'allow-overlap': { type: 'boolean' },
 } as const;
 
 // A credential value comes from standard input, so it never appears in a command line or history.
@@ -219,12 +222,57 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
           )
         )['workflows'],
       );
+    case 'workflow pause':
+    case 'workflow unpause':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/workflows/${encodeURIComponent(need(target, 'WORKFLOW_ID'))}/${action}`,
+            {},
+          )
+        )['workflow'],
+      );
+    case 'workflow triggers':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/workflows/${encodeURIComponent(need(target, 'WORKFLOW_ID'))}/triggers`,
+          )
+        )['triggers'],
+      );
+    case 'occurrence list': {
+      const params = new URLSearchParams();
+      if (values.workflow) params.set('workflowId', values.workflow);
+      if (values.before) params.set('before', values.before);
+      if (values.limit) params.set('limit', values.limit);
+      return print(await get(`/api/v0/admin/occurrences?${params}`));
+    }
+    case 'occurrence show':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/occurrences/${encodeURIComponent(need(target, 'OCCURRENCE_ID'))}`,
+          )
+        )['occurrence'],
+      );
+    case 'github deliveries': {
+      const params = new URLSearchParams();
+      if (values.before) params.set('before', values.before);
+      if (values.limit) params.set('limit', values.limit);
+      return print(
+        await get(
+          `/api/v0/admin/github/apps/${encodeURIComponent(need(target, 'APP'))}/deliveries?${params}`,
+        ),
+      );
+    }
     case 'run start': {
       const input = await json(values.input, '--input');
       let run = (
         await send('POST', '/api/v0/admin/runs', {
           workflowId: need(values.workflow, '--workflow'),
           ...(input === undefined ? {} : { input }),
+          ...(values['allow-overlap'] ? { allowOverlap: true } : {}),
         })
       )['run'] as Record<string, unknown>;
       if (values.wait) {
@@ -420,6 +468,12 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       if (values['key-file'])
         body['privateKey'] = await readFile(resolve(values['key-file']), 'utf8');
       if (values['webhook-secret']) body['webhookSecret'] = await readSecret();
+      if (values['previous-minutes'] !== undefined) {
+        if (!values['webhook-secret']) throw invalid('--previous-minutes needs --webhook-secret.');
+        if (!/^\d{1,5}$/.test(values['previous-minutes']))
+          throw invalid('--previous-minutes must be a whole number of minutes.');
+        body['previousSecretMinutes'] = Number(values['previous-minutes']);
+      }
       if (Object.keys(body).length === 0)
         throw invalid('Give --key-file, --webhook-secret or both.');
       return print(

@@ -28,7 +28,11 @@ shift workflow save WORKFLOW_ID --revision N --file DOCUMENT.json
 shift workflow publish WORKFLOW_ID [--revision N]
 shift workflow show WORKFLOW_ID
 shift workflow list [--project PROJECT_ID]
-shift run start --workflow WORKFLOW_ID [--input JSON] [--wait]
+shift workflow pause|unpause WORKFLOW_ID
+shift workflow triggers WORKFLOW_ID
+shift occurrence list [--workflow WORKFLOW_ID] [--before N] [--limit N]
+shift occurrence show OCCURRENCE_ID
+shift run start --workflow WORKFLOW_ID [--input JSON] [--allow-overlap] [--wait]
 shift run show RUN_ID [--wait]
 shift run list
 shift run executions RUN_ID [--after SEQUENCE] [--limit N]
@@ -52,8 +56,9 @@ shift credential set --project PROJECT_ID --name NAME   (value on standard input
 shift credential revoke CREDENTIAL_ID --project PROJECT_ID
 shift github apps
 shift github register --app-id ID --key-file APP.pem [--host URL] [--webhook-secret]
-shift github rotate APP [--key-file APP.pem] [--webhook-secret]
+shift github rotate APP [--key-file APP.pem] [--webhook-secret [--previous-minutes N]]
 shift github refresh APP
+shift github deliveries APP [--before N] [--limit N]
 shift github connect --project PROJECT_ID --installation INSTALLATION --repository REPOSITORY_ID
 shift github status|verify|disconnect --project PROJECT_ID
 shift workspace list [--project PROJECT_ID]
@@ -91,7 +96,15 @@ GitHub nodes use your own GitHub App. Register it once with its App ID and
 private key (--webhook-secret reads the secret from standard input); it can then
 serve several projects. connect binds a project to one repository an
 installation can reach, by the IDs github apps lists. Keys can be rotated
-without editing workflows, and are never shown again.
+without editing workflows, and are never shown again. --previous-minutes keeps
+the replaced webhook secret valid that long, while GitHub's settings change.
+
+Trigger nodes start runs by themselves once published: a GitHub trigger for each
+matching delivery to the App's webhook path. Each workflow's overlap policy
+decides what happens while a run of it is unfinished: skip (the default), queue
+or allow. pause stops every start, manual or automatic, until unpause; runs
+already started continue. A manual start of a busy workflow needs
+--allow-overlap. occurrence list shows what each trigger received and decided.
 
 device pair prints a single-use, eight-word phrase that pairs one desktop client
 within ten minutes; revoke cuts a device off without stopping runs it started.
@@ -141,6 +154,7 @@ async function main(): Promise<void> {
       'invocation',
       'credential',
       'github',
+      'occurrence',
     ].includes(command)
   ) {
     const { adminCommand } = await import('./cli-admin.js');

@@ -50,6 +50,10 @@ export interface AppView {
   webhookSecret: 'configured' | 'missing';
   // App-scoped: every project bound through this App shares it.
   webhookPath: string;
+  // Until when the secret a rotation replaced still verifies deliveries.
+  previousWebhookSecretUntil: number | null;
+  // The events the App's settings subscribe to, or null before GitHub reported them.
+  events: string[] | null;
   verifiedAt: number | null;
   revision: number;
   installations: InstallationView[];
@@ -98,7 +102,14 @@ const validateRotate = ajv.compile({
   type: 'object',
   additionalProperties: false,
   minProperties: 1,
-  properties: { privateKey, webhookSecret, commandId },
+  properties: {
+    privateKey,
+    webhookSecret,
+    // How long the replaced webhook secret still verifies deliveries; none by default.
+    previousSecretMinutes: { type: 'integer', minimum: 0, maximum: 7 * 24 * 60 },
+    commandId,
+  },
+  dependentRequired: { previousSecretMinutes: ['webhookSecret'] },
 });
 const validateConnect = ajv.compile({
   type: 'object',
@@ -133,6 +144,9 @@ interface AppRow {
   name: string | null;
   private_key_sealed: string;
   webhook_secret_sealed: string | null;
+  previous_webhook_secret_sealed: string | null;
+  previous_webhook_secret_until: number | null;
+  events_json: string | null;
   verified_at: number | null;
   revision: number;
 }
@@ -183,7 +197,16 @@ interface ApiApp {
   id: number;
   slug?: string;
   name?: string;
+  events?: string[];
 }
+// GitHub lists the App's subscribed events; anything else in the list is ignored.
+const appEvents = (app: ApiApp): string[] =>
+  Array.isArray(app.events)
+    ? app.events
+        .filter((event) => typeof event === 'string' && /^[a-z_]{1,64}$/.test(event))
+        .slice(0, 100)
+    : [];
+
 interface ApiInstallation {
   id: number;
   account: { login: string; type: string } | null;
@@ -269,6 +292,12 @@ export class GitHubIntegration {
       privateKey: 'configured',
       webhookSecret: row.webhook_secret_sealed ? 'configured' : 'missing',
       webhookPath: `/api/v0/github/apps/${row.id}/webhook`,
+      previousWebhookSecretUntil:
+        row.previous_webhook_secret_until !== null &&
+        row.previous_webhook_secret_until > this.clock.now()
+          ? row.previous_webhook_secret_until
+          : null,
+      events: row.events_json === null ? null : (JSON.parse(row.events_json) as string[]),
       verifiedAt: row.verified_at,
       revision: row.revision,
       installations: this.#installations(row.id),
@@ -449,7 +478,7 @@ export class GitHubIntegration {
       const now = this.clock.now();
       this.db
         .prepare(
-          'INSERT INTO github_apps (id, app_id, github_host, slug, name, private_key_sealed, webhook_secret_sealed, verified_at, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+          'INSERT INTO github_apps (id, app_id, github_host, slug, name, events_json, private_key_sealed, webhook_secret_sealed, verified_at, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
         )
         .run(
           id,
@@ -457,6 +486,7 @@ export class GitHubIntegration {
           host,
           app.slug ?? null,
           app.name ?? null,
+          JSON.stringify(appEvents(app)),
           this.secrets.seal(pem, `github-app-key:${id}`),
           body.webhookSecret === undefined
             ? null
@@ -475,10 +505,16 @@ export class GitHubIntegration {
   // stored; bindings and graphs keep working without edits.
   async rotate(appRowId: string, input: unknown, actor: Actor): Promise<CommandResponse> {
     if (!validateRotate(input)) throw invalid(validateRotate.errors, 'Invalid rotation.');
-    const body = input as { privateKey?: string; webhookSecret?: string; commandId?: string };
+    const body = input as {
+      privateKey?: string;
+      webhookSecret?: string;
+      previousSecretMinutes?: number;
+      commandId?: string;
+    };
     const request = {
       op: 'github.app.rotate',
       appRowId,
+      previousSecretMinutes: body.previousSecretMinutes ?? 0,
       privateKey:
         body.privateKey === undefined
           ? null
@@ -516,6 +552,19 @@ export class GitHubIntegration {
           now,
           appRowId,
         );
+      if (body.webhookSecret !== undefined) {
+        const minutes = body.previousSecretMinutes ?? 0;
+        const keep = minutes > 0 && current.webhook_secret_sealed !== null;
+        this.db
+          .prepare(
+            'UPDATE github_apps SET previous_webhook_secret_sealed = ?, previous_webhook_secret_until = ? WHERE id = ?',
+          )
+          .run(
+            keep ? current.webhook_secret_sealed : null,
+            keep ? now + minutes * 60_000 : null,
+            appRowId,
+          );
+      }
       this.api.forget(appRowId);
       this.#event('github.app.rotated', {
         appId: appRowId,
@@ -530,8 +579,9 @@ export class GitHubIntegration {
   async refresh(appRowId: string): Promise<AppView> {
     const row = this.#app(appRowId);
     const keys = this.#keys(row);
+    let app: ApiApp;
     try {
-      await this.#verifyKeys(keys);
+      app = await this.#verifyKeys(keys);
     } catch (error) {
       if (error instanceof GitHubError && error.providerStatus === 401)
         this.db.prepare('UPDATE github_apps SET verified_at = NULL WHERE id = ?').run(appRowId);
@@ -540,19 +590,29 @@ export class GitHubIntegration {
     const observed = await this.#observeInstallations(keys);
     this.db.transaction(() => {
       this.db
-        .prepare('UPDATE github_apps SET verified_at = ? WHERE id = ?')
-        .run(this.clock.now(), appRowId);
+        .prepare('UPDATE github_apps SET verified_at = ?, events_json = ? WHERE id = ?')
+        .run(this.clock.now(), JSON.stringify(appEvents(app)), appRowId);
       this.#storeInstallations(appRowId, observed);
     })();
     return this.#view(this.#app(appRowId));
   }
 
-  // The webhook secret, for verifying deliveries (prompt 24).
-  webhookSecret(appRowId: string): string | null {
+  // The secrets a delivery may be signed with: the current one, and the one it replaced while
+  // the rotation window the owner chose is open (specification 12.1).
+  webhookSecrets(appRowId: string): string[] {
     const row = this.#app(appRowId);
-    return row.webhook_secret_sealed
-      ? this.secrets.unseal(row.webhook_secret_sealed, `github-webhook:${appRowId}`)
-      : null;
+    const secrets: string[] = [];
+    if (row.webhook_secret_sealed)
+      secrets.push(this.secrets.unseal(row.webhook_secret_sealed, `github-webhook:${appRowId}`));
+    if (
+      row.previous_webhook_secret_sealed &&
+      row.previous_webhook_secret_until !== null &&
+      row.previous_webhook_secret_until > this.clock.now()
+    )
+      secrets.push(
+        this.secrets.unseal(row.previous_webhook_secret_sealed, `github-webhook:${appRowId}`),
+      );
+    return secrets;
   }
 
   #connectionRow(projectId: string): ConnectionRow | undefined {

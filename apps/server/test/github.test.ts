@@ -97,7 +97,7 @@ test('registering the App verifies its key and lists installations without echoi
     assert.ok(!everything.includes('PRIVATE KEY'));
     assert.ok(!everything.includes(fake.privateKey.split('\n')[1]!));
     assert.ok(!everything.includes(webhookSecret));
-    assert.equal(env.github.webhookSecret(app.id), webhookSecret);
+    assert.deepEqual(env.github.webhookSecrets(app.id), [webhookSecret]);
   } finally {
     await env.close();
     await fake.stop();
@@ -168,7 +168,7 @@ test('rotating the private key is verified first and replaces cached tokens', as
     });
     const second = await api.token(after.keys, after.installationId, { repositoryIds: [9001] });
     assert.notEqual(second.token, first.token, 'a token minted with the old key is not reused');
-    assert.equal(env.github.webhookSecret(appRowId), 'whsec-rotated-0001');
+    assert.deepEqual(env.github.webhookSecrets(appRowId), ['whsec-rotated-0001']);
     assert.equal(env.github.apps()[0]!.revision, 1);
   } finally {
     await close();

@@ -224,6 +224,8 @@ export interface Run {
     | 'COMPLETED';
   workflowId: Uuid | null;
   versionId: Uuid | null;
+  entryNodeId?: string | null;
+  occurrenceId?: Uuid | null;
   versionNumber: number | null;
   repository: string;
   baseCommit: string | null;
@@ -448,6 +450,7 @@ export interface WorkflowList {
   workflows: WorkflowSummary[];
 }
 export interface WorkflowSummary {
+  enabled: boolean;
   id: Uuid;
   projectId: Uuid;
   name: string;

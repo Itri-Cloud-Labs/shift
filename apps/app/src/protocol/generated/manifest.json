@@ -2,7 +2,7 @@
   "protocolVersion": 0,
   "payloadSchemaVersion": 1,
   "sources": {
-    "foundation.schema.json": "20b3179110f9ef9bec0313ae51bc9314c19517632b28df985bac80642ab3db39",
+    "foundation.schema.json": "5ee5e73219693d8f4145829cac4bbe1b0936944b987b44a59b51c13606e0e64d",
     "foundation.fixture.json": "0417aae6a3d0d10a4014df4fcfb4506cb980f4a9106e8e70f8b9dff9d90d9cb4"
   },
   "generators": {
