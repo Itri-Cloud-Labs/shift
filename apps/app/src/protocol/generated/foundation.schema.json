@@ -3171,7 +3171,7 @@
     "SchedulePreview": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "requestId", "instants"],
+      "required": ["schemaVersion", "requestId", "instants", "problem"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3186,6 +3186,10 @@
             "type": "integer",
             "minimum": 0
           }
+        },
+        "problem": {
+          "type": ["string", "null"],
+          "maxLength": 500
         }
       }
     },

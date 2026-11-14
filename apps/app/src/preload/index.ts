@@ -17,6 +17,11 @@ import {
   validateCredentialList,
   validateGitHubAppList,
   validateGitHubConnectionResponse,
+  validateGitHubDeliveryPage,
+  validateTriggerList,
+  validateOccurrencePage,
+  validateTriggerCredentialList,
+  validateSchedulePreview,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -42,6 +47,11 @@ const resourceValidators = {
   permissions: validateProjectPermissionsResponse,
   github: validateGitHubConnectionResponse,
   githubApps: validateGitHubAppList,
+  githubDeliveries: validateGitHubDeliveryPage,
+  triggers: validateTriggerList,
+  occurrences: validateOccurrencePage,
+  triggerCredentials: validateTriggerCredentialList,
+  schedulePreview: validateSchedulePreview,
 };
 
 async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
@@ -109,6 +119,30 @@ const bridge: DesktopBridge = {
     permissions: (projectId: string) => invoke({ kind: 'data.permissions', projectId }),
     github: (projectId: string) => invoke({ kind: 'data.github', projectId }),
     githubApps: () => invoke({ kind: 'data.githubApps' }),
+    githubDeliveries: (appId: string) => invoke({ kind: 'data.githubDeliveries', appId }),
+    triggers: (workflowId: string) => invoke({ kind: 'data.triggers', workflowId }),
+    occurrences: (workflowId: string, triggerId?: string) =>
+      invoke({
+        kind: 'data.occurrences',
+        workflowId,
+        ...(triggerId === undefined ? {} : { triggerId }),
+      } as DesktopRequest),
+    triggerCredentials: (triggerId: string) =>
+      invoke({ kind: 'data.triggerCredentials', triggerId }),
+    schedulePreview: (
+      schedule:
+        | { kind: 'cron'; expression: string; timezone: string }
+        | { kind: 'interval'; minutes: number },
+    ) => invoke({ kind: 'data.schedulePreview', schedule } as DesktopRequest),
+  }),
+  trigger: Object.freeze({
+    rotate: (triggerId: string, previousMinutes?: number) =>
+      invoke({
+        kind: 'trigger.rotate',
+        triggerId,
+        ...(previousMinutes === undefined ? {} : { previousMinutes }),
+      } as DesktopRequest),
+    revoke: (triggerId: string) => invoke({ kind: 'trigger.revoke', triggerId }),
   }),
   github: Object.freeze({
     register: (input: {
@@ -124,12 +158,18 @@ const bridge: DesktopBridge = {
         ...(input?.host === undefined ? {} : { host: input.host }),
         ...(input?.webhookSecret === undefined ? {} : { webhookSecret: input.webhookSecret }),
       } as DesktopRequest),
-    rotate: (appId: string, input: { privateKey?: string; webhookSecret?: string }) =>
+    rotate: (
+      appId: string,
+      input: { privateKey?: string; webhookSecret?: string; previousSecretMinutes?: number },
+    ) =>
       invoke({
         kind: 'github.rotate',
         appId,
         ...(input?.privateKey === undefined ? {} : { privateKey: input.privateKey }),
         ...(input?.webhookSecret === undefined ? {} : { webhookSecret: input.webhookSecret }),
+        ...(input?.previousSecretMinutes === undefined
+          ? {}
+          : { previousSecretMinutes: input.previousSecretMinutes }),
       } as DesktopRequest),
     refresh: (appId: string) => invoke({ kind: 'github.refresh', appId }),
     connect: (projectId: string, installationId: string, repositoryId: number) =>
@@ -147,7 +187,13 @@ const bridge: DesktopBridge = {
     goal: (sessionId: string, goal: string) => invoke({ kind: 'session.goal', sessionId, goal }),
   }),
   run: Object.freeze({
-    start: (workflowId: string, input: unknown) => invoke({ kind: 'run.start', workflowId, input }),
+    start: (workflowId: string, input: unknown, allowOverlap?: boolean) =>
+      invoke({
+        kind: 'run.start',
+        workflowId,
+        input,
+        ...(allowOverlap ? { allowOverlap: true } : {}),
+      } as DesktopRequest),
     cancel: (runId: string) => invoke({ kind: 'run.cancel', runId }),
     control: (runId: string, control: RunControl) =>
       invoke({ kind: 'run.control', runId, control }),
@@ -170,6 +216,8 @@ const bridge: DesktopBridge = {
       invoke({ kind: 'workflow.publish', workflowId, revision }),
     create: (projectId: string, name: string) =>
       invoke({ kind: 'workflow.create', projectId, name }),
+    enable: (workflowId: string, enabled: boolean) =>
+      invoke({ kind: 'workflow.enable', workflowId, enabled }),
   }),
   recovery: Object.freeze({
     list: () => invoke({ kind: 'recovery.list' }),

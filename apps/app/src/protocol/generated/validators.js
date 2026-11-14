@@ -26500,6 +26500,17 @@ function validate225(
 }
 validate225.evaluated = { props: true, dynamicProps: false, dynamicItems: false };
 var validateSchedulePreview = validate227;
+var schema341 = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['schemaVersion', 'requestId', 'instants', 'problem'],
+  properties: {
+    schemaVersion: { const: 1 },
+    requestId: { $ref: '#/$defs/Uuid' },
+    instants: { type: 'array', maxItems: 50, items: { type: 'integer', minimum: 0 } },
+    problem: { type: ['string', 'null'], maxLength: 500 },
+  },
+};
 function validate227(
   data,
   { instancePath = '', parentData, parentDataProperty, rootData = data, dynamicAnchors = {} } = {},
@@ -26519,7 +26530,8 @@ function validate227(
       if (
         (data.schemaVersion === void 0 && (missing0 = 'schemaVersion')) ||
         (data.requestId === void 0 && (missing0 = 'requestId')) ||
-        (data.instants === void 0 && (missing0 = 'instants'))
+        (data.instants === void 0 && (missing0 = 'instants')) ||
+        (data.problem === void 0 && (missing0 = 'problem'))
       ) {
         validate227.errors = [
           {
@@ -26534,7 +26546,12 @@ function validate227(
       } else {
         const _errs1 = errors;
         for (const key0 in data) {
-          if (!(key0 === 'schemaVersion' || key0 === 'requestId' || key0 === 'instants')) {
+          if (!(
+            key0 === 'schemaVersion' ||
+            key0 === 'requestId' ||
+            key0 === 'instants' ||
+            key0 === 'problem'
+          )) {
             validate227.errors = [
               {
                 instancePath,
@@ -26709,6 +26726,43 @@ function validate227(
                 var valid0 = _errs6 === errors;
               } else {
                 var valid0 = true;
+              }
+              if (valid0) {
+                if (data.problem !== void 0) {
+                  let data4 = data.problem;
+                  const _errs10 = errors;
+                  if (typeof data4 !== 'string' && data4 !== null) {
+                    validate227.errors = [
+                      {
+                        instancePath: instancePath + '/problem',
+                        schemaPath: '#/properties/problem/type',
+                        keyword: 'type',
+                        params: { type: schema341.properties.problem.type },
+                        message: 'must be string,null',
+                      },
+                    ];
+                    return false;
+                  }
+                  if (errors === _errs10) {
+                    if (typeof data4 === 'string') {
+                      if (func2(data4) > 500) {
+                        validate227.errors = [
+                          {
+                            instancePath: instancePath + '/problem',
+                            schemaPath: '#/properties/problem/maxLength',
+                            keyword: 'maxLength',
+                            params: { limit: 500 },
+                            message: 'must NOT have more than 500 characters',
+                          },
+                        ];
+                        return false;
+                      }
+                    }
+                  }
+                  var valid0 = _errs10 === errors;
+                } else {
+                  var valid0 = true;
+                }
               }
             }
           }

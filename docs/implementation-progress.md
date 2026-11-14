@@ -788,3 +788,21 @@ Status: prompt 26's server work (M12a). Desktop setup for 24 to 26 follows. Date
   - An answer never read, then two concurrent repeats, leave one occurrence and one run; the same ID with another body is `409`; requests without an ID are separate events.
   - With `queue`, a second event waits through a publication (the trigger keeps its ID and credential) and a Pause (a third event is skipped), then runs the first version with its own input. A repeated issue command answers without the secret. No table, including events, snapshots and receipts, and no log line contains the secret.
 - **Not verified:** the desktop forms (next).
+
+## Triggers in the desktop app (24, 25 and 26)
+
+Status: the desktop part of prompts 24, 25 and 26, which completes them, except for real GitHub deliveries. Date: 2026-11-14.
+
+- **Changed:**
+  - The node picker adds GitHub event, Schedule and HTTP trigger nodes; a workflow needs at least one trigger and has at most one manual trigger, and nothing connects into a trigger.
+  - **GitHub event:** the event, its usual actions as checkboxes, branch patterns where the event has a branch, the installation permission it needs, and a warning when the App's settings do not subscribe to the event.
+  - **Schedule:** cron with a time zone picker, or an interval in minutes, and the misfire policy. The next five runs come from the server's own matcher (`GET /schedules/preview`, which now answers an invalid schedule with its reason), in the zone's local time and UTC.
+  - **HTTP trigger:** signature or bearer, the input fields a request must have, and once published the trigger's address, its secrets, a secret shown once when created or replaced (with an optional changeover window) and Stop all secrets, plus how senders call it.
+  - Every trigger form sets the workflow's overlap policy, and shows its recent starts (started, queued, skipped with the reason, refused) with links to their runs, a schedule's next run and its last misfire.
+  - The location island shows a Paused badge, and its runs list pauses or resumes new runs. Run is disabled, with the reason, for a workflow without a manual trigger; a busy workflow offers Start anyway. A run started by a trigger says which in its status island.
+  - Settings › GitHub shows the App's subscribed events, the rotation window for a new webhook secret, and recent deliveries.
+  - The bridge adds `data.triggers|occurrences|triggerCredentials|schedulePreview|githubDeliveries`, `workflow.enable`, `trigger.rotate|revoke` and `run.start(…, allowOverlap)`, checked in main and preload. A trigger secret crosses IPC once, as an `issued` answer, and main drops it from the command's stored answer at once. Sync knows the new workflow, trigger and delivery events.
+- **Verified:**
+  - `tools/capture.mjs` against a real server and the fake GitHub: a published workflow with all three triggers and a `queue` policy, a signed GitHub delivery that started a run and one that queued behind it, an HTTP event sent with the sender script, then Pause. The screenshots show the schedule form with its preview in Europe/Berlin time, the GitHub trigger form with its starts, the HTTP trigger's address with a newly created secret, the Paused badge with Resume new runs, and the run that says it came from `pr_opened`.
+  - `pnpm smoke` passes with the new allow-lists, including a path-like trigger ID and a zero-minute interval refused at the bridge. Unit tests cover the trigger rules, schedule checks and overlap edits.
+- **Not verified:** deliveries from real GitHub (release prerequisite).

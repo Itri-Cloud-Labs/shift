@@ -87,11 +87,18 @@ export function readDocument(value: unknown): GraphDocument {
   return { nodes, connections };
 }
 
+// Entry nodes: each starts runs, and nothing connects into one.
+export const triggerTypes = new Set([
+  'manual_trigger',
+  'github_trigger',
+  'schedule_trigger',
+  'webhook_trigger',
+]);
+
 // Output ports by node type (workflow documentation, "Node types").
 export function outputPorts(node: DocumentNode): string[] {
+  if (triggerTypes.has(node.type)) return ['success'];
   switch (node.type) {
-    case 'manual_trigger':
-      return ['success'];
     case 'condition':
       return ['true', 'false', 'error'];
     case 'switch': {
@@ -119,11 +126,14 @@ export function outputPorts(node: DocumentNode): string[] {
 }
 
 export function hasInput(node: DocumentNode): boolean {
-  return node.type !== 'manual_trigger';
+  return !triggerTypes.has(node.type);
 }
 
 export const typeLabels: Record<string, string> = {
   manual_trigger: 'Manual trigger',
+  github_trigger: 'GitHub event',
+  schedule_trigger: 'Schedule',
+  webhook_trigger: 'HTTP trigger',
   transform: 'Transform',
   agent: 'Agent',
   condition: 'Condition',
@@ -215,6 +225,26 @@ export function summary(node: DocumentNode): string {
       return node.config['outcome'] === 'FAILED' ? 'Ends as failed' : 'Ends as completed';
     case 'manual_trigger':
       return node.config['inputSchema'] ? 'Takes input' : 'Started by hand';
+    case 'github_trigger': {
+      const actions = Array.isArray(node.config['actions'])
+        ? (node.config['actions'] as unknown[]).filter((item) => typeof item === 'string')
+        : [];
+      return text(node.config['event'])
+        ? `On ${text(node.config['event'])}${actions.length ? ` ${actions.join(', ')}` : ''}`
+        : '';
+    }
+    case 'schedule_trigger': {
+      const schedule = record(node.config['schedule']);
+      if (schedule['kind'] === 'interval')
+        return typeof schedule['minutes'] === 'number'
+          ? `Every ${duration(schedule['minutes'] * 60_000)}`
+          : '';
+      return text(schedule['expression'])
+        ? `${text(schedule['expression'])} · ${text(schedule['timezone']) || 'UTC'}`
+        : '';
+    }
+    case 'webhook_trigger':
+      return node.config['auth'] === 'signature' ? 'Signed requests' : 'Bearer secret';
     default:
       return '';
   }

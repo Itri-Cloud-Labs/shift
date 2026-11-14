@@ -64,6 +64,8 @@ import {
   type EditResult,
   type LocalDraft,
   type NodePosition,
+  overlapOf,
+  setOverlap,
 } from './draft.js';
 import { CreateDialog, type Creating } from './Create.js';
 import { ConflictIsland, NodeEditor, NodePicker, ProblemsPanel } from './Editor.js';
@@ -367,18 +369,26 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     ? readDocument(active.value).nodes.find((node) => node.type === 'manual_trigger')
     : undefined;
   const published = Boolean(workflow?.value.activeVersionId);
-  const canRun = live && published;
+  // A published version without a manual trigger starts only from its other triggers.
+  const manual = !active?.value || trigger !== undefined;
+  // A paused workflow starts nothing; the server would refuse.
+  const paused = workflow?.value.enabled === false;
+  const canRun = live && published && manual && !paused;
   const runHint = !published
     ? 'Publish a version of this workflow before running it.'
-    : !live
-      ? 'Runs start once the server is connected.'
-      : 'Start a run of the published version';
+    : paused
+      ? 'This workflow is paused. Resume new runs from the run list first.'
+      : !manual
+        ? 'This workflow has no manual trigger: it starts from its other triggers only.'
+        : !live
+          ? 'Runs start once the server is connected.'
+          : 'Start a run of the published version';
 
-  const start = async (input: unknown) => {
+  const start = async (input: unknown, allowOverlap = false) => {
     if (!workflowId) return;
     setInputOpen(false);
     setStarting(true);
-    const answer = await ask(bridge().run.start(workflowId, input));
+    const answer = await ask(bridge().run.start(workflowId, input, allowOverlap));
     setStarting(false);
     if (answer.kind === 'command' && answer.runId) {
       setNotice(null);
@@ -388,6 +398,16 @@ function Shell({ desktop }: { desktop: DesktopState }) {
     } else if (answer.kind === 'command' && answer.command.code === 'INVALID_INPUT') {
       setNotice(null);
       setInputOpen(true);
+    } else if (answer.kind === 'command' && answer.command.code === 'WORKFLOW_BUSY') {
+      // The workflow's overlap policy holds new starts while a run is unfinished; only the
+      // owner's explicit choice starts this one anyway.
+      setNotice({
+        text: 'A run of this workflow is still unfinished, and its policy is to wait for it.',
+        tone: 'problem',
+        action: { label: 'Start anyway', run: () => void start(input, true) },
+      });
+    } else if (answer.kind === 'command' && answer.command.code === 'WORKFLOW_DISABLED') {
+      setNotice({ text: 'This workflow is paused, so no run starts.', tone: 'problem' });
     } else {
       setNotice(null);
     }
@@ -891,6 +911,11 @@ function Shell({ desktop }: { desktop: DesktopState }) {
           projectId={projectId}
           workflowId={workflowId}
           navigate={navigate}
+          setEnabled={
+            live && workflowId
+              ? (enabled) => void ask(bridge().workflow.enable(workflowId, enabled))
+              : null
+          }
           versions={workflow?.value.versions ?? []}
           version={shownVersion}
           create={
@@ -918,6 +943,26 @@ function Shell({ desktop }: { desktop: DesktopState }) {
             run={runValue}
             live={live}
             now={now}
+            origin={(() => {
+              const started = runValue as {
+                entryNodeId?: string | null;
+                occurrenceId?: string | null;
+              };
+              if (!started.occurrenceId || !started.entryNodeId) return null;
+              const type = document?.nodes.find((node) => node.id === started.entryNodeId)?.type;
+              const by =
+                type === 'github_trigger'
+                  ? 'a GitHub event'
+                  : type === 'schedule_trigger'
+                    ? 'the schedule'
+                    : type === 'webhook_trigger'
+                      ? 'an HTTP request'
+                      : 'a trigger';
+              return {
+                label: `from ${started.entryNodeId}`,
+                title: `Started by ${by} (${started.entryNodeId})`,
+              };
+            })()}
             resolve={decidable ? () => setResolveFor(runValue.id) : null}
             confirming={cancelling}
             setConfirming={setCancelling}
@@ -968,6 +1013,15 @@ function Shell({ desktop }: { desktop: DesktopState }) {
                 key={`${workflowId}:${selected}`}
                 document={document}
                 projectId={projectId}
+                trigger={{
+                  workflowId,
+                  published: Boolean(workflow?.value.activeVersionId),
+                  serverUrl: connection.profiles.find((item) => item.active)?.url ?? null,
+                  live,
+                  overlap: present ? overlapOf(present) : 'skip',
+                  setOverlap: (overlap) => edit((draft) => setOverlap(draft, overlap)),
+                  openRun: (runId) => navigate({ runId, nodeId: null }),
+                }}
                 node={document.nodes.find((node) => node.id === selected)!}
                 problems={problems}
                 focus={focusNode === selected}

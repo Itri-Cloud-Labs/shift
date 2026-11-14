@@ -78,6 +78,43 @@ export const requestSchema = v.variant('kind', [
   // The owner's GitHub App and the project's repository binding.
   v.strictObject({ kind: v.literal('data.githubApps') }),
   v.strictObject({ kind: v.literal('data.github'), projectId: profileId }),
+  v.strictObject({ kind: v.literal('data.githubDeliveries'), appId: profileId }),
+  // A workflow's trigger subscriptions and what they received.
+  v.strictObject({ kind: v.literal('data.triggers'), workflowId: profileId }),
+  v.strictObject({
+    kind: v.literal('data.occurrences'),
+    workflowId: profileId,
+    triggerId: v.optional(profileId),
+  }),
+  v.strictObject({ kind: v.literal('data.triggerCredentials'), triggerId: profileId }),
+  // The server computes a schedule's instants; the form never does.
+  v.strictObject({
+    kind: v.literal('data.schedulePreview'),
+    schedule: v.variant('kind', [
+      v.strictObject({
+        kind: v.literal('cron'),
+        expression: v.pipe(v.string(), v.maxLength(200)),
+        timezone: v.pipe(v.string(), v.maxLength(64)),
+      }),
+      v.strictObject({
+        kind: v.literal('interval'),
+        minutes: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(366 * 24 * 60)),
+      }),
+    ]),
+  }),
+  // Pause stops every start of the workflow; unpause allows them again.
+  v.strictObject({
+    kind: v.literal('workflow.enable'),
+    workflowId: profileId,
+    enabled: v.boolean(),
+  }),
+  // A webhook trigger's secret is issued by the server and crosses IPC once, to be shown.
+  v.strictObject({
+    kind: v.literal('trigger.rotate'),
+    triggerId: profileId,
+    previousMinutes: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(10080))),
+  }),
+  v.strictObject({ kind: v.literal('trigger.revoke'), triggerId: profileId }),
   // The App's key and webhook secret cross IPC once, from their fields to main, and are never
   // sent back: the server answers with configured or missing.
   v.strictObject({
@@ -92,6 +129,9 @@ export const requestSchema = v.variant('kind', [
     appId: profileId,
     privateKey: v.optional(privateKey),
     webhookSecret: v.optional(webhookSecret),
+    previousSecretMinutes: v.optional(
+      v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10080)),
+    ),
   }),
   v.strictObject({ kind: v.literal('github.refresh'), appId: profileId }),
   v.strictObject({
@@ -109,7 +149,13 @@ export const requestSchema = v.variant('kind', [
     goal: v.pipe(v.string(), v.minLength(1), v.maxLength(4000)),
   }),
   // The trigger input is any JSON value; the request size limit bounds it.
-  v.strictObject({ kind: v.literal('run.start'), workflowId: profileId, input: v.unknown() }),
+  // `allowOverlap` starts it even while the workflow's overlap policy would not, for this start.
+  v.strictObject({
+    kind: v.literal('run.start'),
+    workflowId: profileId,
+    input: v.unknown(),
+    allowOverlap: v.optional(v.boolean()),
+  }),
   v.strictObject({ kind: v.literal('run.cancel'), runId: profileId }),
   // The owner's decision for a run that needs them. The server checks that it applies.
   v.strictObject({
@@ -295,6 +341,11 @@ export const resourceKindSchema = v.picklist([
   'permissions',
   'github',
   'githubApps',
+  'githubDeliveries',
+  'triggers',
+  'occurrences',
+  'triggerCredentials',
+  'schedulePreview',
 ]);
 export type ResourceKind = v.InferOutput<typeof resourceKindSchema>;
 export const commandViewSchema = v.strictObject({
@@ -389,6 +440,12 @@ export const responseSchema = v.variant('kind', [
     text: v.pipe(v.string(), v.maxLength(1024 * 1024)),
   }),
   v.strictObject({ kind: v.literal('preferences'), preferences: preferencesSchema }),
+  // A webhook trigger secret, shown to the owner once. Main keeps no copy.
+  v.strictObject({
+    kind: v.literal('issued'),
+    command: commandViewSchema,
+    secret: v.nullable(v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{43}$/))),
+  }),
   v.strictObject({
     kind: v.literal('recovery'),
     drafts: v.pipe(
@@ -438,6 +495,22 @@ export interface DesktopBridge {
     permissions(projectId: string): Promise<DesktopResponse>;
     github(projectId: string): Promise<DesktopResponse>;
     githubApps(): Promise<DesktopResponse>;
+    githubDeliveries(appId: string): Promise<DesktopResponse>;
+    triggers(workflowId: string): Promise<DesktopResponse>;
+    // One trigger's occurrences when `triggerId` is given, the workflow's otherwise.
+    occurrences(workflowId: string, triggerId?: string): Promise<DesktopResponse>;
+    triggerCredentials(triggerId: string): Promise<DesktopResponse>;
+    schedulePreview(
+      schedule:
+        | { kind: 'cron'; expression: string; timezone: string }
+        | { kind: 'interval'; minutes: number },
+    ): Promise<DesktopResponse>;
+  };
+  trigger: {
+    // Issues a new secret, answered once as `issued`; the replaced ones stop now or after
+    // `previousMinutes`.
+    rotate(triggerId: string, previousMinutes?: number): Promise<DesktopResponse>;
+    revoke(triggerId: string): Promise<DesktopResponse>;
   };
   github: {
     // The key and secret are sent once and never read back.
@@ -449,7 +522,7 @@ export interface DesktopBridge {
     }): Promise<DesktopResponse>;
     rotate(
       appId: string,
-      input: { privateKey?: string; webhookSecret?: string },
+      input: { privateKey?: string; webhookSecret?: string; previousSecretMinutes?: number },
     ): Promise<DesktopResponse>;
     refresh(appId: string): Promise<DesktopResponse>;
     connect(
@@ -470,7 +543,7 @@ export interface DesktopBridge {
     goal(sessionId: string, goal: string): Promise<DesktopResponse>;
   };
   run: {
-    start(workflowId: string, input: unknown): Promise<DesktopResponse>;
+    start(workflowId: string, input: unknown, allowOverlap?: boolean): Promise<DesktopResponse>;
     cancel(runId: string): Promise<DesktopResponse>;
     control(runId: string, control: RunControl): Promise<DesktopResponse>;
   };
@@ -488,6 +561,8 @@ export interface DesktopBridge {
     // Publishes exactly the draft at `revision`.
     publish(workflowId: string, revision: number): Promise<DesktopResponse>;
     create(projectId: string, name: string): Promise<DesktopResponse>;
+    // Pause (false) stops every start of the workflow; unpause (true) allows them again.
+    enable(workflowId: string, enabled: boolean): Promise<DesktopResponse>;
   };
   project: {
     create(path: string): Promise<DesktopResponse>;

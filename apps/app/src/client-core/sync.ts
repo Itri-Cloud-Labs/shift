@@ -146,6 +146,15 @@ const knownEvents = new Set([
   'workflow.created',
   'workflow.draft_saved',
   'workflow.published',
+  'workflow.paused',
+  'workflow.unpaused',
+  // What triggers received; a run one admitted is announced by its own events.
+  'trigger.occurrence',
+  'trigger.removed',
+  'trigger.misfire',
+  'trigger.credential_issued',
+  'trigger.credentials_revoked',
+  'github.delivery',
   'run.created',
   'run.completed',
   'run.failed',
@@ -661,6 +670,11 @@ export class SyncRuntime {
       };
       const family = event.type.slice(0, event.type.indexOf('.'));
       if (family === 'device' || family === 'pairing') continue;
+      // Trigger history is read on demand; only a run it started belongs to the projection.
+      if (family === 'trigger' || family === 'github') {
+        if (event.runId) add({ kind: 'run', id: event.runId });
+        continue;
+      }
       if (family === 'project') add({ kind: 'projects' });
       else if (family === 'workflow') add({ kind: 'workflow', id: id('workflowId') });
       else if (family === 'interaction') add({ kind: 'interaction', id: id('interactionId') });
@@ -884,6 +898,11 @@ export class SyncRuntime {
 
   commands(): CommandView[] {
     return [...this.#commands.values()].map((command) => this.#view(command));
+  }
+
+  forgetResponse(commandId: string): void {
+    const command = this.#commands.get(commandId);
+    if (command) command.response = null;
   }
 
   // The stored answer of an accepted command, while this session still holds it.

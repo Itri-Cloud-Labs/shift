@@ -16,6 +16,8 @@ import {
   saved,
   serverProblems,
   setConfig,
+  setOverlap,
+  overlapOf,
   startHistory,
   startLocal,
   takeTheirs,
@@ -23,7 +25,7 @@ import {
   withLayout,
   type Draft,
 } from '../src/client-ui/draft.js';
-import { readDocument } from '../src/client-ui/graph.js';
+import { hasInput, outputPorts, readDocument } from '../src/client-ui/graph.js';
 
 const base: Draft = {
   formatVersion: 1,
@@ -121,6 +123,49 @@ test('undo and redo bring back the same IDs and edges', () => {
   assert.deepEqual(commit(undo(history), base).future, []);
 });
 
+test('trigger nodes start a workflow, each from its own entry, under one overlap policy', () => {
+  // A workflow may start only from a schedule; a second manual trigger is refused.
+  const scheduled = addNode({ nodes: [], connections: [] }, 'schedule_trigger', { x: 0, y: 0 });
+  assert.equal(scheduled.nodeId, 'schedule');
+  const schedule = readDocument(scheduled.draft).nodes[0]!.config['schedule'] as Record<
+    string,
+    unknown
+  >;
+  assert.equal(schedule['kind'], 'cron');
+  assert.equal(typeof schedule['timezone'], 'string');
+  assert.deepEqual(errors(scheduled.draft), []);
+  const twice = addNode(base, 'manual_trigger', { x: 0, y: 0 });
+  assert.match(errors(twice.draft)[0]!.message, /at most one manual trigger/);
+  // Nothing connects into a trigger, and each has one success port.
+  const github = addNode(base, 'github_trigger', { x: 0, y: 0 });
+  const node = readDocument(github.draft).nodes.find((item) => item.id === github.nodeId)!;
+  assert.deepEqual(outputPorts(node), ['success']);
+  assert.equal(hasInput(node), false);
+  assert.ok('problem' in connect(github.draft, 'start', 'success', github.nodeId));
+  // A reachable path from any trigger counts: a node after the GitHub trigger is not a warning.
+  const after = mustDraft(connect(github.draft, github.nodeId, 'success', 'done'));
+  assert.ok(!diagnose(after).some((item) => item.severity === 'warning' && item.nodeId === 'done'));
+  // A schedule's first checks; the server's preview has the last word.
+  const problemsOf = (config: Record<string, unknown>) =>
+    errors(setConfig(scheduled.draft, 'schedule', 'schedule', config)).map((item) => item.field);
+  assert.deepEqual(problemsOf({ kind: 'cron', expression: '0 9 * *', timezone: 'UTC' }), [
+    'schedule',
+  ]);
+  assert.deepEqual(problemsOf({ kind: 'interval', minutes: 0 }), ['schedule']);
+  assert.deepEqual(problemsOf({ kind: 'interval', minutes: 15 }), []);
+  // The overlap policy is the workflow's: skip unless the draft says otherwise.
+  assert.equal(overlapOf(base), 'skip');
+  assert.equal(overlapOf(setOverlap(base, 'queue')), 'queue');
+  assert.deepEqual(
+    (
+      setOverlap({ ...base, execution: { limits: { maxExecutions: 9 } } }, 'allow')[
+        'execution'
+      ] as Record<string, unknown>
+    )['limits'],
+    { maxExecutions: 9 },
+  );
+});
+
 test('copies and renames keep the graph consistent', () => {
   const copy = duplicateNode(base, 'work');
   assert.equal(copy.nodeId, 'work_2');
@@ -140,7 +185,7 @@ test('diagnostics name the node and field, and warn about unreachable nodes', ()
   assert.ok(problems.some((item) => item.nodeId === nodeId && item.field === 'goal'));
   const unreachable = problems.find((item) => item.nodeId === 'done');
   assert.equal(unreachable?.severity, 'warning');
-  assert.match(errors({ nodes: [], connections: [] })[0]!.message, /manual trigger/);
+  assert.match(errors({ nodes: [], connections: [] })[0]!.message, /needs a trigger/);
   // Fewer outcomes leave a connection on a port that no longer exists: shown, not dropped.
   let approval = addNode(base, 'approval', { x: 0, y: 0 });
   let edited = setConfig(approval.draft, approval.nodeId, 'title', 'Ship?');

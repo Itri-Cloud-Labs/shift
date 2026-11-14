@@ -15,7 +15,14 @@ import {
 import { unknownConfig, withMethod } from './config.js';
 import { addableTypes, advancedTypes, type DraftProblem } from './draft.js';
 import { TextField, Typing } from './Fields.js';
-import { outputPorts, typeLabels, type DocumentNode, type GraphDocument } from './graph.js';
+import {
+  outputPorts,
+  triggerTypes,
+  typeLabels,
+  type DocumentNode,
+  type GraphDocument,
+} from './graph.js';
+import { OverlapField, TriggerFields, TriggerHistory, type TriggerContext } from './Triggers.js';
 import { TypeIcon } from './icons.js';
 import {
   Check,
@@ -57,6 +64,9 @@ const typeHints: Record<string, string> = {
   github_wait_checks: 'Waits until a commit’s checks finish',
   github_merge: 'Merges a pull request',
   end: 'Finishes the run',
+  github_trigger: 'Starts on a GitHub event',
+  schedule_trigger: 'Starts at set times',
+  webhook_trigger: 'Starts on an HTTP request',
 };
 
 export function NodePicker({
@@ -360,6 +370,7 @@ function ConfigFields({
   node,
   document,
   projectId,
+  trigger,
   problems,
   set,
   replace,
@@ -368,6 +379,7 @@ function ConfigFields({
   node: DocumentNode;
   document: GraphDocument;
   projectId: string | null;
+  trigger: TriggerContext;
   problems: DraftProblem[];
   set: (key: string, value: unknown) => void;
   // Replaces the whole config in one edit, for settings that change together.
@@ -426,6 +438,18 @@ function ConfigFields({
     />
   );
   switch (node.type) {
+    case 'github_trigger':
+    case 'schedule_trigger':
+    case 'webhook_trigger':
+      return (
+        <TriggerFields
+          node={node}
+          problem={problem}
+          set={set}
+          replace={replace}
+          context={trigger}
+        />
+      );
     case 'manual_trigger':
       return (
         <SchemaBuilder
@@ -1169,6 +1193,7 @@ export interface NodeEditing {
 export function NodeEditor({
   document,
   projectId = null,
+  trigger,
   node,
   problems,
   focus,
@@ -1177,6 +1202,8 @@ export function NodeEditor({
   document: GraphDocument;
   // The workflow's project, whose sessions an agent can continue.
   projectId?: string | null;
+  // The workflow's triggers: their policy, addresses and history.
+  trigger: TriggerContext;
   node: DocumentNode;
   problems: DraftProblem[];
   focus: boolean;
@@ -1184,7 +1211,8 @@ export function NodeEditor({
 }) {
   const [renameProblem, setRenameProblem] = useState<string | undefined>();
   useEffect(() => setRenameProblem(undefined), [node.id]);
-  const targets = document.nodes.filter((item) => item.type !== 'manual_trigger');
+  const targets = document.nodes.filter((item) => !triggerTypes.has(item.type));
+  const entry = triggerTypes.has(node.type);
   const ports = outputPorts(node);
   const own = problems.filter((item) => item.nodeId === node.id);
   return (
@@ -1199,19 +1227,21 @@ export function NodeEditor({
           note="Other nodes refer to it by this name."
           commit={(value) => setRenameProblem(editing.rename(value) ?? undefined)}
         />
-        {node.type !== 'manual_trigger' && node.type !== 'end' && (
+        {!entry && node.type !== 'end' && (
           <BindingsBuilder document={document} node={node} editing={editing.bindings} />
         )}
         <ConfigFields
           document={document}
           projectId={projectId}
+          trigger={trigger}
           node={node}
           problems={own}
           set={editing.set}
           replace={(config) => editing.setNode('config', config)}
           renameCase={editing.renameCase}
         />
-        {node.type !== 'end' && node.type !== 'manual_trigger' && (
+        {entry && <OverlapField id={node.id} context={trigger} />}
+        {node.type !== 'end' && !entry && (
           <RetryFields
             node={node}
             problem={own.find((item) => item.field === 'retry')?.message}
@@ -1220,6 +1250,7 @@ export function NodeEditor({
         )}
         <Advanced node={node} />
       </Typing.Provider>
+      {entry && node.type !== 'manual_trigger' && <TriggerHistory node={node} context={trigger} />}
       {ports.length > 0 && (
         <fieldset className="field-group">
           <legend>Goes to</legend>
