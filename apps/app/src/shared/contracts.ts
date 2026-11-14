@@ -81,7 +81,11 @@ export const requestSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('data.githubDeliveries'), appId: profileId }),
   // A workflow's trigger subscriptions and what they received.
   v.strictObject({ kind: v.literal('data.triggers'), workflowId: profileId }),
-  v.strictObject({ kind: v.literal('data.occurrences'), workflowId: profileId }),
+  v.strictObject({
+    kind: v.literal('data.occurrences'),
+    workflowId: profileId,
+    triggerId: v.optional(profileId),
+  }),
   v.strictObject({ kind: v.literal('data.triggerCredentials'), triggerId: profileId }),
   // The server computes a schedule's instants; the form never does.
   v.strictObject({
@@ -493,7 +497,8 @@ export interface DesktopBridge {
     githubApps(): Promise<DesktopResponse>;
     githubDeliveries(appId: string): Promise<DesktopResponse>;
     triggers(workflowId: string): Promise<DesktopResponse>;
-    occurrences(workflowId: string): Promise<DesktopResponse>;
+    // One trigger's occurrences when `triggerId` is given, the workflow's otherwise.
+    occurrences(workflowId: string, triggerId?: string): Promise<DesktopResponse>;
     triggerCredentials(triggerId: string): Promise<DesktopResponse>;
     schedulePreview(
       schedule:

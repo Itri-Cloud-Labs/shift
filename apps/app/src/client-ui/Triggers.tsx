@@ -682,13 +682,14 @@ const describe = (occurrence: Occurrence) => {
 export function TriggerHistory({ node, context }: { node: DocumentNode; context: TriggerContext }) {
   const triggers = useTriggers(context.workflowId, context.published);
   const trigger = triggers?.find((item) => item.nodeId === node.id);
+  // This trigger's own history, so a busier trigger of the workflow never crowds it out.
   const occurrences = useLive(async () => {
-    if (!context.workflowId || !context.published) return null;
-    const answer = await ask(bridge().data.occurrences(context.workflowId));
+    if (!context.workflowId || !context.published || !trigger) return null;
+    const answer = await ask(bridge().data.occurrences(context.workflowId, trigger.id));
     return answer.kind === 'resource'
       ? (answer.value as { occurrences: Occurrence[] }).occurrences
       : null;
-  }, [context.workflowId, context.published]);
+  }, [context.workflowId, context.published, trigger?.id]);
   if (!trigger) return null;
   const own = (occurrences ?? []).filter((item) => item.nodeId === node.id).slice(0, 8);
   const misfire = trigger.state.lastMisfire;

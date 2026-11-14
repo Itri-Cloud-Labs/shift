@@ -121,7 +121,12 @@ const bridge: DesktopBridge = {
     githubApps: () => invoke({ kind: 'data.githubApps' }),
     githubDeliveries: (appId: string) => invoke({ kind: 'data.githubDeliveries', appId }),
     triggers: (workflowId: string) => invoke({ kind: 'data.triggers', workflowId }),
-    occurrences: (workflowId: string) => invoke({ kind: 'data.occurrences', workflowId }),
+    occurrences: (workflowId: string, triggerId?: string) =>
+      invoke({
+        kind: 'data.occurrences',
+        workflowId,
+        ...(triggerId === undefined ? {} : { triggerId }),
+      } as DesktopRequest),
     triggerCredentials: (triggerId: string) =>
       invoke({ kind: 'data.triggerCredentials', triggerId }),
     schedulePreview: (
