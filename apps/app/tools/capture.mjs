@@ -813,7 +813,7 @@ try {
     {
       name: 'j02-new-workflow',
       script: `J.click('.hint button', 'New workflow'); setTimeout(() => { J.set('#create-value', 'Branch by size'); J.click('.create-dialog button[type=submit]'); }, 200);`,
-      wait: 1500,
+      wait: 3000,
       expect:
         "document.querySelector('.location').textContent.includes('Branch by size') && document.querySelector('.react-flow__node[data-id=start]')",
       report: 'location.hash',

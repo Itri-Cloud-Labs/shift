@@ -134,10 +134,7 @@
     "Timestamp": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "epochMs",
-        "iso"
-      ],
+      "required": ["epochMs", "iso"],
       "properties": {
         "epochMs": {
           "type": "integer",
@@ -154,10 +151,7 @@
     "ServerIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "serverId",
-        "eventEpoch"
-      ],
+      "required": ["serverId", "eventEpoch"],
       "properties": {
         "serverId": {
           "$ref": "#/$defs/Uuid"
@@ -170,30 +164,16 @@
     "Readiness": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "ready",
-        "phase",
-        "reason"
-      ],
+      "required": ["ready", "phase", "reason"],
       "properties": {
         "ready": {
           "type": "boolean"
         },
         "phase": {
-          "enum": [
-            "starting",
-            "ready",
-            "stopping",
-            "failed"
-          ]
+          "enum": ["starting", "ready", "stopping", "failed"]
         },
         "reason": {
-          "enum": [
-            "STARTING",
-            "READY",
-            "STOPPING",
-            "PERSISTENCE_UNAVAILABLE"
-          ]
+          "enum": ["STARTING", "READY", "STOPPING", "PERSISTENCE_UNAVAILABLE"]
         }
       },
       "oneOf": [
@@ -254,10 +234,7 @@
     "ProtocolRange": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "min",
-        "max"
-      ],
+      "required": ["min", "max"],
       "properties": {
         "min": {
           "type": "integer",
@@ -274,13 +251,7 @@
     "ServerCapabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "commands",
-        "events",
-        "pairing",
-        "nodeTypes",
-        "harnesses"
-      ],
+      "required": ["commands", "events", "pairing", "nodeTypes", "harnesses"],
       "properties": {
         "commands": {
           "type": "boolean"
@@ -396,10 +367,7 @@
     "Diagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "field",
-        "message"
-      ],
+      "required": ["field", "message"],
       "properties": {
         "field": {
           "type": "string",
@@ -414,14 +382,7 @@
     "ProtocolError": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "code",
-        "message",
-        "retryable",
-        "diagnostics"
-      ],
+      "required": ["schemaVersion", "requestId", "code", "message", "retryable", "diagnostics"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -452,11 +413,7 @@
     "ShutdownAcknowledgement": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "accepted"
-      ],
+      "required": ["schemaVersion", "requestId", "accepted"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -482,13 +439,7 @@
     "Device": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "name",
-        "createdAt",
-        "lastSeenAt",
-        "revokedAt"
-      ],
+      "required": ["id", "name", "createdAt", "lastSeenAt", "revokedAt"],
       "properties": {
         "id": {
           "$ref": "#/$defs/Uuid"
@@ -501,17 +452,11 @@
           "minimum": 0
         },
         "lastSeenAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "revokedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         }
       }
@@ -519,11 +464,7 @@
     "PairRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "phrase",
-        "deviceName",
-        "commandId"
-      ],
+      "required": ["phrase", "deviceName", "commandId"],
       "properties": {
         "phrase": {
           "type": "string",
@@ -541,12 +482,7 @@
     "PairResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "device",
-        "token"
-      ],
+      "required": ["schemaVersion", "requestId", "device", "token"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -566,11 +502,7 @@
     "PairingIssued": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "pairing"
-      ],
+      "required": ["schemaVersion", "requestId", "pairing"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -581,10 +513,7 @@
         "pairing": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "phrase",
-            "expiresAt"
-          ],
+          "required": ["phrase", "expiresAt"],
           "properties": {
             "phrase": {
               "type": "string",
@@ -601,12 +530,7 @@
     "DeviceList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "devices",
-        "currentDeviceId"
-      ],
+      "required": ["schemaVersion", "requestId", "devices", "currentDeviceId"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -629,11 +553,7 @@
     "DeviceResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "device"
-      ],
+      "required": ["schemaVersion", "requestId", "device"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -649,13 +569,7 @@
     "Project": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "name",
-        "repositoryPath",
-        "baseRef",
-        "createdAt"
-      ],
+      "required": ["id", "name", "repositoryPath", "baseRef", "createdAt"],
       "properties": {
         "id": {
           "$ref": "#/$defs/Uuid"
@@ -681,13 +595,7 @@
     "WorkflowSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "projectId",
-        "name",
-        "enabled",
-        "activeVersionId"
-      ],
+      "required": ["id", "projectId", "name", "enabled", "activeVersionId"],
       "properties": {
         "enabled": {
           "type": "boolean"
@@ -764,12 +672,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "number",
-              "hash",
-              "createdAt"
-            ],
+            "required": ["id", "number", "hash", "createdAt"],
             "properties": {
               "id": {
                 "$ref": "#/$defs/Uuid"
@@ -799,11 +702,7 @@
     "Attempt": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "number",
-        "state",
-        "error"
-      ],
+      "required": ["number", "state", "error"],
       "properties": {
         "number": {
           "type": "integer",
@@ -857,20 +756,10 @@
           "minimum": 1
         },
         "state": {
-          "enum": [
-            "PENDING",
-            "RUNNING",
-            "WAITING",
-            "COMPLETED",
-            "FAILED",
-            "CANCELLED"
-          ]
+          "enum": ["PENDING", "RUNNING", "WAITING", "COMPLETED", "FAILED", "CANCELLED"]
         },
         "port": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 100
         },
         "predecessorId": {
@@ -884,17 +773,11 @@
           ]
         },
         "connectionId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 200
         },
         "sources": {
-          "type": [
-            "object",
-            "null"
-          ]
+          "type": ["object", "null"]
         },
         "output": {},
         "error": {},
@@ -917,13 +800,7 @@
     "RunSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "state",
-        "workflowId",
-        "createdAt",
-        "finishedAt"
-      ],
+      "required": ["id", "state", "workflowId", "createdAt", "finishedAt"],
       "properties": {
         "id": {
           "$ref": "#/$defs/Uuid"
@@ -956,10 +833,7 @@
           "minimum": 0
         },
         "finishedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         }
       }
@@ -1025,10 +899,7 @@
           ]
         },
         "entryNodeId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 64
         },
         "occurrenceId": {
@@ -1042,10 +913,7 @@
           ]
         },
         "versionNumber": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1
         },
         "repository": {
@@ -1053,10 +921,7 @@
           "maxLength": 4096
         },
         "baseCommit": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 64
         },
         "workspace": {
@@ -1067,27 +932,17 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "id",
-                "path",
-                "state"
-              ],
+              "required": ["id", "path", "state"],
               "properties": {
                 "id": {
                   "$ref": "#/$defs/Uuid"
                 },
                 "path": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
+                  "type": ["string", "null"],
                   "maxLength": 4096
                 },
                 "state": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
+                  "type": ["string", "null"],
                   "maxLength": 20
                 }
               }
@@ -1095,24 +950,15 @@
           ]
         },
         "attention": {
-          "type": [
-            "object",
-            "null"
-          ]
+          "type": ["object", "null"]
         },
         "wait": {
-          "type": [
-            "object",
-            "null"
-          ]
+          "type": ["object", "null"]
         },
         "activeTime": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "usedMs",
-            "limitMs"
-          ],
+          "required": ["usedMs", "limitMs"],
           "properties": {
             "usedMs": {
               "type": "integer",
@@ -1133,10 +979,7 @@
           "minimum": 0
         },
         "finishedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "executions": {
@@ -1164,11 +1007,7 @@
                 "$ref": "#/$defs/Uuid"
               },
               "kind": {
-                "enum": [
-                  "goal",
-                  "correction",
-                  "continuation"
-                ]
+                "enum": ["goal", "correction", "continuation"]
               },
               "state": {
                 "type": "string",
@@ -1195,26 +1034,13 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "kind",
-              "executionId",
-              "actor",
-              "payload",
-              "createdAt"
-            ],
+            "required": ["id", "kind", "executionId", "actor", "payload", "createdAt"],
             "properties": {
               "id": {
                 "$ref": "#/$defs/Uuid"
               },
               "kind": {
-                "enum": [
-                  "cancel",
-                  "retry",
-                  "fail",
-                  "complete",
-                  "extend"
-                ]
+                "enum": ["cancel", "retry", "fail", "complete", "extend"]
               },
               "executionId": {
                 "anyOf": [
@@ -1229,10 +1055,7 @@
               "actor": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                  "kind",
-                  "id"
-                ],
+                "required": ["kind", "id"],
                 "properties": {
                   "kind": {
                     "type": "string",
@@ -1291,18 +1114,10 @@
           "maxLength": 200
         },
         "kind": {
-          "enum": [
-            "input",
-            "approval"
-          ]
+          "enum": ["input", "approval"]
         },
         "state": {
-          "enum": [
-            "PENDING",
-            "RESPONDED",
-            "EXPIRED",
-            "CANCELLED"
-          ]
+          "enum": ["PENDING", "RESPONDED", "EXPIRED", "CANCELLED"]
         },
         "revision": {
           "type": "integer",
@@ -1313,10 +1128,7 @@
           "maxLength": 200
         },
         "instructions": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 20000
         },
         "form": {
@@ -1338,10 +1150,7 @@
           ]
         },
         "expiresAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "createdAt": {
@@ -1349,10 +1158,7 @@
           "minimum": 0
         },
         "settledAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "runState": {
@@ -1376,28 +1182,17 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": [
-                "decision",
-                "data",
-                "actor",
-                "createdAt"
-              ],
+              "required": ["decision", "data", "actor", "createdAt"],
               "properties": {
                 "decision": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
+                  "type": ["string", "null"],
                   "maxLength": 40
                 },
                 "data": {},
                 "actor": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": [
-                    "kind",
-                    "id"
-                  ],
+                  "required": ["kind", "id"],
                   "properties": {
                     "kind": {
                       "type": "string",
@@ -1463,28 +1258,18 @@
           "pattern": "^[0-9a-f]{40,64}$"
         },
         "state": {
-          "enum": [
-            "CREATING",
-            "READY",
-            "RETIRED"
-          ]
+          "enum": ["CREATING", "READY", "RETIRED"]
         },
         "createdAt": {
           "type": "integer",
           "minimum": 0
         },
         "readyAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "retiredAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "claimed": {
@@ -1495,12 +1280,7 @@
     "CommandReceipt": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "commandId",
-        "status",
-        "body",
-        "createdAt"
-      ],
+      "required": ["commandId", "status", "body", "createdAt"],
       "properties": {
         "commandId": {
           "$ref": "#/$defs/CommandId"
@@ -1522,11 +1302,7 @@
     "ProjectResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "project"
-      ],
+      "required": ["schemaVersion", "requestId", "project"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1542,11 +1318,7 @@
     "WorkflowVersionResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "version"
-      ],
+      "required": ["schemaVersion", "requestId", "version"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1557,14 +1329,7 @@
         "version": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "id",
-            "workflowId",
-            "number",
-            "hash",
-            "createdAt",
-            "document"
-          ],
+          "required": ["id", "workflowId", "number", "hash", "createdAt", "document"],
           "properties": {
             "id": {
               "$ref": "#/$defs/Uuid"
@@ -1594,11 +1359,7 @@
     "WorkflowResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "workflow"
-      ],
+      "required": ["schemaVersion", "requestId", "workflow"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1614,11 +1375,7 @@
     "RunResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "run"
-      ],
+      "required": ["schemaVersion", "requestId", "run"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1634,11 +1391,7 @@
     "InteractionResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "interaction"
-      ],
+      "required": ["schemaVersion", "requestId", "interaction"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1654,11 +1407,7 @@
     "WorkspaceResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "workspace"
-      ],
+      "required": ["schemaVersion", "requestId", "workspace"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1674,11 +1423,7 @@
     "CommandReceiptResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "receipt"
-      ],
+      "required": ["schemaVersion", "requestId", "receipt"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1694,11 +1439,7 @@
     "ProjectList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "projects"
-      ],
+      "required": ["schemaVersion", "requestId", "projects"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1718,11 +1459,7 @@
     "WorkflowList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "workflows"
-      ],
+      "required": ["schemaVersion", "requestId", "workflows"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1742,11 +1479,7 @@
     "RunList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "runs"
-      ],
+      "required": ["schemaVersion", "requestId", "runs"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1766,11 +1499,7 @@
     "InteractionList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "interactions"
-      ],
+      "required": ["schemaVersion", "requestId", "interactions"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1790,11 +1519,7 @@
     "WorkspaceList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "workspaces"
-      ],
+      "required": ["schemaVersion", "requestId", "workspaces"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1814,12 +1539,7 @@
     "ExecutionPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "executions",
-        "next"
-      ],
+      "required": ["schemaVersion", "requestId", "executions", "next"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -1835,10 +1555,7 @@
           "maxItems": 500
         },
         "next": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1
         }
       }
@@ -1925,13 +1642,7 @@
     "EventPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "events",
-        "next",
-        "highWater"
-      ],
+      "required": ["schemaVersion", "requestId", "events", "next", "highWater"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2016,12 +1727,7 @@
     "RunVariables": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "variables",
-        "revisions"
-      ],
+      "required": ["schemaVersion", "requestId", "variables", "revisions"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2035,13 +1741,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "key",
-              "value",
-              "revision",
-              "executionId",
-              "updatedAt"
-            ],
+            "required": ["key", "value", "revision", "executionId", "updatedAt"],
             "properties": {
               "key": {
                 "type": "string",
@@ -2068,13 +1768,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "key",
-              "revision",
-              "value",
-              "executionId",
-              "createdAt"
-            ],
+            "required": ["key", "revision", "value", "executionId", "createdAt"],
             "properties": {
               "key": {
                 "type": "string",
@@ -2120,10 +1814,7 @@
           "$ref": "#/$defs/Uuid"
         },
         "role": {
-          "enum": [
-            "handoff",
-            "human_report"
-          ]
+          "enum": ["handoff", "human_report"]
         },
         "filename": {
           "type": "string",
@@ -2211,11 +1902,7 @@
     "ArtifactList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "artifacts"
-      ],
+      "required": ["schemaVersion", "requestId", "artifacts"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2235,11 +1922,7 @@
     "ArtifactResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "artifact"
-      ],
+      "required": ["schemaVersion", "requestId", "artifact"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2296,10 +1979,7 @@
           ]
         },
         "nodeId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 100
         },
         "createdByRunId": {
@@ -2317,38 +1997,21 @@
           "maxLength": 100
         },
         "harnessSessionId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 200
         },
         "mapping": {
-          "enum": [
-            "CREATING",
-            "READY",
-            "MISSING"
-          ]
+          "enum": ["CREATING", "READY", "MISSING"]
         },
         "cwd": {
           "type": "string",
           "maxLength": 4096
         },
         "lifetime": {
-          "enum": [
-            "persistent",
-            "ephemeral"
-          ]
+          "enum": ["persistent", "ephemeral"]
         },
         "state": {
-          "enum": [
-            "CREATING",
-            "IDLE",
-            "BUSY",
-            "BLOCKED",
-            "UNAVAILABLE",
-            "ARCHIVED"
-          ]
+          "enum": ["CREATING", "IDLE", "BUSY", "BLOCKED", "UNAVAILABLE", "ARCHIVED"]
         },
         "heldBy": {
           "anyOf": [
@@ -2365,10 +2028,7 @@
           "minimum": 0
         },
         "archivedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         }
       }
@@ -2419,10 +2079,7 @@
           ]
         },
         "nodeId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 100
         },
         "createdByRunId": {
@@ -2440,38 +2097,21 @@
           "maxLength": 100
         },
         "harnessSessionId": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 200
         },
         "mapping": {
-          "enum": [
-            "CREATING",
-            "READY",
-            "MISSING"
-          ]
+          "enum": ["CREATING", "READY", "MISSING"]
         },
         "cwd": {
           "type": "string",
           "maxLength": 4096
         },
         "lifetime": {
-          "enum": [
-            "persistent",
-            "ephemeral"
-          ]
+          "enum": ["persistent", "ephemeral"]
         },
         "state": {
-          "enum": [
-            "CREATING",
-            "IDLE",
-            "BUSY",
-            "BLOCKED",
-            "UNAVAILABLE",
-            "ARCHIVED"
-          ]
+          "enum": ["CREATING", "IDLE", "BUSY", "BLOCKED", "UNAVAILABLE", "ARCHIVED"]
         },
         "heldBy": {
           "anyOf": [
@@ -2488,10 +2128,7 @@
           "minimum": 0
         },
         "archivedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "executions": {
@@ -2500,13 +2137,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "runId",
-              "nodeId",
-              "sequence",
-              "state"
-            ],
+            "required": ["id", "runId", "nodeId", "sequence", "state"],
             "properties": {
               "id": {
                 "$ref": "#/$defs/Uuid"
@@ -2535,14 +2166,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "executionId",
-              "kind",
-              "state",
-              "createdAt",
-              "finishedAt"
-            ],
+            "required": ["id", "executionId", "kind", "state", "createdAt", "finishedAt"],
             "properties": {
               "id": {
                 "$ref": "#/$defs/Uuid"
@@ -2558,11 +2182,7 @@
                 ]
               },
               "kind": {
-                "enum": [
-                  "goal",
-                  "correction",
-                  "continuation"
-                ]
+                "enum": ["goal", "correction", "continuation"]
               },
               "state": {
                 "type": "string",
@@ -2573,10 +2193,7 @@
                 "minimum": 0
               },
               "finishedAt": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": ["integer", "null"],
                 "minimum": 0
               }
             }
@@ -2587,11 +2204,7 @@
     "SessionList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "sessions"
-      ],
+      "required": ["schemaVersion", "requestId", "sessions"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2611,11 +2224,7 @@
     "SessionResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "session"
-      ],
+      "required": ["schemaVersion", "requestId", "session"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2676,11 +2285,7 @@
           ]
         },
         "kind": {
-          "enum": [
-            "goal",
-            "correction",
-            "continuation"
-          ]
+          "enum": ["goal", "correction", "continuation"]
         },
         "manual": {
           "type": "boolean"
@@ -2704,17 +2309,11 @@
           "minimum": 0
         },
         "submittedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "finishedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "artifacts": {
@@ -2766,12 +2365,7 @@
           "minimum": 1
         },
         "kind": {
-          "enum": [
-            "user",
-            "assistant",
-            "tool",
-            "status"
-          ]
+          "enum": ["user", "assistant", "tool", "status"]
         },
         "text": {
           "type": "string",
@@ -2798,11 +2392,7 @@
     "InvocationResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "invocation"
-      ],
+      "required": ["schemaVersion", "requestId", "invocation"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2818,12 +2408,7 @@
     "TranscriptPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "entries",
-        "next"
-      ],
+      "required": ["schemaVersion", "requestId", "entries", "next"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2839,10 +2424,7 @@
           }
         },
         "next": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         }
       }
@@ -2873,14 +2455,7 @@
           "maxLength": 100
         },
         "state": {
-          "enum": [
-            "INTENDED",
-            "SUBMITTED",
-            "SUCCEEDED",
-            "FAILED",
-            "UNKNOWN",
-            "ABANDONED"
-          ]
+          "enum": ["INTENDED", "SUBMITTED", "SUCCEEDED", "FAILED", "UNKNOWN", "ABANDONED"]
         },
         "evidence": {
           "type": "object"
@@ -2899,14 +2474,7 @@
     "Credential": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "projectId",
-        "name",
-        "revision",
-        "createdAt",
-        "updatedAt"
-      ],
+      "required": ["id", "projectId", "name", "revision", "createdAt", "updatedAt"],
       "properties": {
         "id": {
           "$ref": "#/$defs/Uuid"
@@ -2935,11 +2503,7 @@
     "CredentialList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "credentials"
-      ],
+      "required": ["schemaVersion", "requestId", "credentials"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2959,11 +2523,7 @@
     "CredentialResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "credential"
-      ],
+      "required": ["schemaVersion", "requestId", "credential"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2979,11 +2539,7 @@
     "ProjectPermissionsResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "permissions"
-      ],
+      "required": ["schemaVersion", "requestId", "permissions"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -2994,10 +2550,7 @@
         "permissions": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "projectId",
-            "denied"
-          ],
+          "required": ["projectId", "denied"],
           "properties": {
             "projectId": {
               "$ref": "#/$defs/Uuid"
@@ -3006,14 +2559,7 @@
               "type": "array",
               "uniqueItems": true,
               "items": {
-                "enum": [
-                  "command",
-                  "http",
-                  "script",
-                  "git",
-                  "git_push",
-                  "github"
-                ]
+                "enum": ["command", "http", "script", "git", "git_push", "github"]
               }
             }
           }
@@ -3024,23 +2570,13 @@
       "type": "object",
       "maxProperties": 100,
       "additionalProperties": {
-        "enum": [
-          "read",
-          "write",
-          "admin"
-        ]
+        "enum": ["read", "write", "admin"]
       }
     },
     "GitHubRepository": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "owner",
-        "name",
-        "defaultBranch",
-        "private"
-      ],
+      "required": ["id", "owner", "name", "defaultBranch", "private"],
       "properties": {
         "id": {
           "type": "integer",
@@ -3093,11 +2629,7 @@
           "maxLength": 50
         },
         "state": {
-          "enum": [
-            "ACTIVE",
-            "SUSPENDED",
-            "REMOVED"
-          ]
+          "enum": ["ACTIVE", "SUSPENDED", "REMOVED"]
         },
         "permissions": {
           "$ref": "#/$defs/GitHubPermissions"
@@ -3146,44 +2678,29 @@
           "maxLength": 200
         },
         "slug": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 200
         },
         "name": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 200
         },
         "privateKey": {
           "const": "configured"
         },
         "webhookSecret": {
-          "enum": [
-            "configured",
-            "missing"
-          ]
+          "enum": ["configured", "missing"]
         },
         "webhookPath": {
           "type": "string",
           "maxLength": 200
         },
         "previousWebhookSecretUntil": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "events": {
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "maxItems": 100,
           "items": {
             "type": "string",
@@ -3191,10 +2708,7 @@
           }
         },
         "verifiedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "revision": {
@@ -3213,11 +2727,7 @@
     "GitHubAppList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "apps"
-      ],
+      "required": ["schemaVersion", "requestId", "apps"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3237,11 +2747,7 @@
     "GitHubAppResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "app"
-      ],
+      "required": ["schemaVersion", "requestId", "app"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3283,12 +2789,7 @@
         "repository": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "id",
-            "owner",
-            "name",
-            "defaultBranch"
-          ],
+          "required": ["id", "owner", "name", "defaultBranch"],
           "properties": {
             "id": {
               "type": "integer",
@@ -3309,10 +2810,7 @@
           }
         },
         "verifiedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "revision": {
@@ -3325,10 +2823,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "node",
-              "missing"
-            ],
+            "required": ["node", "missing"],
             "properties": {
               "node": {
                 "type": "string",
@@ -3345,11 +2840,7 @@
     "GitHubConnectionResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "connection"
-      ],
+      "required": ["schemaVersion", "requestId", "connection"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3396,11 +2887,7 @@
           "maxLength": 64
         },
         "kind": {
-          "enum": [
-            "github",
-            "schedule",
-            "webhook"
-          ]
+          "enum": ["github", "schedule", "webhook"]
         },
         "config": {
           "type": "object"
@@ -3412,10 +2899,7 @@
           "type": "object"
         },
         "nextFireAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "createdAt": {
@@ -3465,11 +2949,7 @@
           "maxLength": 64
         },
         "kind": {
-          "enum": [
-            "github",
-            "schedule",
-            "webhook"
-          ]
+          "enum": ["github", "schedule", "webhook"]
         },
         "dedupKey": {
           "type": "string",
@@ -3484,19 +2964,10 @@
           "minimum": 0
         },
         "state": {
-          "enum": [
-            "ACCEPTED",
-            "ADMITTED",
-            "QUEUED",
-            "SKIPPED",
-            "REJECTED"
-          ]
+          "enum": ["ACCEPTED", "ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
         },
         "reason": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 100
         },
         "details": {
@@ -3513,10 +2984,7 @@
           ]
         },
         "decidedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "input": {}
@@ -3525,11 +2993,7 @@
     "TriggerList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "triggers"
-      ],
+      "required": ["schemaVersion", "requestId", "triggers"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3549,12 +3013,7 @@
     "OccurrencePage": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "occurrences",
-        "nextBefore"
-      ],
+      "required": ["schemaVersion", "requestId", "occurrences", "nextBefore"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3570,10 +3029,7 @@
           }
         },
         "nextBefore": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1
         }
       }
@@ -3581,11 +3037,7 @@
     "OccurrenceResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "occurrence"
-      ],
+      "required": ["schemaVersion", "requestId", "occurrence"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3623,17 +3075,11 @@
           "maxLength": 64
         },
         "action": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 64
         },
         "repositoryId": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 1
         },
         "receivedAt": {
@@ -3646,14 +3092,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "id",
-              "triggerId",
-              "workflowId",
-              "state",
-              "reason",
-              "runId"
-            ],
+            "required": ["id", "triggerId", "workflowId", "state", "reason", "runId"],
             "properties": {
               "id": {
                 "$ref": "#/$defs/Uuid"
@@ -3665,19 +3104,10 @@
                 "$ref": "#/$defs/Uuid"
               },
               "state": {
-                "enum": [
-                  "ACCEPTED",
-                  "ADMITTED",
-                  "QUEUED",
-                  "SKIPPED",
-                  "REJECTED"
-                ]
+                "enum": ["ACCEPTED", "ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
               },
               "reason": {
-                "type": [
-                  "string",
-                  "null"
-                ],
+                "type": ["string", "null"],
                 "maxLength": 100
               },
               "runId": {
@@ -3698,12 +3128,7 @@
     "GitHubDeliveryResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "delivery",
-        "duplicate"
-      ],
+      "required": ["schemaVersion", "requestId", "delivery", "duplicate"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3722,12 +3147,7 @@
     "GitHubDeliveryPage": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "deliveries",
-        "nextBefore"
-      ],
+      "required": ["schemaVersion", "requestId", "deliveries", "nextBefore"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3743,10 +3163,7 @@
           }
         },
         "nextBefore": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         }
       }
@@ -3754,12 +3171,7 @@
     "SchedulePreview": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "instants",
-        "problem"
-      ],
+      "required": ["schemaVersion", "requestId", "instants", "problem"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3776,10 +3188,7 @@
           }
         },
         "problem": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 500
         }
       }
@@ -3787,13 +3196,7 @@
     "TriggerCredential": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "id",
-        "createdAt",
-        "expiresAt",
-        "revokedAt",
-        "active"
-      ],
+      "required": ["id", "createdAt", "expiresAt", "revokedAt", "active"],
       "properties": {
         "id": {
           "$ref": "#/$defs/Uuid"
@@ -3803,17 +3206,11 @@
           "minimum": 0
         },
         "expiresAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "revokedAt": {
-          "type": [
-            "integer",
-            "null"
-          ],
+          "type": ["integer", "null"],
           "minimum": 0
         },
         "active": {
@@ -3824,11 +3221,7 @@
     "TriggerCredentialList": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "credentials"
-      ],
+      "required": ["schemaVersion", "requestId", "credentials"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3848,12 +3241,7 @@
     "TriggerCredentialIssued": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "credential",
-        "secret"
-      ],
+      "required": ["schemaVersion", "requestId", "credential", "secret"],
       "properties": {
         "schemaVersion": {
           "const": 1
@@ -3865,10 +3253,7 @@
           "$ref": "#/$defs/TriggerCredential"
         },
         "secret": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "pattern": "^[A-Za-z0-9_-]{43}$"
         }
       }
@@ -3876,12 +3261,7 @@
     "TriggerEventResponse": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schemaVersion",
-        "requestId",
-        "occurrence",
-        "duplicate"
-      ],
+      "required": ["schemaVersion", "requestId", "occurrence", "duplicate"],
       "properties": {
         "schemaVersion": {
           "const": 1
