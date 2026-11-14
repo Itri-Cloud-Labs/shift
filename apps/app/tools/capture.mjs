@@ -3,6 +3,7 @@
 // Starts `shift serve` from source on a free loopback port with throwaway state, creates a demo
 // project, workflow and waiting run with the CLI, then drives the app through its main views.
 import { execFileSync, spawn } from 'node:child_process';
+import { createHmac } from 'node:crypto';
 import { mkdir, mkdtemp, rm, chmod } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -529,6 +530,113 @@ try {
     await delay(200);
   }
   const releaseBase = `#/p/${project.id}/w/${release.id}`;
+  // Prompts 24 to 26: a workflow started by a GitHub event, a schedule and HTTP requests. A
+  // signed delivery starts one run, a second waits in the queue behind it, an HTTP event is sent
+  // by the sender script, and then the workflow is paused.
+  const intakeFile = join(temporaryRoot, 'intake.json');
+  await writeFile(
+    intakeFile,
+    JSON.stringify({
+      execution: { overlap: 'queue' },
+      nodes: [
+        {
+          id: 'pr_opened',
+          type: 'github_trigger',
+          config: { event: 'pull_request', actions: ['opened', 'synchronize'], branches: ['main'] },
+        },
+        {
+          id: 'nightly',
+          type: 'schedule_trigger',
+          config: {
+            schedule: { kind: 'cron', expression: '30 2 * * 1-5', timezone: 'Europe/Berlin' },
+          },
+        },
+        { id: 'intake', type: 'webhook_trigger', config: { auth: 'signature' } },
+        { id: 'triage', type: 'approval', config: { title: 'Triage the change' } },
+      ],
+      connections: [
+        {
+          id: 'i1',
+          fromNodeId: 'pr_opened',
+          fromPort: 'success',
+          toNodeId: 'triage',
+          toPort: 'input',
+        },
+        {
+          id: 'i2',
+          fromNodeId: 'nightly',
+          fromPort: 'success',
+          toNodeId: 'triage',
+          toPort: 'input',
+        },
+        {
+          id: 'i3',
+          fromNodeId: 'intake',
+          fromPort: 'success',
+          toNodeId: 'triage',
+          toPort: 'input',
+        },
+      ],
+    }),
+  );
+  const intake = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Event intake',
+    '--file',
+    intakeFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', intake.id, ...admin]);
+  const hookUrl = `${url}/api/v0/github/apps/${registered.id}/webhook`;
+  const deliver = async (deliveryId) => {
+    const body = JSON.stringify({
+      action: 'opened',
+      installation: { id: registered.installations[0].installationId },
+      repository: { id: 9001, name: 'widgets', owner: { login: 'acme' } },
+      sender: { login: 'octocat' },
+      pull_request: { number: 7, base: { ref: 'main' }, head: { ref: 'fix/rounding' } },
+    });
+    const response = await fetch(hookUrl, {
+      method: 'POST',
+      body,
+      headers: {
+        'content-type': 'application/json',
+        'x-github-event': 'pull_request',
+        'x-github-delivery': deliveryId,
+        'x-hub-signature-256': `sha256=${createHmac('sha256', 'whsec-capture-0123456789').update(body).digest('hex')}`,
+      },
+    });
+    if (!response.ok)
+      throw new Error(`Delivery refused: ${response.status} ${await response.text()}`);
+    return response.json();
+  };
+  const firstDelivery = await deliver('capture-delivery-1');
+  const triggeredRunId = firstDelivery.delivery.occurrences[0].runId;
+  await deliver('capture-delivery-2');
+  const intakeTriggers = await cli(['workflow', 'triggers', intake.id, ...admin]);
+  const webhookTrigger = intakeTriggers.find((item) => item.nodeId === 'intake');
+  const issued = await cli(['trigger', 'rotate', webhookTrigger.id, ...admin]);
+  const eventFile = join(temporaryRoot, 'event.json');
+  await writeFile(eventFile, JSON.stringify({ ticket: 'OPS-118', severity: 'high' }));
+  execFileSync(
+    process.execPath,
+    [
+      join(serverDirectory, 'tools/send-trigger-event.mjs'),
+      `${url}/api/v0/triggers/${webhookTrigger.id}/events`,
+      '--file',
+      eventFile,
+      '--signature',
+      '--event-id',
+      'ops-118',
+    ],
+    { env: { ...process.env, SHIFT_TRIGGER_SECRET: issued.secret }, stdio: 'ignore' },
+  );
+  await cli(['workflow', 'pause', intake.id, ...admin]);
+  const intakeBase = `#/p/${project.id}/w/${intake.id}`;
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   // Added through the app in step j01.
@@ -1157,6 +1265,46 @@ try {
       wait: 2000,
       script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
       expect: "document.querySelector('#checks-commit')?.value === '{{sha}}'",
+    },
+    {
+      name: 't1-schedule-form',
+      hash: `${intakeBase}/n/nightly`,
+      wait: 2500,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
+      expect:
+        "document.querySelectorAll('.schedule-preview li').length === 5 && document.querySelector('#nightly-zone')?.value === 'Europe/Berlin' && document.querySelector('.inspector')?.textContent.includes('While a run of this workflow is unfinished')",
+    },
+    {
+      name: 't2-github-trigger',
+      hash: `${intakeBase}/n/pr_opened`,
+      wait: 2500,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);`,
+      expect:
+        "document.querySelector('#pr_opened-event')?.value === 'pull_request' && document.querySelector('.trigger-history')?.textContent.includes('Started') && document.querySelector('.trigger-history')?.textContent.includes('Queued')",
+    },
+    {
+      name: 't3-webhook-setup',
+      hash: `${intakeBase}/n/intake`,
+      wait: 3500,
+      script: `setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200); setTimeout(() => J.click('.webhook-setup .button', 'Replace the secret'), 2200);`,
+      expect:
+        "document.querySelector('.webhook-setup code')?.textContent.includes('/api/v0/triggers/') && /^[A-Za-z0-9_-]{43}$/.test(document.querySelector('.secret-reveal code')?.textContent ?? '') && document.querySelector('.trigger-history')?.textContent.includes('ops-118')",
+    },
+    {
+      name: 't4-paused',
+      script:
+        "document.querySelector('.secret-reveal .button')?.click(); setTimeout(() => document.querySelector('[data-crumb=run]').click(), 400)",
+      wait: 1200,
+      expect:
+        "document.querySelector('.paused-badge')?.textContent.includes('Paused') && document.querySelector('.runs-menu')?.textContent.includes('Resume new runs')",
+    },
+    {
+      name: 't5-run-origin',
+      script: "window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))",
+      hash: `${intakeBase}/r/${triggeredRunId}`,
+      wait: 2000,
+      expect:
+        "document.querySelector('.run-status')?.textContent.includes('Started by a GitHub event (pr_opened)')",
     },
     {
       name: 'x8-closed',

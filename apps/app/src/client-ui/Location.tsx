@@ -1,4 +1,6 @@
 import {
+  CirclePause,
+  CirclePlay,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -51,7 +53,10 @@ export function LocationIsland({
   versions,
   version,
   create,
+  setEnabled,
 }: {
+  // Pauses (false) or unpauses (true) the workflow; absent while the server is out of reach.
+  setEnabled: ((enabled: boolean) => void) | null;
   // Published versions of this workflow, oldest first, and the one on screen.
   versions: { id: string; number: number; createdAt: number }[];
   version: { id: string; number: number } | null;
@@ -137,6 +142,15 @@ export function LocationIsland({
             </button>
           </>
         )}
+        {workflow && !workflow.enabled && (
+          <span
+            className="badge location-badge paused-badge"
+            title="No run starts until it is resumed"
+          >
+            <CirclePause aria-hidden="true" />
+            Paused
+          </span>
+        )}
         {badge && <span className="badge location-badge">{badge}</span>}
       </nav>
       {open === 'switcher' && (
@@ -205,6 +219,27 @@ export function LocationIsland({
             </button>
           ))}
           <div className="column-label">Runs</div>
+          {workflow && setEnabled && (
+            <button
+              className="option"
+              onClick={() => {
+                setEnabled(!workflow.enabled);
+                setOpen(null);
+              }}
+            >
+              {workflow.enabled ? (
+                <CirclePause aria-hidden="true" />
+              ) : (
+                <CirclePlay aria-hidden="true" />
+              )}
+              <span className="name">
+                {workflow.enabled ? 'Pause new runs' : 'Resume new runs'}
+              </span>
+              <span className="detail">
+                {workflow.enabled ? 'Runs already started continue' : 'Paused'}
+              </span>
+            </button>
+          )}
           {runs.length === 0 && <p className="option-empty">No runs of this workflow yet.</p>}
           {runs.map((item) => (
             <button

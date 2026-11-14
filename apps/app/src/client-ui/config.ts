@@ -479,6 +479,9 @@ export function formProblem(form: unknown): { at: string; message: string } | nu
 // advanced and kept; the server refuses it at publish.
 export const configKeys: Record<string, readonly string[]> = {
   manual_trigger: ['inputSchema'],
+  github_trigger: ['event', 'actions', 'branches'],
+  schedule_trigger: ['schedule', 'misfire'],
+  webhook_trigger: ['auth', 'inputSchema'],
   transform: ['data'],
   agent: ['goal', 'model', 'readOnly', 'resultSchema', 'limits', 'session', 'reports', 'handoffs'],
   wait: ['durationMs', 'until'],

@@ -4,6 +4,12 @@ import {
   validateCredentialList,
   validateGitHubAppList,
   validateGitHubConnectionResponse,
+  validateGitHubDeliveryPage,
+  validateTriggerList,
+  validateOccurrencePage,
+  validateTriggerCredentialList,
+  validateTriggerCredentialIssued,
+  validateSchedulePreview,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -97,6 +103,16 @@ export function validResource(kind: ResourceKind, value: unknown): boolean {
       return validateGitHubConnectionResponse(value);
     case 'githubApps':
       return validateGitHubAppList(value);
+    case 'githubDeliveries':
+      return validateGitHubDeliveryPage(value);
+    case 'triggers':
+      return validateTriggerList(value);
+    case 'occurrences':
+      return validateOccurrencePage(value);
+    case 'triggerCredentials':
+      return validateTriggerCredentialList(value);
+    case 'schedulePreview':
+      return validateSchedulePreview(value);
   }
 }
 
@@ -212,6 +228,83 @@ export async function dispatch(
         response = { kind: 'resource', resource: 'github', ...read };
         break;
       }
+      case 'data.githubDeliveries':
+      case 'data.triggers':
+      case 'data.occurrences':
+      case 'data.triggerCredentials':
+      case 'data.schedulePreview': {
+        const [kind, path] =
+          request.kind === 'data.githubDeliveries'
+            ? ([
+                'githubDeliveries',
+                `/api/v0/github/apps/${request.appId}/deliveries?limit=20`,
+              ] as const)
+            : request.kind === 'data.triggers'
+              ? (['triggers', `/api/v0/workflows/${request.workflowId}/triggers`] as const)
+              : request.kind === 'data.occurrences'
+                ? ([
+                    'occurrences',
+                    `/api/v0/occurrences?workflowId=${request.workflowId}&limit=30`,
+                  ] as const)
+                : request.kind === 'data.triggerCredentials'
+                  ? ([
+                      'triggerCredentials',
+                      `/api/v0/triggers/${request.triggerId}/credentials`,
+                    ] as const)
+                  : ([
+                      'schedulePreview',
+                      `/api/v0/schedules/preview?${new URLSearchParams(
+                        request.schedule.kind === 'cron'
+                          ? {
+                              kind: 'cron',
+                              expression: request.schedule.expression,
+                              timezone: request.schedule.timezone,
+                              count: '5',
+                            }
+                          : {
+                              kind: 'interval',
+                              minutes: String(request.schedule.minutes),
+                              count: '5',
+                            },
+                      )}`,
+                    ] as const);
+        const read = await core.resource(kind, path);
+        response = { kind: 'resource', resource: kind, ...read };
+        break;
+      }
+      case 'workflow.enable': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/workflows/${request.workflowId}/${request.enabled ? 'unpause' : 'pause'}`,
+          {},
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
+      case 'trigger.rotate': {
+        const { command, response: answer } = await core.command(
+          'POST',
+          `/api/v0/triggers/${request.triggerId}/credentials`,
+          request.previousMinutes === undefined ? {} : { previousMinutes: request.previousMinutes },
+        );
+        // The secret is handed on once and not kept: a later read of this command has none.
+        core.forgetResponse(command.commandId);
+        const secret =
+          validateTriggerCredentialIssued(answer) && typeof answer.secret === 'string'
+            ? answer.secret
+            : null;
+        response = { kind: 'issued', command, secret };
+        break;
+      }
+      case 'trigger.revoke': {
+        const { command } = await core.command(
+          'POST',
+          `/api/v0/triggers/${request.triggerId}/credentials/revoke`,
+          {},
+        );
+        response = { kind: 'command', command, runId: null };
+        break;
+      }
       case 'github.register':
       case 'github.rotate':
       case 'github.refresh':
@@ -239,6 +332,9 @@ export async function dispatch(
                     ...(request.webhookSecret === undefined
                       ? {}
                       : { webhookSecret: request.webhookSecret }),
+                    ...(request.previousSecretMinutes === undefined
+                      ? {}
+                      : { previousSecretMinutes: request.previousSecretMinutes }),
                   },
                 ]
               : request.kind === 'github.refresh'
@@ -300,6 +396,7 @@ export async function dispatch(
             ? await core.command('POST', '/api/v0/runs', {
                 workflowId: request.workflowId,
                 input: request.input,
+                ...(request.allowOverlap ? { allowOverlap: true } : {}),
               })
             : await core.command('POST', `/api/v0/runs/${request.runId}/cancel`, {});
         const run = (answer as { run?: { id?: unknown } } | null)?.run;

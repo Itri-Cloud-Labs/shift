@@ -12,6 +12,11 @@ import {
   validateCredentialList,
   validateGitHubAppList,
   validateGitHubConnectionResponse,
+  validateGitHubDeliveryPage,
+  validateTriggerList,
+  validateOccurrencePage,
+  validateTriggerCredentialList,
+  validateSchedulePreview,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
   validateDeviceList,
@@ -62,6 +67,11 @@ const validators: Record<ResourceKind, (value: unknown) => boolean> = {
   permissions: validateProjectPermissionsResponse,
   github: validateGitHubConnectionResponse,
   githubApps: validateGitHubAppList,
+  githubDeliveries: validateGitHubDeliveryPage,
+  triggers: validateTriggerList,
+  occurrences: validateOccurrencePage,
+  triggerCredentials: validateTriggerCredentialList,
+  schedulePreview: validateSchedulePreview,
 };
 
 // The largest report the server stores.
@@ -204,6 +214,11 @@ export class ClientCore {
       if (error instanceof SyncFailure) throw new ClientFailure('DISCONNECTED');
       throw error;
     }
+  }
+
+  // Drops the stored answer of a command, such as one that carried a secret already handed on.
+  forgetResponse(commandId: string): void {
+    this.sync.forgetResponse(commandId);
   }
 
   shell(): ShellState {

@@ -66,7 +66,7 @@ import type { Device } from './devices/registry.js';
 import type { Credentials } from './actions/credentials.js';
 import type { GitHubIntegration } from './github/integration.js';
 import type { GitHubWebhooks } from './github/webhooks.js';
-import type { ScheduleConfig } from './triggers/schedule.js';
+import { checkSchedule, type ScheduleConfig } from './triggers/schedule.js';
 import { Scheduler } from './triggers/scheduler.js';
 import type { HttpTriggers } from './triggers/http-triggers.js';
 import type { TriggerService } from './triggers/service.js';
@@ -375,16 +375,22 @@ export function createHttpServer(options: {
                 expression: (query(req, 'expression') ?? '').slice(0, 200),
                 timezone: (query(req, 'timezone') ?? '').slice(0, 64),
               };
-        if (schedule.kind === 'interval' && schedule.minutes < 1)
-          throw new ShiftError('INVALID_SCHEDULE', 'An interval is at least one minute.', 422);
         const now = options.clock.now();
         const after = cursor(req, 'after', Number.MAX_SAFE_INTEGER) ?? now;
         const anchor = cursor(req, 'anchor', Number.MAX_SAFE_INTEGER) ?? now;
         const count = cursor(req, 'count', 50) ?? 5;
+        // An invalid schedule is answered with the reason, so a form can show it as it is typed.
+        const problem =
+          schedule.kind === 'interval' && schedule.minutes < 1
+            ? 'An interval is at least one minute.'
+            : checkSchedule(schedule);
         reply(
           res,
           200,
-          { instants: Scheduler.preview(schedule, after, count, anchor) },
+          {
+            instants: problem ? [] : Scheduler.preview(schedule, after, count, anchor),
+            problem,
+          },
           validateSchedulePreview,
         );
       });

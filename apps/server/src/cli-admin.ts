@@ -296,10 +296,9 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
         params.set('timezone', values.timezone ?? 'UTC');
       }
       if (values.count) params.set('count', values.count);
-      const instants = (await get(`/api/v0/admin/schedules/preview?${params}`))[
-        'instants'
-      ] as number[];
-      return print(instants.map((at) => new Date(at).toISOString()));
+      const preview = await get(`/api/v0/admin/schedules/preview?${params}`);
+      if (typeof preview['problem'] === 'string') throw invalid(preview['problem']);
+      return print((preview['instants'] as number[]).map((at) => new Date(at).toISOString()));
     }
     case 'occurrence show':
       return print(

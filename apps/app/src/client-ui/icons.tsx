@@ -33,11 +33,17 @@ import {
   Upload,
   Waypoints,
   type LucideIcon,
+  CalendarClock,
+  RadioTower,
+  Webhook,
 } from 'lucide-react';
 import { statusLabels, type NodeStatus, type RunState } from './graph.js';
 
 export const typeIcons: Record<string, LucideIcon> = {
   manual_trigger: Play,
+  github_trigger: RadioTower,
+  schedule_trigger: CalendarClock,
+  webhook_trigger: Webhook,
   transform: Braces,
   agent: Bot,
   condition: Split,

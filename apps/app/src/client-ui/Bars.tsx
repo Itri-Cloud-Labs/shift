@@ -177,10 +177,13 @@ export function RunStatus({
   resolve,
   confirming,
   setConfirming,
+  origin = null,
 }: {
   run: Run;
   live: boolean;
   now: number;
+  // What started the run, when a trigger did rather than the owner.
+  origin?: string | null;
   // Opens the owner's decisions, when the run is stopped for one.
   resolve: (() => void) | null;
   // Held by the workspace, so ⌘K can ask too.
@@ -208,6 +211,7 @@ export function RunStatus({
         {runStateLabels[run.state]}
       </span>
       {(pending ?? reason) && <span className="reason">{pending ?? reason}</span>}
+      {origin && <span className="reason origin">{origin}</span>}
       <span className="time" title="Active time used of the run's limit">
         {clock(run.activeTime.usedMs)} / {clock(run.activeTime.limitMs)}
       </span>
@@ -503,6 +507,8 @@ export interface NoticeState {
   text: string;
   // `busy` while something is being confirmed; `problem` when it did not happen.
   tone: 'busy' | 'problem';
+  // One thing the owner can do about it, such as starting anyway.
+  action?: { label: string; run: () => void };
 }
 
 export function Notice({ notice, dismiss }: { notice: NoticeState; dismiss: () => void }) {
@@ -518,6 +524,11 @@ export function Notice({ notice, dismiss }: { notice: NoticeState; dismiss: () =
         <CircleAlert aria-hidden="true" />
       )}
       <span>{notice.text}</span>
+      {notice.action && (
+        <button className="button" onClick={notice.action.run}>
+          {notice.action.label}
+        </button>
+      )}
       {notice.tone === 'problem' && (
         <button className="button quiet" onClick={dismiss}>
           Dismiss

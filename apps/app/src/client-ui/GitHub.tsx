@@ -11,6 +11,8 @@ interface App {
   name: string | null;
   webhookSecret: 'configured' | 'missing';
   webhookPath: string;
+  previousWebhookSecretUntil: number | null;
+  events: string[] | null;
   verifiedAt: number | null;
   installations: Array<{
     id: string;
@@ -208,16 +210,22 @@ function AppCard({
   const [rotating, setRotating] = useState(false);
   const [privateKey, setPrivateKey] = useState('');
   const [secret, setSecret] = useState('');
+  const [keepMinutes, setKeepMinutes] = useState('');
   const webhook = serverUrl ? new URL(app.webhookPath, serverUrl).toString() : app.webhookPath;
   const rotate = async (event: FormEvent) => {
     event.preventDefault();
+    const keep = Number(keepMinutes);
     const input = {
       ...(privateKey ? { privateKey } : {}),
       ...(secret ? { webhookSecret: secret } : {}),
+      ...(secret && Number.isInteger(keep) && keep > 0 ? { previousSecretMinutes: keep } : {}),
     };
     setPrivateKey('');
     setSecret('');
-    if (await send(bridge().github.rotate(app.id, input))) setRotating(false);
+    if (await send(bridge().github.rotate(app.id, input))) {
+      setRotating(false);
+      setKeepMinutes('');
+    }
   };
   return (
     <div className="github-app">
@@ -244,7 +252,19 @@ function AppCard({
         <dt>Private key</dt>
         <dd>Configured</dd>
         <dt>Webhook secret</dt>
-        <dd>{app.webhookSecret === 'configured' ? 'Configured' : 'Missing'}</dd>
+        <dd>
+          {app.webhookSecret === 'configured' ? 'Configured' : 'Missing'}
+          {app.previousWebhookSecretUntil !== null &&
+            ` · the one before still works until ${new Date(app.previousWebhookSecretUntil).toLocaleTimeString()}`}
+        </dd>
+        <dt>Events</dt>
+        <dd>
+          {app.events === null
+            ? 'Not reported yet'
+            : app.events.length === 0
+              ? 'None subscribed: GitHub triggers receive nothing'
+              : app.events.join(', ')}
+        </dd>
         <dt>Webhook URL</dt>
         <dd className="github-webhook">
           <code>{webhook}</code>
@@ -283,6 +303,21 @@ function AppCard({
               onChange={(event) => setSecret(event.target.value)}
             />
           </div>
+          <div className="field">
+            <label htmlFor="github-rotate-keep">
+              Keep the old webhook secret working for (minutes, optional)
+            </label>
+            <input
+              id="github-rotate-keep"
+              inputMode="numeric"
+              value={keepMinutes}
+              onChange={(event) => setKeepMinutes(event.target.value.trim())}
+            />
+            <p className="note">
+              Time to change the secret in GitHub’s settings too. Without it, deliveries signed with
+              the old secret are refused at once.
+            </p>
+          </div>
           <p className="note">
             A new key is checked with GitHub before it replaces the old one. Workflows need no
             changes.
@@ -314,7 +349,56 @@ function AppCard({
           Replace key or secret
         </button>
       )}
+      <Deliveries appId={app.id} />
     </div>
+  );
+}
+
+interface Delivery {
+  id: string;
+  deliveryId: string;
+  event: string;
+  action: string | null;
+  receivedAt: number;
+  occurrences: Array<{ state: string }>;
+}
+
+// What GitHub sent lately and what it started; the payloads stay on the server.
+function Deliveries({ appId }: { appId: string }) {
+  const deliveries = useLive(async () => {
+    const answer = await ask(bridge().data.githubDeliveries(appId));
+    return answer.kind === 'resource'
+      ? (answer.value as { deliveries: Delivery[] }).deliveries
+      : null;
+  }, [appId]);
+  if (!deliveries) return null;
+  return (
+    <details className="github-deliveries">
+      <summary>Recent deliveries ({deliveries.length})</summary>
+      {deliveries.length === 0 ? (
+        <p className="note">GitHub has sent nothing yet.</p>
+      ) : (
+        <ul>
+          {deliveries.map((delivery) => {
+            const started = delivery.occurrences.filter((item) => item.state === 'ADMITTED').length;
+            return (
+              <li key={delivery.id}>
+                <span>
+                  {delivery.event}
+                  {delivery.action ? ` ${delivery.action}` : ''}
+                </span>
+                <span className="note">
+                  {relativeTime(delivery.receivedAt)} ·{' '}
+                  {delivery.occurrences.length === 0
+                    ? 'no trigger matched'
+                    : `${delivery.occurrences.length} matched, ${started} started`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </details>
   );
 }
 

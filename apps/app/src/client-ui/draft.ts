@@ -19,6 +19,7 @@ import {
   nodeWidth,
   outputPorts,
   readDocument,
+  triggerTypes,
   typeLabels,
   type DocumentNode,
 } from './graph.js';
@@ -92,12 +93,29 @@ export const addableTypes = [
   'github_merge',
   'end',
   'manual_trigger',
+  'github_trigger',
+  'schedule_trigger',
+  'webhook_trigger',
 ] as const;
 
 // Authored only in an explicit advanced mode: the picker lists them apart, behind a disclosure.
 export const advancedTypes = ['script'] as const;
 
-const startingConfig: Record<string, Raw> = {
+// This computer's time zone, the one a new schedule starts in.
+const localZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+};
+
+const startingConfig: Record<string, Raw | (() => Raw)> = {
+  github_trigger: { event: 'pull_request', actions: ['opened', 'synchronize'] },
+  schedule_trigger: () => ({
+    schedule: { kind: 'cron', expression: '0 9 * * 1-5', timezone: localZone() },
+  }),
+  webhook_trigger: { auth: 'signature' },
   transform: { data: {} },
   wait: { durationMs: 60_000 },
   human_input: { form: { type: 'object', properties: {} } },
@@ -115,6 +133,26 @@ const startingConfig: Record<string, Raw> = {
   github_wait_checks: { commit: '' },
   github_merge: { number: '' },
 };
+
+const startingNames: Record<string, string> = {
+  manual_trigger: 'start',
+  github_trigger: 'github_event',
+  schedule_trigger: 'schedule',
+  webhook_trigger: 'webhook',
+};
+
+// What a trigger does while a run of the workflow is unfinished (specification 12.1).
+export type Overlap = 'skip' | 'queue' | 'allow';
+
+export function overlapOf(draft: Draft): Overlap {
+  const value = (draft['execution'] as Raw | undefined)?.['overlap'];
+  return value === 'queue' || value === 'allow' ? value : 'skip';
+}
+
+export function setOverlap(draft: Draft, overlap: Overlap): Draft {
+  const execution = (draft['execution'] as Raw | undefined) ?? {};
+  return { ...draft, execution: { ...execution, overlap } };
+}
 
 function freeId(base: string, used: Set<string>): string {
   if (!used.has(base)) return base;
@@ -155,11 +193,12 @@ export function addNode(
   type: string,
   position: { x: number; y: number },
 ): { draft: Draft; nodeId: string } {
-  const nodeId = freeId(type === 'manual_trigger' ? 'start' : type, nodeIds(draft));
+  const nodeId = freeId(startingNames[type] ?? type, nodeIds(draft));
+  const starting = startingConfig[type];
   const node = {
     id: nodeId,
     type,
-    config: structuredClone(startingConfig[type] ?? {}),
+    config: typeof starting === 'function' ? starting() : structuredClone(starting ?? {}),
     position: freeSpot(draft, position),
   };
   return { draft: { ...draft, nodes: [...nodesOf(draft), node] }, nodeId };
@@ -574,6 +613,9 @@ const required: Record<string, { key: string; label: string }[]> = {
   github_merge: [{ key: 'number', label: 'a pull request number' }],
   github_verify_checks: [{ key: 'commit', label: 'a commit' }],
   github_wait_checks: [{ key: 'commit', label: 'a commit' }],
+  github_trigger: [{ key: 'event', label: 'an event' }],
+  schedule_trigger: [{ key: 'schedule', label: 'a schedule' }],
+  webhook_trigger: [{ key: 'auth', label: 'a way to authenticate' }],
 };
 
 // Config fields that may name bindings (server workflows/document.ts).
@@ -663,6 +705,21 @@ function nodeProblems(node: DocumentNode, bindings: Raw): DraftProblem[] {
       !/^[0-9a-fA-F]{40}$/.test((node.config[key] as string).trim())
     )
       add(key, `${node.id}: use a full 40-character commit SHA or a {{value}}, not a branch.`);
+  // A first check of a schedule; the server's matcher decides the rest, and its preview shows it.
+  if (node.type === 'schedule_trigger') {
+    const schedule = (node.config['schedule'] ?? {}) as Raw;
+    if (schedule['kind'] === 'interval') {
+      const minutes = schedule['minutes'];
+      if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1)
+        add('schedule', `${node.id}: an interval is a whole number of minutes, at least 1.`);
+    } else {
+      const expression = typeof schedule['expression'] === 'string' ? schedule['expression'] : '';
+      if (expression.trim().split(/\s+/).length !== 5)
+        add('schedule', `${node.id}: a cron schedule has five fields, such as 0 9 * * 1-5.`);
+      if (typeof schedule['timezone'] !== 'string' || schedule['timezone'] === '')
+        add('schedule', `${node.id}: a cron schedule needs a time zone.`);
+    }
+  }
   // The server's bounds for a wait's timing (apps/server/src/workflows/nodes.ts).
   if (node.type === 'github_wait_checks') {
     const interval = node.config['intervalMs'];
@@ -798,16 +855,21 @@ export function diagnose(draft: Draft): DraftProblem[] {
       field: null,
       message: 'The draft nests deeper than 32 levels.',
     });
-  const triggers = document.nodes.filter((node) => node.type === 'manual_trigger');
-  if (triggers.length !== 1)
+  // Each trigger is an entry point of its own; one of them may be the manual one.
+  if (!document.nodes.some((node) => triggerTypes.has(node.type)))
     problems.push({
       severity: 'error',
-      nodeId: triggers[1]?.id ?? null,
+      nodeId: null,
       field: null,
-      message:
-        triggers.length === 0
-          ? 'A workflow needs a manual trigger to start from.'
-          : 'A workflow has exactly one manual trigger for now. Remove the others.',
+      message: 'A workflow needs a trigger to start from.',
+    });
+  const manual = document.nodes.filter((node) => node.type === 'manual_trigger');
+  if (manual.length > 1)
+    problems.push({
+      severity: 'error',
+      nodeId: manual[1]!.id,
+      field: null,
+      message: 'A workflow has at most one manual trigger. Remove the others.',
     });
   const raw = new Map(nodesOf(draft).map((node) => [node['id'], node]));
   // A variable nothing writes can only be read with a fallback.
@@ -902,7 +964,8 @@ export function diagnose(draft: Draft): DraftProblem[] {
       });
     used.add(port);
   }
-  // Reached by following connections from the trigger. Never blocks publishing.
+  // Reached by following connections from any trigger. Never blocks publishing.
+  const triggers = document.nodes.filter((node) => triggerTypes.has(node.type));
   const reached = new Set<string>(triggers.map((node) => node.id));
   for (let grew = true; grew;) {
     grew = false;
@@ -919,7 +982,7 @@ export function diagnose(draft: Draft): DraftProblem[] {
           severity: 'warning',
           nodeId: node.id,
           field: null,
-          message: `No path from the trigger reaches ${node.id}.`,
+          message: `No path from a trigger reaches ${node.id}.`,
         });
   return problems;
 }
