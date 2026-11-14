@@ -474,9 +474,17 @@ function AdvancedConfig({
         </button>
         <button
           className="button"
-          disabled={checked?.kind !== 'ready' || checked.changes.length === 0}
+          // Only a configuration that passed Check, with something to change, replaces the node's.
+          disabled={
+            checked?.kind !== 'ready' || checked.changes.length === 0 || checked.problems.length > 0
+          }
           onClick={() => {
-            if (checked?.kind === 'ready') apply(checked.config);
+            if (
+              checked?.kind === 'ready' &&
+              checked.changes.length > 0 &&
+              checked.problems.length === 0
+            )
+              apply(checked.config);
           }}
         >
           Apply

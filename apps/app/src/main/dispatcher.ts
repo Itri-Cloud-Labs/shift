@@ -1,4 +1,6 @@
-import { open as openFile, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { open as openFile, rename, rm } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { ClientCore, ClientFailure, validFoundationResponse } from '../client-core/runtime.js';
 import {
   validateArtifactList,
@@ -326,7 +328,10 @@ export async function dispatch(
           response = { kind: 'saved', saved: false, bytes: 0 };
           break;
         }
-        const file = await openFile(target, 'w', 0o600);
+        // Written beside the destination and moved over it only when complete, so a failed or cut
+        // download never touches a file that was already there.
+        const temporary = join(dirname(target), `.${basename(target)}.${randomUUID()}.part`);
+        const file = await openFile(temporary, 'wx', 0o600);
         let bytes = 0;
         try {
           bytes = await core.download(
@@ -336,13 +341,13 @@ export async function dispatch(
               await file.write(chunk);
             },
           );
-        } catch (error) {
           await file.close();
-          // A partial file is not left behind looking complete.
-          await rm(target, { force: true });
+          await rename(temporary, target);
+        } catch (error) {
+          await file.close().catch(() => undefined);
+          await rm(temporary, { force: true });
           throw error;
         }
-        await file.close();
         response = { kind: 'saved', saved: true, bytes };
         break;
       }

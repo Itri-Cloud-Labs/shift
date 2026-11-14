@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   parseRequest,
   parseResponse,
@@ -18,7 +20,7 @@ import {
 } from '../src/main/security.js';
 import { dispatch } from '../src/main/dispatcher.js';
 import { validInteractions } from '../src/shared/interactions.js';
-import { ClientCore } from '../src/client-core/runtime.js';
+import { ClientCore, ClientFailure } from '../src/client-core/runtime.js';
 import { ConnectionRuntime } from '../src/client-core/connection.js';
 import { MemoryCredentialStore, MemoryProfileStore } from '../src/client-core/credentials.js';
 import { ServerHttp } from '../src/client-core/http.js';
@@ -380,4 +382,63 @@ test('trigger reads reach the server with exactly the filters asked for', async 
     parseRequest({ kind: 'data.occurrences', workflowId, triggerId: '../x' }),
     undefined,
   );
+});
+
+test('a download replaces the chosen file only once it is complete', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'shift-download-'));
+  try {
+    const target = join(directory, 'notes.txt');
+    await writeFile(target, 'kept');
+    let fail = true;
+    const downloading = {
+      download: async (
+        _path: string,
+        _limit: number,
+        write: (chunk: Uint8Array) => Promise<void>,
+      ) => {
+        await write(new TextEncoder().encode('partial'));
+        if (fail) throw new ClientFailure('DISCONNECTED');
+        return 7;
+      },
+    } as unknown as ClientCore;
+    const request = {
+      kind: 'workspace.download',
+      workspaceId: '00000000-0000-4000-8000-000000000001',
+      path: 'src/notes.txt',
+    };
+    const failed = await dispatch(
+      downloading,
+      trusted,
+      request,
+      async () => assert.fail(),
+      async () => target,
+    );
+    assert.equal(failed.kind, 'error');
+    // The file that was there is untouched, and nothing partial is left beside it.
+    assert.equal(await readFile(target, 'utf8'), 'kept');
+    assert.deepEqual(await readdir(directory), ['notes.txt']);
+    fail = false;
+    const saved = await dispatch(
+      downloading,
+      trusted,
+      request,
+      async () => assert.fail(),
+      async () => target,
+    );
+    assert.deepEqual(saved, { kind: 'saved', saved: true, bytes: 7 });
+    assert.equal(await readFile(target, 'utf8'), 'partial');
+    // Cancelling the dialog saves nothing.
+    assert.deepEqual(
+      await dispatch(
+        downloading,
+        trusted,
+        request,
+        async () => assert.fail(),
+        async () => null,
+      ),
+      { kind: 'saved', saved: false, bytes: 0 },
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
