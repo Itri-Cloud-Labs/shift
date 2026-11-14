@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addNode,
+  checkAdvanced,
   commit,
   connect,
   deleteNode,
@@ -368,4 +369,40 @@ test('action and Git nodes start valid where they can and diagnose what the serv
   const node = readDocument(scripted).nodes.find((item) => item.id === script.nodeId)!;
   assert.deepEqual(node.config, { source, timeoutMs: 2000 });
   assert.deepEqual(problemsOf(scripted, script.nodeId), []);
+});
+
+test('an Advanced configuration is checked in the whole draft and changes only the config', () => {
+  // A reviewer that reads the earlier agent's handoff, and binds to the trigger.
+  const review = addNode(base, 'agent', { x: 900, y: 0 });
+  let draft = setConfig(review.draft, review.nodeId, 'goal', 'Review it');
+  draft = setConfig(draft, review.nodeId, 'handoffs', { nodes: ['work'] });
+  const document = readDocument(draft);
+  // References to other nodes resolve, so a valid change is ready to apply.
+  const valid = checkAdvanced(
+    document,
+    review.nodeId,
+    JSON.stringify({ goal: 'Review it carefully', handoffs: { nodes: ['work'] } }),
+  );
+  assert.equal(valid.kind, 'ready');
+  assert.deepEqual(valid.kind === 'ready' && valid.problems, []);
+  assert.deepEqual(valid.kind === 'ready' && valid.changes, [{ key: 'goal', change: 'changed' }]);
+  // An unknown setting is kept as an addition; a handoff from a node that does not exist is not
+  // an error the editor would let through.
+  const added = checkAdvanced(
+    document,
+    'work',
+    JSON.stringify({ goal: 'Do it', later: 'x', more: 1 }),
+  );
+  assert.deepEqual(added.kind === 'ready' && added.changes, [
+    { key: 'later', change: 'changed' },
+    { key: 'more', change: 'added' },
+  ]);
+  const missing = checkAdvanced(
+    document,
+    'work',
+    JSON.stringify({ later: 'unknown to this form' }),
+  );
+  assert.ok(missing.kind === 'ready' && missing.problems.length > 0, 'a goal is required');
+  assert.equal(checkAdvanced(document, 'work', '{ nope').kind, 'problem');
+  assert.equal(checkAdvanced(document, 'work', '[1, 2]').kind, 'problem');
 });

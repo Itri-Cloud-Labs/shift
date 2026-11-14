@@ -392,6 +392,10 @@ export function runReason(run: Run, now: number): string | null {
       return `${node ?? 'A step'} reads the checks again${until}: ${state} so far${deadline !== null && deadline > now ? `, gives up in ${duration(deadline - now)}` : ''}`;
     }
   }
+  if (run.state === 'HELD')
+    return run.hold?.activeWork
+      ? 'Held: a step is still finishing'
+      : 'Held for you: nothing new starts until you resume';
   if (run.state === 'NEEDS_HUMAN' && run.attention) {
     const explanation = run.attention['explanation'];
     return typeof explanation === 'string' ? explanation : 'This run needs you.';

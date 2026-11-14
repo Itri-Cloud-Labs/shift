@@ -2671,3 +2671,116 @@ textarea {
   color: var(--ink-muted);
   font-size: var(--text-sm);
 }
+
+/* ---------- Intervention and the workspace browser ---------- */
+
+.intervention,
+.workspace-files {
+  top: 72px;
+  left: var(--space-3);
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+  box-shadow: var(--shadow-modal);
+  animation: island-in var(--duration) var(--ease-out);
+}
+
+.intervention {
+  width: min(400px, calc(100vw - 32px));
+}
+
+.workspace-files {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.intervention-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.intervention-head h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.intervention textarea {
+  width: 100%;
+}
+
+.workspace-files .tabs {
+  padding: 0;
+}
+
+.files-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.crumbs svg {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+}
+
+.file-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.file-list .option {
+  width: 100%;
+}
+
+.file-list .status-code {
+  min-width: 2ch;
+  color: var(--status-waiting);
+}
+
+.file-text,
+.diff-text {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  font-size: var(--text-xs);
+  white-space: pre;
+}
+
+.diff-text .added {
+  color: var(--accent);
+}
+
+.diff-text .removed {
+  color: var(--status-failed);
+}
+
+.advanced-config textarea {
+  width: 100%;
+  font-size: var(--text-xs);
+}
+
+.advanced-preview ul {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
+}

@@ -3,6 +3,13 @@ import * as v from 'valibot';
 export const IPC_CHANNEL = 'shift:desktop:v1';
 // Main tells the renderer that connection or synchronized state changed; it carries no data.
 export const CHANGE_CHANNEL = 'shift:desktop:v1:changed';
+// Main asks the window to show a run, such as one a notification was about.
+export const OPEN_CHANNEL = 'shift:desktop:v1:open';
+export const openSchema = v.strictObject({
+  runId: v.pipe(v.string(), v.regex(/^[0-9a-f-]{36}$/)),
+  nodeId: v.nullable(v.pipe(v.string(), v.maxLength(64))),
+});
+export type OpenTarget = v.InferOutput<typeof openSchema>;
 export const REQUEST_LIMIT = 8 * 1024;
 // Saving sends the whole draft, which the server limits to 1 MiB.
 export const SAVE_LIMIT = 1024 * 1024 + 1024;
@@ -157,6 +164,38 @@ export const requestSchema = v.variant('kind', [
     allowOverlap: v.optional(v.boolean()),
   }),
   v.strictObject({ kind: v.literal('run.cancel'), runId: profileId }),
+  // The owner's own message to a held run's agent session.
+  v.strictObject({
+    kind: v.literal('run.message'),
+    runId: profileId,
+    message: v.pipe(v.string(), v.minLength(1), v.maxLength(20_000)),
+    sessionId: v.optional(profileId),
+  }),
+  // Read-only, live inspection of a run's workspace. Paths are relative to it; the server keeps
+  // them inside it.
+  v.strictObject({
+    kind: v.literal('data.workspaceFiles'),
+    workspaceId: profileId,
+    path: v.pipe(v.string(), v.maxLength(4096)),
+  }),
+  v.strictObject({
+    kind: v.literal('data.workspaceFile'),
+    workspaceId: profileId,
+    path: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
+  }),
+  v.strictObject({ kind: v.literal('data.workspaceStatus'), workspaceId: profileId }),
+  v.strictObject({
+    kind: v.literal('data.workspaceDiff'),
+    workspaceId: profileId,
+    against: v.picklist(['base', 'head']),
+    path: v.optional(v.pipe(v.string(), v.maxLength(4096))),
+  }),
+  // Saves a workspace file where the owner chooses, through main's own dialog.
+  v.strictObject({
+    kind: v.literal('workspace.download'),
+    workspaceId: profileId,
+    path: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
+  }),
   // The owner's decision for a run that needs them. The server checks that it applies.
   v.strictObject({
     kind: v.literal('run.control'),
@@ -168,6 +207,13 @@ export const requestSchema = v.variant('kind', [
         reason: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(1000))),
       }),
       v.strictObject({ kind: v.literal('complete'), data: v.unknown() }),
+      // Manual intervention: hold the run, stop its running step, and end the hold.
+      v.strictObject({
+        kind: v.literal('hold'),
+        reason: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(1000))),
+      }),
+      v.strictObject({ kind: v.literal('abort') }),
+      v.strictObject({ kind: v.literal('resume') }),
       v.strictObject({
         kind: v.literal('extend'),
         executions: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(10_000))),
@@ -346,6 +392,9 @@ export const resourceKindSchema = v.picklist([
   'occurrences',
   'triggerCredentials',
   'schedulePreview',
+  'workspaceFiles',
+  'workspaceFile',
+  'workspaceGit',
 ]);
 export type ResourceKind = v.InferOutput<typeof resourceKindSchema>;
 export const commandViewSchema = v.strictObject({
@@ -440,6 +489,12 @@ export const responseSchema = v.variant('kind', [
     text: v.pipe(v.string(), v.maxLength(1024 * 1024)),
   }),
   v.strictObject({ kind: v.literal('preferences'), preferences: preferencesSchema }),
+  // Where a download was saved, or that the owner cancelled the dialog.
+  v.strictObject({
+    kind: v.literal('saved'),
+    saved: v.boolean(),
+    bytes: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  }),
   // A webhook trigger secret, shown to the owner once. Main keeps no copy.
   v.strictObject({
     kind: v.literal('issued'),
@@ -506,6 +561,14 @@ export interface DesktopBridge {
         | { kind: 'interval'; minutes: number },
     ): Promise<DesktopResponse>;
   };
+  workspace: {
+    files(workspaceId: string, path: string): Promise<DesktopResponse>;
+    file(workspaceId: string, path: string): Promise<DesktopResponse>;
+    status(workspaceId: string): Promise<DesktopResponse>;
+    diff(workspaceId: string, against: 'base' | 'head', path?: string): Promise<DesktopResponse>;
+    // Asks where to save, then writes the file's bytes there; the renderer never holds them.
+    download(workspaceId: string, path: string): Promise<DesktopResponse>;
+  };
   trigger: {
     // Issues a new secret, answered once as `issued`; the replaced ones stop now or after
     // `previousMinutes`.
@@ -546,6 +609,7 @@ export interface DesktopBridge {
     start(workflowId: string, input: unknown, allowOverlap?: boolean): Promise<DesktopResponse>;
     cancel(runId: string): Promise<DesktopResponse>;
     control(runId: string, control: RunControl): Promise<DesktopResponse>;
+    message(runId: string, message: string, sessionId?: string): Promise<DesktopResponse>;
   };
   interaction: {
     list(): Promise<DesktopResponse>;
@@ -586,6 +650,8 @@ export interface DesktopBridge {
   };
   // Calls the listener whenever connection or synchronized state may have changed.
   onChange(listener: () => void): () => void;
+  // A run main wants shown, such as the one a clicked notification was about.
+  onOpen(listener: (target: OpenTarget) => void): () => void;
   setSamples(enabled: boolean): Promise<DesktopResponse>;
   queryServer(operation: FoundationQuery): Promise<DesktopResponse>;
   openDocumentation(): Promise<DesktopResponse>;
@@ -627,6 +693,7 @@ export function parseRequest(value: unknown): DesktopRequest | undefined {
       : kind === 'interaction.respond' ||
           kind === 'run.control' ||
           kind === 'session.goal' ||
+          kind === 'run.message' ||
           kind === 'credential.put' ||
           kind === 'github.register' ||
           kind === 'github.rotate'

@@ -25,6 +25,8 @@ import {
   health,
 } from './Bars.js';
 import { AttentionToast, Inbox, Resolve } from './Attention.js';
+import { WorkspaceFiles } from './Files.js';
+import { InterventionIsland } from './Intervention.js';
 import { attentionItems, runControls, type AttentionItem } from './owner.js';
 import { ask, bridge, useLive, type DesktopState } from './bridge.js';
 import { finished, followed, layout, nodeRuns, readDocument, type GraphDocument } from './graph.js';
@@ -122,6 +124,23 @@ function Shell({ desktop }: { desktop: DesktopState }) {
   const flow = useReactFlow();
   const [route, navigate] = useRoute();
   const live = sync.status === 'live';
+  // The intervention island and the workspace browser, for the run on screen.
+  const [intervening, setIntervening] = useState(false);
+  const [filesOf, setFilesOf] = useState<string | null>(null);
+  // A run main asks to show, such as one a notification was about.
+  const latestOverview = useRef(overview);
+  latestOverview.current = overview;
+  useEffect(
+    () =>
+      bridge().onOpen(({ runId, nodeId }) => {
+        const current = latestOverview.current;
+        const run = current.runs.find((item) => item.id === runId);
+        const workflow = current.workflows.find((item) => item.id === run?.workflowId);
+        if (!run || !workflow) return;
+        navigate({ projectId: workflow.projectId, workflowId: workflow.id, runId, nodeId });
+      }),
+    [],
+  );
   const projectId =
     overview.projects.find((item) => item.id === route.projectId)?.id ??
     overview.projects[0]?.id ??
@@ -943,6 +962,7 @@ function Shell({ desktop }: { desktop: DesktopState }) {
             run={runValue}
             live={live}
             now={now}
+            intervene={() => setIntervening(!intervening)}
             origin={(() => {
               const started = runValue as {
                 entryNodeId?: string | null;
@@ -1150,6 +1170,22 @@ function Shell({ desktop }: { desktop: DesktopState }) {
         <Palette entries={entries} choose={choose} close={() => setPaletteOpen(false)} />
       )}
       {notice && <Notice notice={notice} dismiss={() => setNotice(null)} />}
+      {runValue && intervening && (
+        <InterventionIsland
+          run={runValue}
+          live={live}
+          close={() => setIntervening(false)}
+          openFiles={
+            runValue.workspace?.id
+              ? () => {
+                  setFilesOf(runValue.workspace!.id);
+                  setIntervening(false);
+                }
+              : null
+          }
+        />
+      )}
+      {filesOf && <WorkspaceFiles workspaceId={filesOf} close={() => setFilesOf(null)} />}
       {workflowId && (
         <Toolbar
           listOpen={listOpen}

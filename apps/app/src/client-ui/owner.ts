@@ -99,7 +99,8 @@ export function runControls(run: Run): RunControls {
       nodeId: typeof limit?.nodeId === 'string' ? limit.nodeId : (limited?.node ?? null),
     };
   }
-  if (code === 'CANCEL_UNCONFIRMED') return none;
+  // A step the owner stopped to intervene is resumed from the intervention island.
+  if (code === 'CANCEL_UNCONFIRMED' || code === 'INTERVENING') return none;
   return {
     ...none,
     retry: stuck !== undefined,

@@ -637,6 +637,58 @@ try {
   );
   await cli(['workflow', 'pause', intake.id, ...admin]);
   const intakeBase = `#/p/${project.id}/w/${intake.id}`;
+  // Prompt 27: an agent step that finished, then an approval, held for the owner; and a file the
+  // agent changed in its workspace.
+  const assistFile = join(temporaryRoot, 'assist.json');
+  await writeFile(
+    assistFile,
+    JSON.stringify({
+      execution: { overlap: 'allow' },
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        {
+          id: 'draft',
+          type: 'agent',
+          config: {
+            goal: 'Draft the release notes. [fake-say Drafted the notes.] [fake-result {"status":"completed","data":{"done":true}}]',
+          },
+        },
+        { id: 'check', type: 'approval', config: { title: 'Are the notes right?' } },
+      ],
+      connections: [
+        { id: 'a1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'draft', toPort: 'input' },
+        { id: 'a2', fromNodeId: 'draft', fromPort: 'success', toNodeId: 'check', toPort: 'input' },
+      ],
+    }),
+  );
+  const assist = await cli([
+    'workflow',
+    'create',
+    '--project',
+    project.id,
+    '--name',
+    'Assist',
+    '--file',
+    assistFile,
+    ...admin,
+  ]);
+  await cli(['workflow', 'publish', assist.id, ...admin]);
+  let assistRun = await cli(['run', 'start', '--workflow', assist.id, ...admin]);
+  for (let index = 0; index < 150 && assistRun.wait?.kind !== 'human'; index++) {
+    await delay(200);
+    assistRun = await cli(['run', 'show', assistRun.id, ...admin]);
+  }
+  if (assistRun.wait?.kind !== 'human') throw new Error(`The assist run is ${assistRun.state}`);
+  await writeFile(
+    join(assistRun.workspace.path, 'RELEASE_NOTES.md'),
+    '# 1.4\n\n- Rounds half-cents up.\n',
+  );
+  await writeFile(
+    join(assistRun.workspace.path, 'invoice.ts'),
+    'export const round = (x: number) => Math.round(x);\n',
+  );
+  await cli(['run', 'hold', assistRun.id, '--reason', 'Check the notes first', ...admin]);
+  const assistBase = `#/p/${project.id}/w/${assist.id}`;
   const { phrase } = await cli(['device', 'pair', ...admin]);
 
   // Added through the app in step j01.
@@ -1306,6 +1358,44 @@ try {
       wait: 2000,
       expect:
         "document.querySelector('.run-status .origin')?.textContent === 'from pr_opened' && document.querySelector('.run-status .origin').title === 'Started by a GitHub event (pr_opened)'",
+    },
+    {
+      name: 'i1-intervene-held',
+      hash: `${assistBase}/r/${assistRun.id}`,
+      wait: 2500,
+      script: `setTimeout(() => J.click('.run-status .button', 'Held'), 1200);`,
+      expect:
+        "document.querySelector('.run-status')?.textContent.includes('Held') && document.querySelector('.intervention')?.textContent.includes('Check the notes first') && !document.querySelector('#intervention-message').disabled",
+    },
+    {
+      name: 'i2-workspace-files',
+      script: `J.click('.intervention .button', 'Look at the workspace'); setTimeout(() => J.click('.file-list .option', 'RELEASE_NOTES.md'), 900);`,
+      wait: 2200,
+      expect:
+        "document.querySelector('.workspace-files')?.textContent.includes('Live and read-only') && document.querySelector('.file-text')?.textContent.includes('Rounds half-cents up')",
+    },
+    {
+      name: 'i3-workspace-changes',
+      script: `J.click('.workspace-files .tab', 'Changes');`,
+      wait: 2200,
+      expect:
+        "document.querySelector('.workspace-files')?.textContent.includes('invoice.ts') && document.querySelector('.workspace-files')?.textContent.includes('2 changed')",
+    },
+    {
+      name: 'i4-advanced-config',
+      script: `window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+        setTimeout(() => J.click('.inspector .tab', 'Edit'), 1200);
+        setTimeout(() => {
+          const details = document.querySelector('.advanced-config');
+          details.open = true;
+          details.scrollIntoView({ block: 'start' });
+          J.set('#prepare-advanced-config', JSON.stringify({ data: { files: 42, area: 'billing', owner: 'payments' } }, null, 2));
+          J.click('.advanced-config .button', 'Check');
+        }, 1800);`,
+      hash: `${base}/n/prepare`,
+      wait: 2800,
+      expect:
+        "document.querySelector('.advanced-preview')?.textContent.includes('data changed') && !document.querySelector('.advanced-config button:disabled')?.textContent.includes('Apply')",
     },
     {
       name: 'x8-closed',

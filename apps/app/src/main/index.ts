@@ -162,6 +162,14 @@ async function createWindow(): Promise<void> {
       },
       value,
       (url) => shell.openExternal(url),
+      // Downloads go where the owner chooses, through main's own dialog.
+      async (name) => {
+        if (capture) return null;
+        const choice = await dialog.showSaveDialog(owned, {
+          defaultPath: name.replace(/[\\/]/g, '_'),
+        });
+        return choice.canceled || !choice.filePath ? null : choice.filePath;
+      },
     ),
   );
   // The renderer holds back unloading while edits are unsaved; the choice is made here. Capture

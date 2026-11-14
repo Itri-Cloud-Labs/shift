@@ -820,3 +820,19 @@ Status: prompt 27's server work for holds, manual messages and workspace inspect
   - Resume is refused while the owner's message is still being answered. An abort acknowledged just before a restart is finished at startup: the step is stopped, not continued.
   - Inspection lists a workspace without `.git`, reads text, follows a link inside, flags binary and truncates large text without splitting a character; refuses links to `/etc`, `..`, absolute paths, `.git`, directories, a FIFO and missing files; downloads exact bytes, and an empty file, with no file left open after twenty read and twenty abandoned downloads; reports Git status and diff; and refuses a removed workspace.
 - **Not verified:** desktop UI for these (next).
+
+## Intervention, inspection and attention in the desktop app (27)
+
+Status: the desktop part of prompt 27, which completes it. Date: 2026-11-14.
+
+- **Changed:**
+  - **Intervene:** a run's status island opens an Intervene island. It holds the run (with an optional reason) and explains the hold. Once held, it stops a running step, sends the owner's message to the run's agent session (the composer opens only while nothing runs and once the run has an agent session), and resumes, saying when resume runs a stopped step again. Closing the island or the app leaves the hold; reopening shows it. A held run reads "Held" with why in the status island, and a step stopped to intervene is resumed there rather than decided.
+  - **Workspace:** a read-only, live browser of the run's workspace, labelled as not a recorded result: folders with breadcrumbs, a file's text (with its 512 KiB cut noted), binary files offered as downloads, and a Changes tab with Git status and the diff against the run's base, added and removed lines coloured. Downloads go through main's save dialog to a temporary file beside the destination, moved over it only when complete; the renderer never holds the bytes, and a failed download leaves an existing file untouched and nothing partial.
+  - **Advanced configuration:** each node has "Edit the whole configuration", its config as JSON. Check parses it, runs the editor's checks and previews added, removed and changed settings; only Apply, once Check found no error, replaces the config, never the node's name, position or connections. Invalid JSON changes nothing.
+  - **Attention:** OS notifications now open the run, and the step, they are about. They stay links: the attention list is the server's, whether or not a notification was shown.
+  - The bridge adds `run.message`, run controls `hold`, `abort` and `resume`, `workspace.files|file|status|diff|download` and `onOpen`, checked in main and preload.
+- **Verified:**
+  - `tools/capture.mjs` against a real server: a run whose agent step finished and that waits at an approval, held with a reason, shows the Intervene island with the composer open; the workspace browser shows the agent's file and the Changes tab its new file; the Advanced editor previews a changed `data` on a Transform.
+  - `pnpm smoke` with the new allow-lists, including a path-like workspace ID, an empty download path and an empty message refused at the bridge. Unit tests cover the held reason, intervening decisions and notification targets.
+- **Not done:** a run's event timeline in the app (the server pages it with `GET /events?runId=`); the inspector's pass picker and execution pages from prompt 12 cover per-step history.
+- **Not verified:** OS notification clicks under a real desktop session (CI has none); real OpenCode under a hold (the server tests use the scripted harness).

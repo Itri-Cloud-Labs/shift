@@ -13,7 +13,13 @@ import {
   type BindingEditing,
 } from './Builders.js';
 import { unknownConfig, withMethod } from './config.js';
-import { addableTypes, advancedTypes, type DraftProblem } from './draft.js';
+import {
+  addableTypes,
+  advancedTypes,
+  checkAdvanced,
+  type AdvancedCheck as Checked,
+  type DraftProblem,
+} from './draft.js';
 import { TextField, Typing } from './Fields.js';
 import {
   outputPorts,
@@ -360,6 +366,104 @@ function Advanced({ node }: { node: DocumentNode }) {
         publish.
       </p>
       <pre>{JSON.stringify(hidden, null, 2)}</pre>
+    </details>
+  );
+}
+
+// Advanced mode (client specification 6.3): the node's whole configuration as JSON. It is parsed
+// and checked, its changes previewed, and only Apply replaces the configuration; the node's name,
+// position and connections stay the editor's. Invalid input never touches the node, and settings
+// the forms do not show survive later form edits.
+function AdvancedConfig({
+  node,
+  document,
+  apply,
+}: {
+  node: DocumentNode;
+  // The draft it belongs to, for checks that look at other nodes.
+  document: GraphDocument;
+  apply: (config: Record<string, unknown>) => void;
+}) {
+  const current = JSON.stringify(node.config, null, 2);
+  const [text, setText] = useState(current);
+  const [checked, setChecked] = useState<Checked | null>(null);
+  useEffect(() => {
+    setText(current);
+    setChecked(null);
+  }, [current]);
+  const check = (): Checked => checkAdvanced(document, node.id, text);
+  return (
+    <details className="field-group advanced advanced-config">
+      <summary>Edit the whole configuration (Advanced)</summary>
+      <p className="note">
+        Paste or edit the node’s configuration as JSON. Its name, position and connections are not
+        part of it. Nothing changes until you apply, and publishing stays a separate step.
+      </p>
+      <textarea
+        id={`${node.id}-advanced-config`}
+        aria-label="Configuration as JSON"
+        className="mono"
+        rows={10}
+        spellCheck={false}
+        value={text}
+        onChange={(event) => {
+          setText(event.target.value);
+          setChecked(null);
+        }}
+      />
+      {checked?.kind === 'problem' && <p className="field-error">{checked.message}</p>}
+      {checked?.kind === 'ready' && (
+        <div className="advanced-preview" aria-live="polite">
+          {checked.changes.length === 0 ? (
+            <p className="note">No change.</p>
+          ) : (
+            <ul>
+              {checked.changes.map((item) => (
+                <li key={item.key}>
+                  <span className="mono">{item.key}</span> {item.change}
+                </li>
+              ))}
+            </ul>
+          )}
+          {checked.problems.map((problem, index) => (
+            <p key={index} className="field-error">
+              {problem}
+            </p>
+          ))}
+        </div>
+      )}
+      <div className="actions">
+        <button className="button" onClick={() => setChecked(check())}>
+          Check
+        </button>
+        <button
+          className="button"
+          // Only a configuration that passed Check, with something to change, replaces the node's.
+          disabled={
+            checked?.kind !== 'ready' || checked.changes.length === 0 || checked.problems.length > 0
+          }
+          onClick={() => {
+            if (
+              checked?.kind === 'ready' &&
+              checked.changes.length > 0 &&
+              checked.problems.length === 0
+            )
+              apply(checked.config);
+          }}
+        >
+          Apply
+        </button>
+        <button
+          className="button quiet"
+          disabled={text === current}
+          onClick={() => {
+            setText(current);
+            setChecked(null);
+          }}
+        >
+          Discard edits
+        </button>
+      </div>
     </details>
   );
 }
@@ -1249,6 +1353,11 @@ export function NodeEditor({
           />
         )}
         <Advanced node={node} />
+        <AdvancedConfig
+          node={node}
+          document={document}
+          apply={(config) => editing.setNode('config', config)}
+        />
       </Typing.Provider>
       {entry && node.type !== 'manual_trigger' && <TriggerHistory node={node} context={trigger} />}
       {ports.length > 0 && (

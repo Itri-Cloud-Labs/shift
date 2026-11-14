@@ -20,6 +20,7 @@ import {
   WifiOff,
   ZoomIn,
   ZoomOut,
+  Hand,
 } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Run } from '../protocol/generated/types.js';
@@ -178,7 +179,10 @@ export function RunStatus({
   confirming,
   setConfirming,
   origin = null,
+  intervene = null,
 }: {
+  // Opens the intervention island: hold, messages, resume and the workspace.
+  intervene?: (() => void) | null;
   run: Run;
   live: boolean;
   now: number;
@@ -224,6 +228,12 @@ export function RunStatus({
       {resolve && !confirming && (
         <button className="button primary" onClick={resolve}>
           Decide…
+        </button>
+      )}
+      {intervene && !confirming && (!finished(run.state) || run.workspace) && (
+        <button className="button" onClick={intervene}>
+          <Hand aria-hidden="true" />
+          {run.hold ? 'Held…' : finished(run.state) ? 'Workspace…' : 'Intervene…'}
         </button>
       )}
       {cancellable &&
