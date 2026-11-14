@@ -122,27 +122,30 @@ export class Scheduler {
     const state = JSON.parse(row.state_json) as ScheduleState;
     const policy = config.misfire ?? 'latest';
     const schedule = new Schedule(config.schedule, state.anchor);
-    const found = schedule.between(state.cursor, now, replayCap);
-    const onTime = found.kept.filter((at) => now - at <= misfireGraceMs);
+    // The newest instants are found walking back from now, so a long downtime can never push
+    // them out; one more than the replay cap tells where the missed ones end.
+    const newest = schedule.newest(state.cursor, now, replayCap + 1);
+    const { count, capped } = schedule.count(state.cursor, now);
+    const onTime = newest.filter((at) => now - at <= misfireGraceMs);
     const fire =
-      found.count === 0
+      newest.length === 0
         ? []
         : policy === 'latest'
-          ? [found.kept.at(-1)!]
+          ? newest.slice(-1)
           : policy === 'skip'
             ? onTime
-            : found.kept;
-    const missed = found.count - fire.length;
+            : newest.slice(-replayCap);
+    // A capped count is a lower bound; it still holds at least every instant found here.
+    const total = Math.max(count, newest.length);
+    const missed = total - fire.length;
     const next: ScheduleState = { anchor: state.anchor, cursor: now };
     if (missed > 0) {
-      // The missed instants are the oldest ones; the fired ones are the newest.
-      const lastMissed = schedule.between(state.cursor, now, 1, missed).kept[0]!;
       next.lastMisfire = {
         policy,
         missed,
-        capped: found.capped,
-        from: iso(found.first!),
-        to: iso(lastMissed),
+        capped,
+        from: iso(schedule.next(state.cursor)!),
+        to: iso(newest[newest.length - fire.length - 1]!),
         at: iso(now),
       };
     } else if (state.lastMisfire) next.lastMisfire = state.lastMisfire;

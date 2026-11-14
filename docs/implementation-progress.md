@@ -770,6 +770,7 @@ Status: prompt 25's server work (M12). Desktop controls follow with 26. Date: 20
 - **Verified** (`test/schedules.test.ts`, injected clock):
   - New York's spring-forward 02:30 is skipped and its repeated 01:00 and 01:30 fire once, including from inside the repeated hour; Lord Howe's half-hour change; Berlin weekdays, Kolkata's offset, 29 February, day-of-month-or-weekday, 90-minute UTC intervals, and refusal of macros, seconds, `L`, `#`, bad values, unknown zones, offsets and abbreviations.
   - Each instant fires once and the run's input names it. Ten hours of downtime fire the latest instant (119 missed), only on-time ones for `skip`, and the newest 100 for `replay` with 20 summarized.
+  - After 1,000,010 minutes of downtime, `latest` fires the newest minute and counts the rest exactly, `replay` fires the newest 100, and a per-minute cron fires the newest instant with a capped count.
   - Pause discards its hour and unpause starts at the next instant; an unchanged republish keeps catching up, a changed schedule starts from now with the new version; interval instants count from publication.
   - Concurrent ticks, and a cursor rewound as if the transaction had been cut after the occurrence, start one run; a restart continues from the stored cursor.
   - A queued scheduled occurrence waits through a Pause and a new version, then runs the version it captured.

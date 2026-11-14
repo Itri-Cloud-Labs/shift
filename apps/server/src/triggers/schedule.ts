@@ -117,6 +117,45 @@ export class Schedule {
     this.#fields = config.kind === 'cron' ? (parseCron(config.expression) as Fields) : null;
   }
 
+  // The instants of one local day, in order, or none when the day does not match.
+  *#day(date: Date): Generator<number> {
+    const timezone = (this.#config as { timezone: string }).timezone;
+    const fields = this.#fields!;
+    const [month, dayOfMonth] = [date.getUTCMonth() + 1, date.getUTCDate()];
+    if (!fields.months.has(month)) return;
+    const byDay = fields.days.has(dayOfMonth);
+    const byWeekday = fields.weekdays.has(date.getUTCDay());
+    if (fields.either ? !(byDay || byWeekday) : !(byDay && byWeekday)) return;
+    const midnight = date.getTime();
+    // The offsets either side of this local day; equal ones mean no change of clocks today.
+    const before = offsetAt(midnight - day, timezone);
+    const later = offsetAt(midnight + 2 * day, timezone);
+    for (const hour of fields.hours)
+      for (const minuteOfHour of fields.minutes) {
+        const wall = midnight + hour * 60 * minute + minuteOfHour * minute;
+        if (before === later) {
+          yield wall - before;
+          continue;
+        }
+        // The earliest instant whose local time is this wall time, if any.
+        const valid = [wall - before, wall - later]
+          .filter((candidate) => candidate + offsetAt(candidate, timezone) === wall)
+          .sort((a, b) => a - b);
+        if (valid[0] !== undefined) yield valid[0];
+      }
+  }
+
+  // Local days from the one around `at`, forwards or backwards, for thirty years.
+  *#days(at: number, step: 1 | -1): Generator<Date> {
+    const timezone = (this.#config as { timezone: string }).timezone;
+    // Start a day outside: the local date of `at` can differ from its UTC date.
+    const start = new Date(at + offsetAt(at, timezone) - step * day);
+    for (let index = 0; index < searchDays; index++)
+      yield new Date(
+        Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + step * index),
+      );
+  }
+
   // Matching instants strictly after `after`, in order.
   *instants(after: number): Generator<number> {
     if (this.#config.kind === 'interval') {
@@ -127,64 +166,55 @@ export class Schedule {
         at += step;
       }
     }
-    const timezone = this.#config.timezone;
-    const fields = this.#fields!;
-    // Start a day early: the local date of `after` can be ahead of its UTC date.
-    const start = new Date(after + offsetAt(after, timezone) - day);
-    for (let index = 0; index < searchDays; index++) {
-      const date = new Date(
-        Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + index),
-      );
-      const [month, dayOfMonth] = [date.getUTCMonth() + 1, date.getUTCDate()];
-      if (!fields.months.has(month)) continue;
-      const byDay = fields.days.has(dayOfMonth);
-      const byWeekday = fields.weekdays.has(date.getUTCDay());
-      if (fields.either ? !(byDay || byWeekday) : !(byDay && byWeekday)) continue;
-      const midnight = date.getTime();
-      // The offsets either side of this local day; equal ones mean no change of clocks today.
-      const before = offsetAt(midnight - day, timezone);
-      const later = offsetAt(midnight + 2 * day, timezone);
-      for (const hour of fields.hours)
-        for (const minuteOfHour of fields.minutes) {
-          const wall = midnight + hour * 60 * minute + minuteOfHour * minute;
-          let at: number | null = wall - before;
-          if (before !== later) {
-            // The earliest instant whose local time is this wall time, if any.
-            const valid = [wall - before, wall - later]
-              .filter((candidate) => candidate + offsetAt(candidate, timezone) === wall)
-              .sort((a, b) => a - b);
-            at = valid[0] ?? null;
-          }
-          if (at !== null && at > after) yield at;
-        }
+    for (const date of this.#days(after, 1))
+      for (const at of this.#day(date)) if (at > after) yield at;
+  }
+
+  // Matching instants at or before `until`, newest first.
+  *backwards(until: number): Generator<number> {
+    if (this.#config.kind === 'interval') {
+      const step = this.#config.minutes * minute;
+      let at = this.#anchor + Math.floor((until - this.#anchor) / step) * step;
+      for (;;) {
+        yield at;
+        at -= step;
+      }
     }
+    for (const date of this.#days(until, -1))
+      for (const at of [...this.#day(date)].reverse()) if (at <= until) yield at;
+  }
+
+  // The `keep` newest instants in (after, until], oldest first.
+  newest(after: number, until: number, keep: number): number[] {
+    const found: number[] = [];
+    for (const at of this.backwards(until)) {
+      if (at <= after || found.length === keep) break;
+      found.push(at);
+    }
+    return found.reverse();
+  }
+
+  // How many instants (after, until] holds: exact for intervals, and for cron up to `limit`,
+  // past which the count is a lower bound.
+  count(after: number, until: number, limit = 100_000): { count: number; capped: boolean } {
+    if (this.#config.kind === 'interval') {
+      const step = this.#config.minutes * minute;
+      const index = (at: number) => Math.floor((at - this.#anchor) / step);
+      return { count: Math.max(0, index(until) - index(after)), capped: false };
+    }
+    let count = 0;
+    for (const at of this.instants(after)) {
+      if (at > until) break;
+      if (count === limit) return { count, capped: true };
+      count++;
+    }
+    return { count, capped: false };
   }
 
   // The first instant strictly after `after`, or null if none comes within thirty years.
   next(after: number): number | null {
     const result = this.instants(after).next();
     return result.done ? null : result.value;
-  }
-
-  // Instants in (after, until], counting up to `limit` and keeping the `keep` newest.
-  between(
-    after: number,
-    until: number,
-    keep: number,
-    limit = 1_000_000,
-  ): { count: number; capped: boolean; first: number | null; kept: number[] } {
-    const kept: number[] = [];
-    let count = 0;
-    let first: number | null = null;
-    for (const at of this.instants(after)) {
-      if (at > until) break;
-      if (count === limit) return { count, capped: true, first, kept };
-      count++;
-      first ??= at;
-      kept.push(at);
-      if (kept.length > keep) kept.shift();
-    }
-    return { count, capped: false, first, kept };
   }
 
   preview(after: number, count: number): number[] {

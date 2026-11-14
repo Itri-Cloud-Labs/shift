@@ -383,7 +383,7 @@ Publication starts a new or changed schedule from that moment; republishing it u
 | `skip`    | Only instants that are on time fire.                                                         |
 | `replay`  | Every missed instant fires, oldest first, up to the newest 100; the ones before are skipped. |
 
-What was skipped is recorded on the trigger as `state.lastMisfire` (`policy`, `missed`, `from`, `to`, `at`) and in a `trigger.misfire` event, and on the fired occurrence's `details`. Pause discards the instants of the paused interval: unpausing starts from that moment. Each instant is an occurrence identified by its UTC time, so it can never start two runs, and its admission follows the workflow's overlap policy like any trigger. `shift schedule preview` lists upcoming instants with the same matcher.
+What was skipped is recorded on the trigger as `state.lastMisfire` (`policy`, `missed`, `from`, `to`, `at`, and `capped` when a cron schedule missed more than 100,000 instants, so `missed` is a lower bound) and in a `trigger.misfire` event, and on the fired occurrence's `details`. Pause discards the instants of the paused interval: unpausing starts from that moment. Each instant is an occurrence identified by its UTC time, so it can never start two runs, and its admission follows the workflow's overlap policy like any trigger. `shift schedule preview` lists upcoming instants with the same matcher.
 
 ## Workspaces
 

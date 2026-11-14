@@ -88,10 +88,10 @@ test('the matcher skips nonexistent wall times and fires repeated ones once, at 
     ['2026-11-01T01:30:00.000Z', '2026-11-01T03:00:00.000Z', '2026-11-01T04:30:00.000Z'],
   );
   // A year of every minute counts quickly, with the skipped spring-forward hour.
-  const year = cron('* * * * *', 'America/New_York').between(
+  const year = cron('* * * * *', 'America/New_York').count(
     at('2026-01-01T00:00:00Z'),
     at('2026-12-31T00:00:00Z'),
-    1,
+    1_000_000,
   );
   assert.equal(year.count, 364 * 1440 - 60);
   for (const [expression, timezone, problem] of [
@@ -202,6 +202,50 @@ test('instants fire once each; downtime fires the latest, skips or replays up to
     await triggers.tick();
     assert.equal(fired(skip).length, 1);
     assert.equal(misfireOf(triggers, skip)!['missed'], 12);
+  } finally {
+    await env.close();
+  }
+});
+
+test('a downtime longer than any count still fires the newest instants and summarizes the rest', async () => {
+  const env = await setup();
+  try {
+    until(env, '2026-10-03T00:00:30Z');
+    const { triggers } = withTriggers(env);
+    const everyMinute = { kind: 'interval', minutes: 1 };
+    const latest = publish(env, scheduled(everyMinute)).workflowId;
+    const replay = publish(env, scheduled(everyMinute, 'replay')).workflowId;
+    const cronLatest = publish(
+      env,
+      scheduled({ kind: 'cron', expression: '* * * * *', timezone: 'UTC' }),
+    ).workflowId;
+    // 1,000,010 minutes, about 1.9 years, pass while the server is down.
+    env.clock.advance(1_000_010 * minute + 10_000);
+    const now = env.clock.now();
+    const newestMinute = Math.floor(now / minute) * minute;
+    await triggers.tick();
+    assert.deepEqual(
+      occurrencesOf(env, latest).map((row) => row.dedup_key),
+      [new Date(newestMinute).toISOString()],
+    );
+    assert.equal(misfireOf(triggers, latest)!['missed'], 1_000_009);
+    assert.equal(misfireOf(triggers, latest)!['capped'], false);
+    const replayed = occurrencesOf(env, replay).map((row) => Date.parse(row.dedup_key));
+    assert.equal(replayed.length, 100);
+    assert.equal(replayed.at(-1), newestMinute);
+    assert.equal(replayed[0], newestMinute - 99 * minute);
+    assert.equal(misfireOf(triggers, replay)!['missed'], 1_000_010 - 100);
+    assert.equal(
+      misfireOf(triggers, replay)!['to'],
+      new Date(newestMinute - 100 * minute).toISOString(),
+    );
+    // A cron count stops at its bound and says so, but the newest instant still fires.
+    assert.deepEqual(
+      occurrencesOf(env, cronLatest).map((row) => row.dedup_key),
+      [new Date(newestMinute).toISOString()],
+    );
+    assert.equal(misfireOf(triggers, cronLatest)!['capped'], true);
+    assert.ok((misfireOf(triggers, cronLatest)!['missed'] as number) >= 99_999);
   } finally {
     await env.close();
   }
