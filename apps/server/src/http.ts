@@ -34,6 +34,7 @@ import {
   validateTriggerList,
   validateOccurrencePage,
   validateOccurrenceResponse,
+  validateSchedulePreview,
   validateCredentialResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
@@ -62,6 +63,8 @@ import type { Device } from './devices/registry.js';
 import type { Credentials } from './actions/credentials.js';
 import type { GitHubIntegration } from './github/integration.js';
 import type { GitHubWebhooks } from './github/webhooks.js';
+import type { ScheduleConfig } from './triggers/schedule.js';
+import { Scheduler } from './triggers/scheduler.js';
 import type { TriggerService } from './triggers/service.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
@@ -353,6 +356,31 @@ export function createHttpServer(options: {
             ...(limit ? { limit } : {}),
           }),
           validateOccurrencePage,
+        );
+      });
+      // The instants a schedule fires next, from the matcher the scheduler itself uses, so a form
+      // never computes schedule semantics of its own.
+      router.get('/schedules/preview', guard, (req, res) => {
+        const kind = query(req, 'kind');
+        const schedule: ScheduleConfig =
+          kind === 'interval'
+            ? { kind: 'interval', minutes: cursor(req, 'minutes', 366 * 24 * 60) ?? 0 }
+            : {
+                kind: 'cron' as const,
+                expression: (query(req, 'expression') ?? '').slice(0, 200),
+                timezone: (query(req, 'timezone') ?? '').slice(0, 64),
+              };
+        if (schedule.kind === 'interval' && schedule.minutes < 1)
+          throw new ShiftError('INVALID_SCHEDULE', 'An interval is at least one minute.', 422);
+        const now = options.clock.now();
+        const after = cursor(req, 'after', Number.MAX_SAFE_INTEGER) ?? now;
+        const anchor = cursor(req, 'anchor', Number.MAX_SAFE_INTEGER) ?? now;
+        const count = cursor(req, 'count', 50) ?? 5;
+        reply(
+          res,
+          200,
+          { instants: Scheduler.preview(schedule, after, count, anchor) },
+          validateSchedulePreview,
         );
       });
       router.get('/occurrences/:id', guard, (req, res) => {

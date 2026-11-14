@@ -67,6 +67,7 @@ const names = [
   'TriggerList',
   'OccurrencePage',
   'OccurrenceResponse',
+  'SchedulePreview',
   'SessionList',
   'SessionResponse',
   'InvocationResponse',

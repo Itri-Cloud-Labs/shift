@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { GitHubWebhooks } from '../src/github/webhooks.js';
 import type { Json } from '../src/harness/types.js';
 import { createLogger } from '../src/logging.js';
+import { Scheduler } from '../src/triggers/scheduler.js';
 import { TriggerService } from '../src/triggers/service.js';
 import { normalizeDocument } from '../src/workflows/document.js';
 import { Workspaces } from '../src/workspaces/workspaces.js';
@@ -27,6 +28,7 @@ export function withTriggers(
     },
   });
   triggers.attach(env.engine);
+  new Scheduler({ db: env.store.db, clock: env.clock, triggers });
   const webhooks = new GitHubWebhooks({
     db: env.store.db,
     clock: env.clock,

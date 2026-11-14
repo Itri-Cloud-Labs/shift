@@ -6,6 +6,7 @@ import { assertResultSchema } from '../runs/envelope.js';
 import { formProblem } from './forms.js';
 import { ruleProblems, type Rule } from './rules.js';
 import { nodeType } from './nodes.js';
+import { checkSchedule, type ScheduleConfig } from '../triggers/schedule.js';
 
 // The serialized workflow graph (server specification section 5). Renderer positions are
 // presentation data; nothing about execution depends on them.
@@ -392,6 +393,10 @@ export function diagnose(document: unknown): Diagnostic[] {
       return;
     }
     const config = node.config as Record<string, Json>;
+    if (node.type === 'schedule_trigger') {
+      const problem = checkSchedule(config['schedule'] as unknown as ScheduleConfig);
+      if (problem) add(`${at}/config/schedule`, problem);
+    }
     for (const field of ['resultSchema', 'inputSchema', 'responseSchema'] as const) {
       if (config[field] === undefined) continue;
       try {
