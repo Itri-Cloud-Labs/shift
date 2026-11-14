@@ -252,6 +252,39 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       if (values.limit) params.set('limit', values.limit);
       return print(await get(`/api/v0/admin/occurrences?${params}`));
     }
+    case 'trigger credentials':
+      return print(
+        (
+          await get(
+            `/api/v0/admin/triggers/${encodeURIComponent(need(target, 'TRIGGER_ID'))}/credentials`,
+          )
+        )['credentials'],
+      );
+    case 'trigger rotate': {
+      const body: Record<string, unknown> = {};
+      if (values['previous-minutes'] !== undefined) {
+        if (!/^\d{1,5}$/.test(values['previous-minutes']))
+          throw invalid('--previous-minutes must be a whole number of minutes.');
+        body['previousMinutes'] = Number(values['previous-minutes']);
+      }
+      return print(
+        await send(
+          'POST',
+          `/api/v0/admin/triggers/${encodeURIComponent(need(target, 'TRIGGER_ID'))}/credentials`,
+          body,
+        ),
+      );
+    }
+    case 'trigger revoke':
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/triggers/${encodeURIComponent(need(target, 'TRIGGER_ID'))}/credentials/revoke`,
+            {},
+          )
+        )['credentials'],
+      );
     case 'schedule preview': {
       const params = new URLSearchParams();
       if (values.minutes !== undefined) {

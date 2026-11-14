@@ -16,6 +16,7 @@ import { Credentials } from './actions/credentials.js';
 import { GitHubApi } from './github/api.js';
 import { GitHubIntegration } from './github/integration.js';
 import { GitHubWebhooks } from './github/webhooks.js';
+import { HttpTriggers } from './triggers/http-triggers.js';
 import { Scheduler } from './triggers/scheduler.js';
 import { TriggerService } from './triggers/service.js';
 import { ProcessRunner } from './actions/process.js';
@@ -272,6 +273,14 @@ export async function startServer(
     const startedEngine = engine;
     triggerService.attach(startedEngine);
     new Scheduler({ db: store.db, clock, triggers: triggerService });
+    const httpTriggers = new HttpTriggers({
+      db: store.db,
+      clock,
+      secrets,
+      receipts,
+      triggers: triggerService,
+      definitions,
+    });
     const webhooks = new GitHubWebhooks({
       db: store.db,
       clock,
@@ -294,6 +303,7 @@ export async function startServer(
       credentials,
       github,
       triggers: triggerService,
+      httpTriggers,
       devices,
       receipts,
       events,
@@ -316,6 +326,7 @@ export async function startServer(
       credentials,
       github,
       triggers: triggerService,
+      httpTriggers,
       webhooks,
     });
     await listen(tcp, { host: config.host, port: config.port });

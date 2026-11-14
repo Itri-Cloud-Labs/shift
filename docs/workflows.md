@@ -71,6 +71,7 @@ Documents are limited to 1 MiB and a nesting depth of 32. A draft may be invalid
 | `manual_trigger`    | Optional `inputSchema`, a JSON Schema (2020-12) that the run's input must satisfy. A workflow has at most one; without it, the workflow starts only from its other triggers.                                                     | `success`                           |
 | `github_trigger`    | Required `event`; optional `actions` and `branches`. Starts a run for each matching delivery from the project's repository. See [triggers](#triggers).                                                                           | `success`                           |
 | `schedule_trigger`  | Required `schedule`: `{"kind": "cron", "expression", "timezone"}` or `{"kind": "interval", "minutes"}`; optional `misfire` (`latest`, `skip` or `replay`). See [schedule triggers](#schedule-triggers).                          | `success`                           |
+| `webhook_trigger`   | Required `auth` (`bearer` or `signature`); optional `inputSchema`. Starts a run for each authenticated request to its own endpoint. See [HTTP triggers](#http-triggers).                                                         | `success`                           |
 | `transform`         | Required `data`: a JSON template in which every `{"$binding": "<name>"}` object is replaced by that binding's value, and [operations](#transform-operations) are computed.                                                       | `success`, `error`                  |
 | `agent`             | Required `goal`, with `{{name}}` placeholders. Optional `model`, `readOnly`, `resultSchema`, `limits`, `reports` and `handoffs`. See [agent nodes](#agent-nodes).                                                                | `success`, `error`                  |
 | `condition`         | Required `when`, a [rule](#conditions-and-switches). Passes its input through.                                                                                                                                                   | `true`, `false`, `error`            |
@@ -385,6 +386,28 @@ Publication starts a new or changed schedule from that moment; republishing it u
 
 What was skipped is recorded on the trigger as `state.lastMisfire` (`policy`, `missed`, `from`, `to`, `at`, and `capped` when a cron schedule missed more than 100,000 instants, so `missed` is a lower bound) and in a `trigger.misfire` event, and on the fired occurrence's `details`. Pause discards the instants of the paused interval: unpausing starts from that moment. Each instant is an occurrence identified by its UTC time, so it can never start two runs, and its admission follows the workflow's overlap policy like any trigger. `shift schedule preview` lists upcoming instants with the same matcher.
 
+### HTTP triggers
+
+A `webhook_trigger` starts a run for each authenticated `POST` to `/api/v0/triggers/{triggerId}/events` on the server's TCP address (the trigger ID is in `shift workflow triggers`). The JSON body is the run's input, checked against `inputSchema` when set. The trigger keeps its ID, endpoint and credentials across publications while the node keeps its ID and type.
+
+**Credentials.** `shift trigger rotate TRIGGER_ID` issues a random 256-bit secret and prints it once; Shift keeps it sealed and never shows it again, and a repeated command answers with `secret: null`. Rotating again replaces it: the old secret stops at once, or after `--previous-minutes N` while senders change over. `shift trigger revoke` stops every secret of the trigger. A trigger without a secret refuses every request.
+
+**Sending an event.** Send `Content-Type: application/json` and either:
+
+- `auth: "bearer"`: `Authorization: Bearer <secret>`.
+- `auth: "signature"`: `X-Shift-Event-Id`, `X-Shift-Timestamp: <Unix seconds>` and `X-Shift-Signature: sha256=<hex>`, the HMAC-SHA256 with the secret of the timestamp, a `.`, the event ID, a `.`, and the exact body bytes. The event ID is required and signed, so a captured request can only be sent again as itself, and then answers with the first event. A timestamp more than five minutes from the server's clock is refused. The secret never travels.
+
+`apps/server/tools/send-trigger-event.mjs` does both, reading the secret from `SHIFT_TRIGGER_SECRET`:
+
+```sh
+SHIFT_TRIGGER_SECRET=… node apps/server/tools/send-trigger-event.mjs \
+  http://127.0.0.1:8484/api/v0/triggers/TRIGGER_ID/events --file event.json --signature --event-id order-17
+```
+
+**Event IDs.** With `X-Shift-Event-Id` (required for signed requests) (1 to 200 letters, digits, `.`, `_`, `:` or `-`), a repeated request with the same body gets the original occurrence back, `200` with `duplicate: true`, even after a restart or a later publication, and even if the first answer never arrived. The same ID with a different body is `409 DUPLICATE_EVENT_CONFLICT`. Without an ID, which only a bearer request may omit, every request is a new event, so a sender that retries after a lost answer can start two runs; send an ID whenever retries are possible.
+
+**Answers.** `202` with `{"occurrence": …, "duplicate": false}` once the occurrence and its decision are committed (and, when admitted, its run created). Refusals record nothing: `401 TRIGGER_UNAUTHORIZED` (missing, wrong, expired or revoked credential, bad signature or stale timestamp), `404` (unknown or removed trigger), `415 UNSUPPORTED_MEDIA_TYPE`, `400` (not JSON), `422 INVALID_INPUT` (fails `inputSchema`), `413 REQUEST_TOO_LARGE` (a body over 2 MiB or input over 1 MiB), `409` (event ID conflict). A paused workflow answers `202` with the occurrence `SKIPPED`.
+
 ## Workspaces
 
 When a run starts, Shift resolves the project's base ref to a commit and records it as the run's `baseCommit`. Before the first agent node runs, Shift creates a detached worktree at that commit under `<state>/workspaces/<id>`. All of the run's agents work there.
@@ -561,5 +584,3 @@ A restart replaces the OpenCode runtime instead of reconnecting to it, so a turn
 Publishing refuses these, so a document never silently ignores them:
 
 - Workspaces other than a new one per run (M08a).
-
-Authenticated HTTP triggers are planned in the [roadmap](shift-server-v0.md#18-ordered-implementation-roadmap).
