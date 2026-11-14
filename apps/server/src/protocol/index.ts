@@ -72,6 +72,7 @@ export {
   validateTriggerList,
   validateOccurrencePage,
   validateOccurrenceResponse,
+  validateSchedulePreview,
   validateSessionList,
   validateSessionResponse,
   validateInvocationResponse,

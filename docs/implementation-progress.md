@@ -761,3 +761,17 @@ Status: prompt 24's server work (M11b). Desktop forms and history follow with 25
   - A rotated webhook secret's predecessor verifies only inside the chosen window, and not at all without one.
   - A `check_run` delivery brings a Wait for Checks read forward only for its repository, and the wait completes on the read.
 - **Not verified:** deliveries from real GitHub (the release prerequisite from 22). Recovery after a crash inside the delivery transaction relies on SQLite atomicity; it has no subprocess kill test.
+
+## Schedules (25)
+
+Status: prompt 25's server work (M12). Desktop controls follow with 26. Date: 2026-11-14.
+
+- **Changed:** `cron-parser` 5.10.3. `src/triggers/schedule.ts` (grammar, zone checks, the matcher, interval instants, counting) and `src/triggers/scheduler.ts` (publication and unpause cursors, ticks, misfire policies). Node type `schedule_trigger`, validated at publication. `GET /schedules/preview`, `shift schedule preview`, and a `SchedulePreview` protocol schema.
+- **Verified** (`test/schedules.test.ts`, injected clock):
+  - New York's spring-forward 02:30 is skipped and its repeated 01:00 and 01:30 fire once, including from inside the repeated hour; Lord Howe's half-hour change; Berlin weekdays, Kolkata's offset, 29 February, day-of-month-or-weekday, 90-minute UTC intervals, and refusal of macros, seconds, `L`, `#`, bad values, unknown zones, offsets and abbreviations.
+  - Each instant fires once and the run's input names it. Ten hours of downtime fire the latest instant (119 missed), only on-time ones for `skip`, and the newest 100 for `replay` with 20 summarized.
+  - Pause discards its hour and unpause starts at the next instant; an unchanged republish keeps catching up, a changed schedule starts from now with the new version; interval instants count from publication.
+  - Concurrent ticks, and a cursor rewound as if the transaction had been cut after the occurrence, start one run; a restart continues from the stored cursor.
+  - A queued scheduled occurrence waits through a Pause and a new version, then runs the version it captured.
+  - Publication refuses an hour of 25 and an unknown zone. Over four simulated days around New York's 2027 spring-forward, the fired instants equal the preview.
+- **Not verified:** the desktop schedule form (follows with the trigger UI).

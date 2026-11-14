@@ -38,6 +38,7 @@ import type {
   TriggerList,
   OccurrencePage,
   OccurrenceResponse,
+  SchedulePreview,
   SessionList,
   SessionResponse,
   InvocationResponse,
@@ -96,6 +97,7 @@ export const validateGitHubDeliveryPage: Validator<GitHubDeliveryPage>;
 export const validateTriggerList: Validator<TriggerList>;
 export const validateOccurrencePage: Validator<OccurrencePage>;
 export const validateOccurrenceResponse: Validator<OccurrenceResponse>;
+export const validateSchedulePreview: Validator<SchedulePreview>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
 export const validateInvocationResponse: Validator<InvocationResponse>;

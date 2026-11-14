@@ -32,6 +32,7 @@ shift workflow pause|unpause WORKFLOW_ID
 shift workflow triggers WORKFLOW_ID
 shift occurrence list [--workflow WORKFLOW_ID] [--before N] [--limit N]
 shift occurrence show OCCURRENCE_ID
+shift schedule preview (--cron EXPRESSION --timezone ZONE | --minutes N) [--count N]
 shift run start --workflow WORKFLOW_ID [--input JSON] [--allow-overlap] [--wait]
 shift run show RUN_ID [--wait]
 shift run list
@@ -100,7 +101,8 @@ without editing workflows, and are never shown again. --previous-minutes keeps
 the replaced webhook secret valid that long, while GitHub's settings change.
 
 Trigger nodes start runs by themselves once published: a GitHub trigger for each
-matching delivery to the App's webhook path. Each workflow's overlap policy
+matching delivery to the App's webhook path, a schedule trigger at each cron
+instant in its time zone or every N minutes. Each workflow's overlap policy
 decides what happens while a run of it is unfinished: skip (the default), queue
 or allow. pause stops every start, manual or automatic, until unpause; runs
 already started continue. A manual start of a busy workflow needs
@@ -155,6 +157,7 @@ async function main(): Promise<void> {
       'credential',
       'github',
       'occurrence',
+      'schedule',
     ].includes(command)
   ) {
     const { adminCommand } = await import('./cli-admin.js');

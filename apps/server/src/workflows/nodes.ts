@@ -100,6 +100,46 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
     },
   },
   {
+    // Starts runs at cron instants in a named time zone, or at a fixed UTC interval.
+    type: 'schedule_trigger',
+    version: 1,
+    entry: true,
+    trigger: 'schedule',
+    ports: ['success'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schedule'],
+      properties: {
+        schedule: {
+          oneOf: [
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['kind', 'expression', 'timezone'],
+              properties: {
+                kind: { const: 'cron' },
+                expression: { type: 'string', minLength: 9, maxLength: 200 },
+                timezone: { type: 'string', minLength: 1, maxLength: 64 },
+              },
+            },
+            {
+              type: 'object',
+              additionalProperties: false,
+              required: ['kind', 'minutes'],
+              properties: {
+                kind: { const: 'interval' },
+                minutes: { type: 'integer', minimum: 1, maximum: 366 * 24 * 60 },
+              },
+            },
+          ],
+        },
+        // What happens to instants missed while the server was down (specification 12.2).
+        misfire: { enum: ['latest', 'skip', 'replay'] },
+      },
+    },
+  },
+  {
     // Builds new data from a JSON template: `{"$binding": "<name>"}` is replaced by that binding.
     type: 'transform',
     version: 1,
