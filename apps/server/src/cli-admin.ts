@@ -38,6 +38,10 @@ const options = {
   'previous-minutes': { type: 'string' },
   before: { type: 'string' },
   'allow-overlap': { type: 'boolean' },
+  cron: { type: 'string' },
+  timezone: { type: 'string' },
+  minutes: { type: 'string' },
+  count: { type: 'string' },
 } as const;
 
 // A credential value comes from standard input, so it never appears in a command line or history.
@@ -247,6 +251,22 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       if (values.before) params.set('before', values.before);
       if (values.limit) params.set('limit', values.limit);
       return print(await get(`/api/v0/admin/occurrences?${params}`));
+    }
+    case 'schedule preview': {
+      const params = new URLSearchParams();
+      if (values.minutes !== undefined) {
+        params.set('kind', 'interval');
+        params.set('minutes', values.minutes);
+      } else {
+        params.set('kind', 'cron');
+        params.set('expression', need(values.cron, '--cron'));
+        params.set('timezone', values.timezone ?? 'UTC');
+      }
+      if (values.count) params.set('count', values.count);
+      const instants = (await get(`/api/v0/admin/schedules/preview?${params}`))[
+        'instants'
+      ] as number[];
+      return print(instants.map((at) => new Date(at).toISOString()));
     }
     case 'occurrence show':
       return print(
