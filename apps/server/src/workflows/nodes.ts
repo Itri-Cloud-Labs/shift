@@ -140,6 +140,20 @@ export const nodeTypes: readonly NodeTypeDefinition[] = [
     },
   },
   {
+    // Starts a run for each authenticated HTTP request to the trigger's own endpoint.
+    type: 'webhook_trigger',
+    version: 1,
+    entry: true,
+    trigger: 'webhook',
+    ports: ['success'],
+    configSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['auth'],
+      properties: { auth: { enum: ['bearer', 'signature'] }, inputSchema: schema },
+    },
+  },
+  {
     // Builds new data from a JSON template: `{"$binding": "<name>"}` is replaced by that binding.
     type: 'transform',
     version: 1,

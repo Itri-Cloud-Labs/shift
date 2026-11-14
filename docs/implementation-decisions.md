@@ -682,3 +682,14 @@ Decided 2026-11-14 for M12, following specification sections 11.2 and 12.2.
 - **The newest instants are found backwards from now.** The fired instants come from walking back from now, so a downtime of any length fires the right ones (Sol review). Interval counts are arithmetic; cron counts enumerate up to 100,000 and then report a lower bound with `capped`.
 - **Missed means over a minute late.** Grace keeps a busy tick from turning an on-time instant into a misfire. `latest` fires the newest instant and `replay` the newest 100, so recent work is preferred to old work; the skipped ones are summarized on the trigger and in an event rather than stored as occurrences, since a minute schedule missed for a week would be ten thousand rows.
 - **Publication and unpause start from now.** A changed schedule gets a new anchor and cursor in the publishing transaction; an unchanged one keeps both, so downtime across a republish is still caught up. Unpause moves the cursor to now in the enabling transaction.
+
+## HTTP triggers (26)
+
+Decided 2026-11-14 for M12a, following specification sections 4.4, 12.1 and 13.
+
+- **Secrets are random, per trigger, and shown once.** 32 bytes from `randomBytes`, base64url, sealed with `SecretBox` under `trigger-credential:<id>`. Issuance answers with the secret; its command receipt keeps only the credential, so a replay answers `secret: null` rather than storing a secret in receipts. Rotation stops the old secret at once unless the owner names a changeover window. No library: Node's `crypto` provides the primitives, and the receipt rule is Shift's own.
+- **Bearer comparison is over digests.** SHA-256 of the presented and stored secret through `timingSafeEqual`, so lengths never short-circuit the comparison.
+- **Signatures cover a timestamp and the raw body.** `HMAC-SHA256(secret, "<unix seconds>." + body)` with a five-minute tolerance, as Stripe and Slack sign webhooks, so a captured request cannot be replayed later and the secret never travels. The body is read with `express.raw`, so the bytes verified are the bytes received.
+- **Dedup is by the caller's event ID.** With `X-Shift-Event-Id`, the occurrence key is `event:<id>` and the request hash is the body's SHA-256: the same body returns the original occurrence, another body is a conflict. Without an ID each request is new (`request:<uuid>`); documented, because a sender retrying a lost answer would otherwise start a run twice.
+- **Validation before capture, against the version captured.** The input is checked against the `inputSchema` of the version active in the capture transaction, so a refused event leaves no occurrence and an accepted one always fits the version it runs.
+- **A local sender script, not a CLI command,** because a sender is another system: `tools/send-trigger-event.mjs` reads the secret from the environment and signs exactly the bytes it sends.

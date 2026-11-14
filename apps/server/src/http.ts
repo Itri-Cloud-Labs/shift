@@ -35,6 +35,9 @@ import {
   validateOccurrencePage,
   validateOccurrenceResponse,
   validateSchedulePreview,
+  validateTriggerCredentialList,
+  validateTriggerCredentialIssued,
+  validateTriggerEventResponse,
   validateCredentialResponse,
   validateProjectPermissionsResponse,
   validateArtifactResponse,
@@ -65,6 +68,7 @@ import type { GitHubIntegration } from './github/integration.js';
 import type { GitHubWebhooks } from './github/webhooks.js';
 import type { ScheduleConfig } from './triggers/schedule.js';
 import { Scheduler } from './triggers/scheduler.js';
+import type { HttpTriggers } from './triggers/http-triggers.js';
 import type { TriggerService } from './triggers/service.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
@@ -87,6 +91,7 @@ export function createHttpServer(options: {
   credentials?: Credentials;
   github?: GitHubIntegration;
   triggers?: TriggerService;
+  httpTriggers?: HttpTriggers;
   webhooks?: GitHubWebhooks;
   devices?: DeviceService;
   receipts?: CommandReceipts;
@@ -383,6 +388,33 @@ export function createHttpServer(options: {
           validateSchedulePreview,
         );
       });
+      const http = options.httpTriggers;
+      if (http) {
+        // Webhook trigger credentials: listed without secrets; a secret appears only in the
+        // response that issues it.
+        router.get('/triggers/:id/credentials', guard, (req, res) => {
+          reply(
+            res,
+            200,
+            { credentials: http.credentials(id(req)) },
+            validateTriggerCredentialList,
+          );
+        });
+        router.post('/triggers/:id/credentials', guard, json, (req, res) => {
+          command(
+            res,
+            http.issueCommand(id(req), body(req), actorOf(res)),
+            validateTriggerCredentialIssued,
+          );
+        });
+        router.post('/triggers/:id/credentials/revoke', guard, json, (req, res) => {
+          command(
+            res,
+            http.revokeCommand(id(req), body(req), actorOf(res)),
+            validateTriggerCredentialList,
+          );
+        });
+      }
       router.get('/occurrences/:id', guard, (req, res) => {
         reply(res, 200, { occurrence: triggers.occurrence(id(req)) }, validateOccurrenceResponse);
       });
@@ -765,6 +797,24 @@ export function createHttpServer(options: {
               result.status,
               { delivery: result.delivery, duplicate: result.duplicate },
               validateGitHubDeliveryResponse,
+            );
+          },
+        );
+      // A webhook trigger's endpoint authenticates with the trigger's own credential, over the
+      // raw body when signed.
+      const httpTriggers = options.httpTriggers;
+      if (httpTriggers)
+        app.post(
+          '/api/v0/triggers/:id/events',
+          express.raw({ type: () => true, limit: '2mb' }),
+          async (req, res) => {
+            const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+            const result = await httpTriggers.receive(String(req.params['id']), req.headers, body);
+            send(
+              res,
+              result.status,
+              { occurrence: result.occurrence, duplicate: result.duplicate },
+              validateTriggerEventResponse,
             );
           },
         );

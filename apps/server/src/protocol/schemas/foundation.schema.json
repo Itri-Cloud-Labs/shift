@@ -3188,6 +3188,90 @@
           }
         }
       }
+    },
+    "TriggerCredential": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "createdAt", "expiresAt", "revokedAt", "active"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expiresAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "revokedAt": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "TriggerCredentialList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "credentials"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "credentials": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/TriggerCredential"
+          }
+        }
+      }
+    },
+    "TriggerCredentialIssued": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "credential", "secret"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "credential": {
+          "$ref": "#/$defs/TriggerCredential"
+        },
+        "secret": {
+          "type": ["string", "null"],
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "TriggerEventResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "occurrence", "duplicate"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "occurrence": {
+          "$ref": "#/$defs/Occurrence"
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

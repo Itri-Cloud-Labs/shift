@@ -39,6 +39,9 @@ import type {
   OccurrencePage,
   OccurrenceResponse,
   SchedulePreview,
+  TriggerCredentialList,
+  TriggerCredentialIssued,
+  TriggerEventResponse,
   SessionList,
   SessionResponse,
   InvocationResponse,
@@ -98,6 +101,9 @@ export const validateTriggerList: Validator<TriggerList>;
 export const validateOccurrencePage: Validator<OccurrencePage>;
 export const validateOccurrenceResponse: Validator<OccurrenceResponse>;
 export const validateSchedulePreview: Validator<SchedulePreview>;
+export const validateTriggerCredentialList: Validator<TriggerCredentialList>;
+export const validateTriggerCredentialIssued: Validator<TriggerCredentialIssued>;
+export const validateTriggerEventResponse: Validator<TriggerEventResponse>;
 export const validateSessionList: Validator<SessionList>;
 export const validateSessionResponse: Validator<SessionResponse>;
 export const validateInvocationResponse: Validator<InvocationResponse>;

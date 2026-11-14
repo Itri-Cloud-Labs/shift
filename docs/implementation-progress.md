@@ -776,3 +776,15 @@ Status: prompt 25's server work (M12). Desktop controls follow with 26. Date: 20
   - A queued scheduled occurrence waits through a Pause and a new version, then runs the version it captured.
   - Publication refuses an hour of 25 and an unknown zone. Over four simulated days around New York's 2027 spring-forward, the fired instants equal the preview.
 - **Not verified:** the desktop schedule form (follows with the trigger UI).
+
+## HTTP triggers (26)
+
+Status: prompt 26's server work (M12a). Desktop setup for 24 to 26 follows. Date: 2026-11-14.
+
+- **Changed:** `src/triggers/http-triggers.ts` (credentials, authentication, dedup, capture). Node type `webhook_trigger` (`bearer` or `signature`, optional `inputSchema`). `POST /api/v0/triggers/{id}/events` on TCP; credential list, issue and revoke routes; `shift trigger credentials|rotate|revoke`; `tools/send-trigger-event.mjs`; protocol schemas for credentials and event answers.
+- **Verified** (`test/http-triggers.test.ts`, over a real TCP listener):
+  - The sender script signs an event that starts a general graph (trigger, transform, end) with the event as its input. After a restart, the same event ID and body returns the original occurrence and run.
+  - Missing, wrong, replaced, expired and revoked bearer secrets, wrong signatures, a body changed after signing, the bearer form on a signed trigger and a six-minute-old timestamp are `401`; schema failures `422`; non-JSON `400`; `text/plain` `415`; inputs over 1 MiB and bodies over 2 MiB `413`; an unknown trigger `404`. None records an occurrence. A rotation window keeps the old secret working for five minutes only.
+  - An answer never read, then two concurrent repeats, leave one occurrence and one run; the same ID with another body is `409`; requests without an ID are separate events.
+  - With `queue`, a second event waits through a publication (the trigger keeps its ID and credential) and a Pause (a third event is skipped), then runs the first version with its own input. A repeated issue command answers without the secret. No table, including events, snapshots and receipts, and no log line contains the secret.
+- **Not verified:** the desktop forms (next).
