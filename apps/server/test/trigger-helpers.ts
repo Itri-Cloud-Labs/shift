@@ -10,7 +10,10 @@ import { webhookSecret } from './github-helpers.js';
 
 // Trigger admission over an action test environment. The trigger service is created before any
 // workflow is published, as the server does, so publications materialize subscriptions.
-export function withTriggers(env: Env): { triggers: TriggerService; webhooks: GitHubWebhooks } {
+export function withTriggers(
+  env: Env,
+  options: { gate?: () => Promise<void> } = {},
+): { triggers: TriggerService; webhooks: GitHubWebhooks } {
   const workspaces = new Workspaces(env.store.db, env.clock, `${env.state}/workspaces`);
   const triggers = new TriggerService({
     db: env.store.db,
@@ -18,6 +21,7 @@ export function withTriggers(env: Env): { triggers: TriggerService; webhooks: Gi
     definitions: env.definitions,
     logger: createLogger('silent'),
     resolveBase: async (projectId) => {
+      await options.gate?.();
       const project = env.definitions.project(projectId);
       return workspaces.resolveBase(project.repositoryPath, project.baseRef);
     },

@@ -66,6 +66,11 @@ test('invalid signatures, identities and oversized payloads start nothing; a rec
     const quiet = await webhooks.receive(appRowId, unbound.headers, unbound.body);
     assert.equal(quiet.status, 202);
     assert.deepEqual(quiet.delivery.occurrences, []);
+    // Even unmatched, the delivery is kept as GitHub sent it.
+    const kept = env.store.db
+      .prepare('SELECT payload_json FROM github_deliveries WHERE delivery_id = ?')
+      .get(unbound.id) as { payload_json: string };
+    assert.equal(kept.payload_json, unbound.body.toString());
 
     const valid = delivery();
     const first = await webhooks.receive(appRowId, valid.headers, valid.body);
@@ -176,7 +181,12 @@ test('redeliveries and publication races keep exactly the occurrences first capt
       webhooks.receive(appRowId, event.headers, event.body),
     ]);
     assert.deepEqual([a.duplicate, b.duplicate].sort(), [false, true]);
-    assert.deepEqual(a.delivery, b.delivery);
+    // Both name the same occurrences; the duplicate may answer before the run exists.
+    assert.equal(a.delivery.id, b.delivery.id);
+    assert.deepEqual(
+      a.delivery.occurrences.map((o) => o.id),
+      b.delivery.occurrences.map((o) => o.id),
+    );
     // A later publication adds a second matching trigger; a redelivery still matches nothing new.
     const document = heldFlow(prOpened, 'allow') as { nodes: Json[]; connections: Json[] };
     const v2 = republish(env, workflowId, {
@@ -228,6 +238,62 @@ test('redeliveries and publication races keep exactly the occurrences first capt
         JSON.stringify(options),
       );
     }
+  } finally {
+    await close();
+  }
+});
+
+test('what a delivery matched, the version it runs and its admission are fixed on arrival', async () => {
+  const { env, appRowId, close } = await connected();
+  try {
+    let release!: () => void;
+    let held = new Promise<void>((resolve) => (release = resolve));
+    const { webhooks } = withTriggers(env, { gate: () => held });
+    const { workflowId, versionId: v1 } = publish(env, heldFlow(prOpened, 'skip'));
+    const sent = delivery();
+    const receiving = webhooks.receive(appRowId, sent.headers, sent.body);
+    // The occurrence is captured and accepted before the base commit is resolved.
+    const accepted = await eventually(() =>
+      occurrencesOf(env, workflowId).find((row) => row.state === 'ACCEPTED'),
+    );
+    assert.equal(accepted.workflow_version_id, v1);
+    // A publication that drops the trigger, and a Pause, while the run is being created.
+    republish(env, workflowId, {
+      nodes: [
+        { id: 'start', type: 'manual_trigger' },
+        { id: 'end', type: 'end' },
+      ],
+      connections: [
+        { id: 'c1', fromNodeId: 'start', fromPort: 'success', toNodeId: 'end', toPort: 'input' },
+      ],
+    });
+    env.definitions.setEnabled(workflowId, false);
+    // A restarted admitter finds the accepted occurrence and creates its run; the first one,
+    // released afterwards, finds it admitted and creates nothing.
+    const other = withTriggers(env);
+    await other.triggers.drain();
+    release();
+    const result = await receiving;
+    assert.equal(result.delivery.occurrences.length, 1);
+    assert.equal(result.delivery.occurrences[0]!.state, 'ADMITTED');
+    const runs = runsOf(env, workflowId);
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0]!.workflow_version_id, v1);
+    // An accepted occurrence counts against overlap while its run is being created.
+    env.definitions.setEnabled(workflowId, true);
+    held = new Promise<void>((resolve) => (release = resolve));
+    const { workflowId: busy } = publish(env, heldFlow(prOpened, 'skip'));
+    cancel(env, runs[0]!.id);
+    const first = delivery();
+    const pending = webhooks.receive(appRowId, first.headers, first.body);
+    await eventually(() => occurrencesOf(env, busy).find((row) => row.state === 'ACCEPTED'));
+    const second = delivery();
+    const skipped = await other.webhooks.receive(appRowId, second.headers, second.body);
+    assert.equal(skipped.delivery.occurrences.find((o) => o.workflowId === busy)!.state, 'SKIPPED');
+    await assert.rejects(env.engine.startRun({ workflowId: busy }), /unfinished/);
+    release();
+    await pending;
+    assert.equal(runsOf(env, busy).length, 1);
   } finally {
     await close();
   }

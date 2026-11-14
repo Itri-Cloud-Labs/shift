@@ -36,6 +36,16 @@ export interface DeliveryView {
 
 type Payload = Record<string, unknown>;
 
+interface DeliveryRow {
+  id: string;
+  delivery_id: string;
+  event: string;
+  action: string | null;
+  repository_id: number | null;
+  occurrences_json: string;
+  received_at: number;
+}
+
 const header = (headers: IncomingHttpHeaders, name: string): string | null => {
   const value = headers[name];
   return typeof value === 'string' ? value : null;
@@ -79,13 +89,36 @@ export class GitHubWebhooks {
     this.#wake = options.wake;
   }
 
+  // A delivery with the occurrences it captured on arrival, as they stand now: a queued one may
+  // since have been admitted, but the set never changes.
+  #view(row: DeliveryRow): DeliveryView {
+    const ids = JSON.parse(row.occurrences_json) as string[];
+    return {
+      id: row.id,
+      deliveryId: row.delivery_id,
+      event: row.event,
+      action: row.action,
+      repositoryId: row.repository_id,
+      receivedAt: row.received_at,
+      occurrences: ids.map((id) => {
+        const occurrence = this.#triggers.occurrence(id);
+        return {
+          id,
+          triggerId: occurrence.triggerId,
+          workflowId: occurrence.workflowId,
+          state: occurrence.state,
+          reason: occurrence.reason,
+          runId: occurrence.runId,
+        };
+      }),
+    };
+  }
+
   #stored(appRowId: string, deliveryId: string): DeliveryView | null {
     const row = this.#db
-      .prepare(
-        'SELECT response_json FROM github_deliveries WHERE github_app_id = ? AND delivery_id = ?',
-      )
-      .get(appRowId, deliveryId) as { response_json: string } | undefined;
-    return row ? (JSON.parse(row.response_json) as DeliveryView) : null;
+      .prepare('SELECT * FROM github_deliveries WHERE github_app_id = ? AND delivery_id = ?')
+      .get(appRowId, deliveryId) as DeliveryRow | undefined;
+    return row ? this.#view(row) : null;
   }
 
   // The projects whose binding is this repository through this installation. A repository bound
@@ -165,8 +198,6 @@ export class GitHubWebhooks {
         );
       installationRowId = row?.id ?? null;
     }
-    const projectsNow =
-      installationRowId && repository ? this.#projects(installationRowId, repository) : [];
     const input: Json = {
       event,
       action,
@@ -183,110 +214,77 @@ export class GitHubWebhooks {
       payload: payload as Json,
     };
     const inputBytes = Buffer.byteLength(JSON.stringify(input));
-    // Subscriptions can change while the base commits resolve; the transaction matches again and
-    // starts over if a project it needs was not resolved.
-    for (let round = 0; round < 3; round++) {
-      const wanted = new Set(
-        this.#matches(projectsNow, event, payload).map((trigger) => trigger.projectId),
-      );
-      if (wanted.size > 0 && inputBytes > maxTriggerInputBytes)
-        throw new ShiftError(
-          'REQUEST_TOO_LARGE',
-          'The delivery exceeds the 1 MiB trigger input limit.',
-          413,
-        );
-      const bases = await this.#triggers.bases(wanted);
-      const result = this.#db
-        .transaction(() => {
-          const repeat = this.#stored(appRowId, deliveryId);
-          if (repeat) return { status: 200, delivery: repeat, duplicate: true };
-          const projects =
-            installationRowId && repository ? this.#projects(installationRowId, repository) : [];
-          const matched = this.#matches(projects, event, payload);
-          if (matched.some((trigger) => !bases.has(trigger.projectId))) return null;
-          if (matched.length > 0 && inputBytes > maxTriggerInputBytes)
-            throw new ShiftError(
-              'REQUEST_TOO_LARGE',
-              'The delivery exceeds the 1 MiB trigger input limit.',
-              413,
-            );
-          const now = this.#clock.now();
-          const captures: Capture[] = matched.map((trigger) => ({
-            triggerId: trigger.id,
-            dedupKey: deliveryId,
-            occurredAt: now,
-            input,
-            details: { deliveryId, event, ...(action ? { action } : {}) },
-          }));
-          const occurrences = this.#triggers.capture(captures, bases);
-          const id = randomUUID();
-          const delivery: DeliveryView = {
+    // Matching, the captured versions and the admission decisions are fixed in this one
+    // transaction, with no I/O before it that a publication or Pause could race; runs are
+    // created from the accepted occurrences after it commits.
+    const result = this.#db
+      .transaction(() => {
+        const repeat = this.#stored(appRowId, deliveryId);
+        if (repeat) return { status: 200, delivery: repeat, duplicate: true };
+        const projects =
+          installationRowId && repository ? this.#projects(installationRowId, repository) : [];
+        const matched = this.#matches(projects, event, payload);
+        if (matched.length > 0 && inputBytes > maxTriggerInputBytes)
+          throw new ShiftError(
+            'REQUEST_TOO_LARGE',
+            'The delivery exceeds the 1 MiB trigger input limit.',
+            413,
+          );
+        const now = this.#clock.now();
+        const captures: Capture[] = matched.map((trigger) => ({
+          triggerId: trigger.id,
+          dedupKey: deliveryId,
+          occurredAt: now,
+          input,
+          details: { deliveryId, event, ...(action ? { action } : {}) },
+        }));
+        const occurrences = this.#triggers.capture(captures);
+        const id = randomUUID();
+        this.#db
+          .prepare(
+            'INSERT INTO github_deliveries (id, github_app_id, delivery_id, event, action, installation_id, repository_id, payload_json, payload_sha256, payload_bytes, occurrences_json, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          )
+          .run(
             id,
+            appRowId,
             deliveryId,
             event,
             action,
-            repositoryId: repository,
-            receivedAt: now,
-            occurrences: occurrences.map((occurrence) => ({
-              id: occurrence.id,
-              triggerId: occurrence.triggerId,
-              workflowId: occurrence.workflowId,
-              state: occurrence.state,
-              reason: occurrence.reason,
-              runId: occurrence.runId,
-            })),
-          };
-          this.#db
-            .prepare(
-              'INSERT INTO github_deliveries (id, github_app_id, delivery_id, event, action, installation_id, repository_id, payload_sha256, payload_bytes, response_json, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            )
-            .run(
-              id,
-              appRowId,
+            typeof installationId === 'number' ? installationId : null,
+            repository,
+            body.toString('utf8'),
+            createHash('sha256').update(body).digest('hex'),
+            body.length,
+            JSON.stringify(occurrences.map((occurrence) => occurrence.id)),
+            now,
+          );
+        this.#db
+          .prepare(
+            'INSERT INTO events (type, schema_version, payload_json, created_at) VALUES (?, 1, ?, ?)',
+          )
+          .run(
+            'github.delivery',
+            JSON.stringify({
+              appId: appRowId,
               deliveryId,
               event,
               action,
-              typeof installationId === 'number' ? installationId : null,
-              repository,
-              createHash('sha256').update(body).digest('hex'),
-              body.length,
-              JSON.stringify(delivery),
-              now,
-            );
-          this.#db
-            .prepare(
-              'INSERT INTO events (type, schema_version, payload_json, created_at) VALUES (?, 1, ?, ?)',
-            )
-            .run(
-              'github.delivery',
-              JSON.stringify({
-                appId: appRowId,
-                deliveryId,
-                event,
-                action,
-                occurrences: delivery.occurrences.length,
-              }),
-              now,
-            );
-          return { status: 202, delivery, duplicate: false };
-        })
-        .immediate();
-      if (!result) continue;
-      if (!result.duplicate) {
-        // A checks or status event brings forward the next read of Wait for Checks steps that
-        // watch its commit in this repository; the wait itself stays the poll's (prompt 23).
-        const commit = checkedCommit(event, payload);
-        if (commit && repository) this.#expedite(commit, repository);
-        this.#wake();
-      }
-      return result;
-    }
-    throw new ShiftError(
-      'REVISION_CONFLICT',
-      'Subscriptions kept changing while the delivery was matched; GitHub can redeliver it.',
-      503,
-      true,
-    );
+              occurrences: occurrences.length,
+            }),
+            now,
+          );
+        return { status: 202, delivery: null, duplicate: false };
+      })
+      .immediate();
+    if (result.duplicate)
+      return result as { status: number; delivery: DeliveryView; duplicate: boolean };
+    // A checks or status event brings forward the next read of Wait for Checks steps that watch
+    // its commit in this repository; the wait itself stays the poll's (prompt 23).
+    const commit = checkedCommit(event, payload);
+    if (commit && repository) this.#expedite(commit, repository);
+    await this.#triggers.admit();
+    this.#wake();
+    return { status: 202, delivery: this.#stored(appRowId, deliveryId)!, duplicate: false };
   }
 
   #expedite(commit: string, repositoryId: number): void {
@@ -306,15 +304,14 @@ export class GitHubWebhooks {
     const limit = Math.min(Math.max(page.limit ?? 50, 1), 200);
     const rows = this.#db
       .prepare(
-        'SELECT rowid AS cursor, response_json FROM github_deliveries WHERE github_app_id = ? AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?',
+        'SELECT rowid AS cursor, * FROM github_deliveries WHERE github_app_id = ? AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?',
       )
-      .all(appRowId, page.before ?? null, page.before ?? null, limit + 1) as Array<{
-      cursor: number;
-      response_json: string;
-    }>;
+      .all(appRowId, page.before ?? null, page.before ?? null, limit + 1) as Array<
+      DeliveryRow & { cursor: number }
+    >;
     const shown = rows.slice(0, limit);
     return {
-      deliveries: shown.map((row) => JSON.parse(row.response_json) as DeliveryView),
+      deliveries: shown.map((row) => this.#view(row)),
       nextBefore: rows.length > limit ? shown.at(-1)!.cursor : null,
     };
   }

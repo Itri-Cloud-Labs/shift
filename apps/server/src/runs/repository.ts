@@ -467,15 +467,16 @@ export class RunRepository {
     return runId;
   }
 
-  // Runs of a workflow that have not finished. Waiting, held and needs-human runs are unfinished,
-  // so they count against a workflow's overlap policy (specification 12.1).
+  // Runs of a workflow that have not finished, with trigger occurrences accepted to start one.
+  // Waiting, held and needs-human runs are unfinished, so they count against a workflow's overlap
+  // policy (specification 12.1).
   unfinishedRuns(workflowId: string): number {
     return (
       this.db
         .prepare(
-          "SELECT COUNT(*) AS n FROM runs WHERE workflow_id = ? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
+          "SELECT (SELECT COUNT(*) FROM runs WHERE workflow_id = ? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')) + (SELECT COUNT(*) FROM trigger_occurrences WHERE workflow_id = ? AND state = 'ACCEPTED') AS n",
         )
-        .get(workflowId) as { n: number }
+        .get(workflowId, workflowId) as { n: number }
     ).n;
   }
 

@@ -33,7 +33,7 @@ CREATE TABLE trigger_occurrences (
   received_at INTEGER NOT NULL,
   input_json TEXT NOT NULL CHECK (json_valid(input_json)),
   details_json TEXT NOT NULL CHECK (json_valid(details_json)),
-  state TEXT NOT NULL CHECK (state IN ('ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED')),
+  state TEXT NOT NULL CHECK (state IN ('ACCEPTED', 'ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED')),
   reason TEXT,
   run_id TEXT REFERENCES runs(id),
   decided_at INTEGER
@@ -64,8 +64,8 @@ CREATE TABLE trigger_credentials (
 --> statement-breakpoint
 CREATE INDEX trigger_credential_list ON trigger_credentials(trigger_id);
 --> statement-breakpoint
--- One verified GitHub delivery and the subscriptions it matched when it arrived. A redelivery is
--- answered from this row and never matches again.
+-- One verified GitHub delivery, as GitHub sent it, and the occurrences of the subscriptions it
+-- matched when it arrived. A redelivery is answered from this row and never matches again.
 CREATE TABLE github_deliveries (
   id TEXT PRIMARY KEY NOT NULL,
   github_app_id TEXT NOT NULL REFERENCES github_apps(id),
@@ -74,9 +74,10 @@ CREATE TABLE github_deliveries (
   action TEXT,
   installation_id INTEGER,
   repository_id INTEGER,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   payload_sha256 TEXT NOT NULL,
   payload_bytes INTEGER NOT NULL CHECK (payload_bytes >= 0),
-  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  occurrences_json TEXT NOT NULL CHECK (json_valid(occurrences_json)),
   received_at INTEGER NOT NULL
 ) STRICT;
 --> statement-breakpoint

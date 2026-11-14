@@ -23086,7 +23086,7 @@ var schema317 = {
           id: { $ref: '#/$defs/Uuid' },
           triggerId: { $ref: '#/$defs/Uuid' },
           workflowId: { $ref: '#/$defs/Uuid' },
-          state: { enum: ['ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED'] },
+          state: { enum: ['ACCEPTED', 'ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED'] },
           reason: { type: ['string', 'null'], maxLength: 100 },
           runId: { anyOf: [{ $ref: '#/$defs/Uuid' }, { type: 'null' }] },
         },
@@ -23723,6 +23723,7 @@ function validate215(
                                                 let data11 = data7.state;
                                                 const _errs29 = errors;
                                                 if (!(
+                                                  data11 === 'ACCEPTED' ||
                                                   data11 === 'ADMITTED' ||
                                                   data11 === 'QUEUED' ||
                                                   data11 === 'SKIPPED' ||
@@ -25280,7 +25281,7 @@ var schema333 = {
     dedupKey: { type: 'string', maxLength: 300 },
     occurredAt: { type: 'integer', minimum: 0 },
     receivedAt: { type: 'integer', minimum: 0 },
-    state: { enum: ['ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED'] },
+    state: { enum: ['ACCEPTED', 'ADMITTED', 'QUEUED', 'SKIPPED', 'REJECTED'] },
     reason: { type: ['string', 'null'], maxLength: 100 },
     details: { type: 'object' },
     runId: { anyOf: [{ $ref: '#/$defs/Uuid' }, { type: 'null' }] },
@@ -25780,6 +25781,7 @@ function validate223(
                               let data9 = data.state;
                               const _errs23 = errors;
                               if (!(
+                                data9 === 'ACCEPTED' ||
                                 data9 === 'ADMITTED' ||
                                 data9 === 'QUEUED' ||
                                 data9 === 'SKIPPED' ||

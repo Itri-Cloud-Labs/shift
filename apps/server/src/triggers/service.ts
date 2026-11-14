@@ -9,7 +9,7 @@ import { nodeType } from '../workflows/nodes.js';
 import type { DefinitionRepository, VersionRow } from '../workflows/repository.js';
 
 export type TriggerKind = 'github' | 'schedule' | 'webhook';
-export type OccurrenceState = 'ADMITTED' | 'QUEUED' | 'SKIPPED' | 'REJECTED';
+export type OccurrenceState = 'ACCEPTED' | 'ADMITTED' | 'QUEUED' | 'SKIPPED' | 'REJECTED';
 
 // What a trigger captured: the version that was active when it arrived, and the run's input.
 export interface Capture {
@@ -115,7 +115,8 @@ export class TriggerService {
   // Extra work each kind does when a version is published or a workflow paused (schedules).
   readonly #publishers = new Map<TriggerKind, (trigger: TriggerView, changed: boolean) => void>();
   readonly #enablement: Array<(workflowId: string, enabled: boolean) => void> = [];
-  #draining: Promise<void> | null = null;
+  #admitting: Promise<void> | null = null;
+  #admitAgain = false;
   #timer: NodeJS.Timeout | undefined;
   #stopping = false;
 
@@ -321,29 +322,24 @@ export class TriggerService {
     };
   }
 
-  // Resolves the base commits admission may need, before its transaction. A failure is kept and
-  // becomes that occurrence's rejection rather than failing the whole delivery.
-  async bases(projectIds: Iterable<string>): Promise<Map<string, string | ShiftError>> {
-    const bases = new Map<string, string | ShiftError>();
-    for (const projectId of new Set(projectIds)) {
-      try {
-        bases.set(projectId, await this.#resolveBase(projectId));
-      } catch (error) {
-        bases.set(
-          projectId,
-          error instanceof ShiftError
-            ? error
-            : new ShiftError('BASE_UNRESOLVED', 'The project base ref could not be resolved.', 500),
-        );
-      }
+  // Resolves a project's base commit for admission, outside any transaction. A failure becomes
+  // that occurrence's rejection rather than an error for whoever captured it.
+  async #base(projectId: string): Promise<string | ShiftError> {
+    try {
+      return await this.#resolveBase(projectId);
+    } catch (error) {
+      return error instanceof ShiftError
+        ? error
+        : new ShiftError('BASE_UNRESOLVED', 'The project base ref could not be resolved.', 500);
     }
-    return bases;
   }
 
-  // Records one occurrence per capture with the version active now, and decides each, in the
-  // caller's transaction. A capture whose trigger already holds that dedup key returns the
-  // original occurrence unchanged: a repeat can never start, queue or skip anything again.
-  capture(captures: Capture[], bases: Map<string, string | ShiftError>): OccurrenceView[] {
+  // Records one occurrence per capture with the version active now and decides it, in the
+  // caller's transaction, with no other I/O: what the event matched, the version it runs and
+  // whether it may start are fixed when it arrives (specification 12.1). An occurrence that may
+  // start is ACCEPTED; `admit` creates its run afterwards. A capture whose trigger already holds
+  // that dedup key returns the original occurrence unchanged, so a repeat decides nothing again.
+  capture(captures: Capture[]): OccurrenceView[] {
     if (!this.#db.inTransaction) throw new Error('Capture runs inside a transaction.');
     const now = this.#clock.now();
     return captures.map((capture) => {
@@ -394,7 +390,7 @@ export class TriggerService {
           JSON.stringify(capture.input),
           JSON.stringify(capture.details ?? {}),
         );
-      this.#decide(id, bases, false);
+      this.#decide(id);
       return this.#occurrence(
         this.#db.prepare('SELECT * FROM trigger_occurrences WHERE id = ?').get(id) as OccurrenceRow,
         trigger,
@@ -402,127 +398,153 @@ export class TriggerService {
     });
   }
 
-  // Admission for one undecided or queued occurrence (specification 12.1). A paused workflow
-  // skips a new occurrence and leaves a queued one waiting. Overlap is the workflow's: any
-  // unfinished run, or an earlier occurrence still queued, makes it busy.
-  #decide(id: string, bases: Map<string, string | ShiftError>, queued: boolean): OccurrenceState {
+  #settle(
+    row: OccurrenceRow,
+    state: OccurrenceState,
+    reason: string | null,
+    details: Record<string, Json> = {},
+    runId: string | null = null,
+  ): OccurrenceState {
+    const merged = { ...(JSON.parse(row.details_json) as Record<string, Json>), ...details };
+    this.#db
+      .prepare(
+        'UPDATE trigger_occurrences SET state = ?, reason = ?, details_json = ?, run_id = ?, decided_at = ? WHERE id = ?',
+      )
+      .run(state, reason, JSON.stringify(merged), runId, this.#clock.now(), row.id);
+    this.#event(
+      'trigger.occurrence',
+      {
+        occurrenceId: row.id,
+        triggerId: row.trigger_id,
+        workflowId: row.workflow_id,
+        state,
+        reason,
+      },
+      runId,
+    );
+    return state;
+  }
+
+  // Whether a workflow has work that a new occurrence would overlap: an unfinished run, an
+  // accepted occurrence whose run is being created, or (before `ordinal`) a queued one. Waiting,
+  // held and needs-human runs are unfinished.
+  #busy(workflowId: string, ordinal: number): { busy: boolean; unfinishedRuns: number } {
+    const counts = this.#db
+      .prepare(
+        "SELECT (SELECT COUNT(*) FROM runs WHERE workflow_id = ? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')) AS runs, (SELECT COUNT(*) FROM trigger_occurrences WHERE workflow_id = ? AND (state = 'ACCEPTED' OR (state = 'QUEUED' AND ordinal < ?))) AS waiting",
+      )
+      .get(workflowId, workflowId, ordinal) as { runs: number; waiting: number };
+    return { busy: counts.runs + counts.waiting > 0, unfinishedRuns: counts.runs };
+  }
+
+  // Admission for a new occurrence (specification 12.1): a paused workflow skips it, and the
+  // workflow's overlap policy skips, queues or accepts it.
+  #decide(id: string): OccurrenceState {
     const row = this.#db
       .prepare('SELECT * FROM trigger_occurrences WHERE id = ?')
       .get(id) as OccurrenceRow;
     const workflow = this.#db
       .prepare('SELECT enabled, archived_at FROM workflows WHERE id = ?')
       .get(row.workflow_id) as { enabled: number; archived_at: number | null };
-    const settle = (
-      state: OccurrenceState,
-      reason: string | null,
-      details: Record<string, Json> = {},
-      runId: string | null = null,
-    ): OccurrenceState => {
-      const merged = { ...(JSON.parse(row.details_json) as Record<string, Json>), ...details };
-      this.#db
-        .prepare(
-          'UPDATE trigger_occurrences SET state = ?, reason = ?, details_json = ?, run_id = ?, decided_at = ? WHERE id = ?',
-        )
-        .run(state, reason, JSON.stringify(merged), runId, this.#clock.now(), id);
-      this.#event(
-        'trigger.occurrence',
-        {
-          occurrenceId: id,
-          triggerId: row.trigger_id,
-          workflowId: row.workflow_id,
-          state,
-          reason,
-          ...(queued ? { fromQueue: true } : {}),
-        },
-        runId,
-      );
-      return state;
-    };
-    if (workflow.archived_at !== null) return settle('SKIPPED', 'WORKFLOW_ARCHIVED');
-    if (!workflow.enabled) {
-      if (queued) return 'QUEUED';
-      return settle('SKIPPED', 'WORKFLOW_PAUSED');
-    }
-    const version = this.#definitions.version(row.workflow_version_id);
-    const policy = version.document.execution.overlap;
-    const earlier = this.#db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM trigger_occurrences WHERE workflow_id = ? AND state = 'QUEUED' AND ordinal < ?",
-      )
-      .get(row.workflow_id, row.ordinal) as { n: number };
-    const unfinished = (
-      this.#db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM runs WHERE workflow_id = ? AND state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')",
-        )
-        .get(row.workflow_id) as { n: number }
-    ).n;
-    // A queued occurrence waits its turn even under a later version's policy; it was promised one.
-    const busy = unfinished > 0 || earlier.n > 0;
-    if (busy && (queued || policy === 'queue')) {
-      if (queued) return 'QUEUED';
-      return settle('QUEUED', 'OVERLAP', { unfinishedRuns: unfinished });
-    }
+    if (workflow.archived_at !== null) return this.#settle(row, 'SKIPPED', 'WORKFLOW_ARCHIVED');
+    if (!workflow.enabled) return this.#settle(row, 'SKIPPED', 'WORKFLOW_PAUSED');
+    const policy = this.#definitions.version(row.workflow_version_id).document.execution.overlap;
+    const { busy, unfinishedRuns } = this.#busy(row.workflow_id, row.ordinal);
+    if (busy && policy === 'queue')
+      return this.#settle(row, 'QUEUED', 'OVERLAP', { unfinishedRuns });
     if (busy && policy === 'skip')
-      return settle('SKIPPED', 'OVERLAP', { unfinishedRuns: unfinished });
-    const base =
-      bases.get(version.projectId) ??
-      new ShiftError('BASE_UNRESOLVED', 'The project base ref was not resolved.', 500);
-    if (base instanceof ShiftError) return settle('REJECTED', base.code, { message: base.message });
-    const trigger = this.#db
-      .prepare('SELECT node_id FROM triggers WHERE id = ?')
-      .get(row.trigger_id) as { node_id: string };
-    try {
-      const runId = this.#db.transaction(() =>
-        this.#engine!.admit(version, trigger.node_id, JSON.parse(row.input_json) as Json, base, id),
-      )();
-      return settle('ADMITTED', null, {}, runId);
-    } catch (error) {
-      if (!(error instanceof ShiftError)) throw error;
-      return settle('REJECTED', error.code, { message: error.message });
-    }
+      return this.#settle(row, 'SKIPPED', 'OVERLAP', { unfinishedRuns });
+    return this.#settle(row, 'ACCEPTED', null);
   }
 
-  // Admits queued occurrences whose workflow has room, oldest first. The base commit is resolved
-  // outside the transaction, which then rechecks the occurrence is still queued and next.
-  async drain(): Promise<void> {
-    if (this.#draining) return this.#draining;
-    this.#draining = (async () => {
+  // Creates the runs of accepted occurrences, oldest first. The base commit is resolved outside
+  // the transaction, which then rechecks that the occurrence is still accepted, so a concurrent
+  // or repeated admission creates nothing twice. The run is the version the occurrence captured.
+  // Callers wait for admissions requested while one is running to finish too.
+  admit(): Promise<void> {
+    if (this.#admitting) {
+      this.#admitAgain = true;
+      return this.#admitting;
+    }
+    this.#admitting = (async () => {
       let admitted = false;
-      for (let pass = 0; pass < 100 && !this.#stopping; pass++) {
-        const heads = this.#db
+      do {
+        this.#admitAgain = false;
+        const accepted = this.#db
           .prepare(
-            "SELECT o.id, o.workflow_version_id FROM trigger_occurrences o JOIN workflows w ON w.id = o.workflow_id WHERE o.state = 'QUEUED' AND w.enabled = 1 AND o.ordinal = (SELECT MIN(ordinal) FROM trigger_occurrences q WHERE q.workflow_id = o.workflow_id AND q.state = 'QUEUED') AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.workflow_id = o.workflow_id AND r.state NOT IN ('COMPLETED', 'FAILED', 'CANCELLED'))",
+            "SELECT id, workflow_version_id FROM trigger_occurrences WHERE state = 'ACCEPTED' ORDER BY ordinal",
           )
           .all() as Array<{ id: string; workflow_version_id: string }>;
-        if (heads.length === 0) break;
-        let progressed = false;
-        for (const head of heads) {
+        for (const pending of accepted) {
           if (this.#stopping) break;
-          const projectId = this.#definitions.version(head.workflow_version_id).projectId;
-          const bases = await this.bases([projectId]);
+          const version = this.#definitions.version(pending.workflow_version_id);
+          const base = await this.#base(version.projectId);
           const state = this.#db
             .transaction(() => {
               const row = this.#db
-                .prepare('SELECT state FROM trigger_occurrences WHERE id = ?')
-                .get(head.id) as { state: OccurrenceState };
-              return row.state === 'QUEUED' ? this.#decide(head.id, bases, true) : row.state;
+                .prepare('SELECT * FROM trigger_occurrences WHERE id = ?')
+                .get(pending.id) as OccurrenceRow;
+              if (row.state !== 'ACCEPTED') return row.state;
+              if (base instanceof ShiftError)
+                return this.#settle(row, 'REJECTED', base.code, { message: base.message });
+              const trigger = this.#db
+                .prepare('SELECT node_id FROM triggers WHERE id = ?')
+                .get(row.trigger_id) as { node_id: string };
+              try {
+                const runId = this.#db.transaction(() =>
+                  this.#engine!.admit(
+                    version,
+                    trigger.node_id,
+                    JSON.parse(row.input_json) as Json,
+                    base,
+                    row.id,
+                  ),
+                )();
+                return this.#settle(row, 'ADMITTED', null, {}, runId);
+              } catch (error) {
+                if (!(error instanceof ShiftError)) throw error;
+                return this.#settle(row, 'REJECTED', error.code, { message: error.message });
+              }
             })
             .immediate();
-          if (state !== 'QUEUED') progressed = true;
           if (state === 'ADMITTED') admitted = true;
         }
-        if (!progressed) break;
-      }
+      } while (this.#admitAgain && !this.#stopping);
       if (admitted) this.#engine?.wake();
     })()
       .catch((error: unknown) =>
-        this.#logger.error({ err: error }, 'Admitting queued occurrences failed.'),
+        this.#logger.error({ err: error }, 'Admitting occurrences failed.'),
       )
       .finally(() => {
-        this.#draining = null;
+        this.#admitting = null;
       });
-    return this.#draining;
+    return this.#admitting;
+  }
+
+  // Accepts the oldest queued occurrence of each enabled workflow that has nothing unfinished,
+  // then admits it; a rejected one lets the next take its turn. A queued occurrence keeps its
+  // place under a later version's policy: it was promised a run.
+  async drain(): Promise<void> {
+    for (let pass = 0; pass < 100 && !this.#stopping; pass++) {
+      const promoted = this.#db
+        .transaction(() => {
+          const heads = this.#db
+            .prepare(
+              "SELECT o.* FROM trigger_occurrences o JOIN workflows w ON w.id = o.workflow_id WHERE o.state = 'QUEUED' AND w.enabled = 1 AND w.archived_at IS NULL AND o.ordinal = (SELECT MIN(ordinal) FROM trigger_occurrences q WHERE q.workflow_id = o.workflow_id AND q.state = 'QUEUED')",
+            )
+            .all() as OccurrenceRow[];
+          let count = 0;
+          for (const head of heads) {
+            if (this.#busy(head.workflow_id, head.ordinal).busy) continue;
+            this.#settle(head, 'ACCEPTED', null, { fromQueue: true });
+            count++;
+          }
+          return count;
+        })
+        .immediate();
+      await this.admit();
+      if (promoted === 0) break;
+    }
   }
 
   // Ticks admit queued occurrences and run each kind's own timers (schedules).
@@ -552,6 +574,6 @@ export class TriggerService {
   async stop(): Promise<void> {
     this.#stopping = true;
     clearInterval(this.#timer);
-    await this.#draining;
+    await this.#admitting;
   }
 }

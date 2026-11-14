@@ -2964,7 +2964,7 @@
           "minimum": 0
         },
         "state": {
-          "enum": ["ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
+          "enum": ["ACCEPTED", "ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
         },
         "reason": {
           "type": ["string", "null"],
@@ -3104,7 +3104,7 @@
                 "$ref": "#/$defs/Uuid"
               },
               "state": {
-                "enum": ["ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
+                "enum": ["ACCEPTED", "ADMITTED", "QUEUED", "SKIPPED", "REJECTED"]
               },
               "reason": {
                 "type": ["string", "null"],
