@@ -49,6 +49,9 @@ import {
   validateInteractionList,
   validateWorkspaceResponse,
   validateWorkspaceList,
+  validateWorkspaceListing,
+  validateWorkspaceFileResponse,
+  validateWorkspaceGitResponse,
   validateCommandReceiptResponse,
   validateEventPage,
   validateSnapshot,
@@ -72,6 +75,7 @@ import type { HttpTriggers } from './triggers/http-triggers.js';
 import type { TriggerService } from './triggers/service.js';
 import type { RunEngine } from './runs/engine.js';
 import type { WorkspaceService } from './workspaces/service.js';
+import { WorkspaceInspector } from './workspaces/inspect.js';
 import type { DefinitionRepository } from './workflows/repository.js';
 import type { DefinitionService } from './workflows/service.js';
 
@@ -543,6 +547,10 @@ export function createHttpServer(options: {
     router.post('/sessions/:id/goals', guard, json, (req, res) => {
       command(res, engine.sendGoal(id(req), body(req), actorOf(res)), validateInvocationResponse);
     });
+    // A manual message to a held run's session.
+    router.post('/runs/:id/messages', guard, json, (req, res) => {
+      command(res, engine.messageRun(id(req), body(req), actorOf(res)), validateInvocationResponse);
+    });
     // A session's normalized conversation: `after` is a position, `limit` at most 500.
     router.get('/sessions/:id/transcript', guard, (req, res) => {
       const after = query(req, 'after') ?? '0';
@@ -586,7 +594,16 @@ export function createHttpServer(options: {
       stream.on('error', () => res.destroy());
       stream.pipe(res);
     });
-    for (const kind of ['cancel', 'retry', 'fail', 'complete', 'extend'] as const) {
+    for (const kind of [
+      'cancel',
+      'retry',
+      'fail',
+      'complete',
+      'extend',
+      'hold',
+      'abort',
+      'resume',
+    ] as const) {
       router.post(`/runs/:id/${kind}`, guard, json, (req, res) => {
         command(
           res,
@@ -639,6 +656,51 @@ export function createHttpServer(options: {
           validateWorkspaceResponse,
         );
       });
+      // Read-only, live inspection of a workspace: a directory, a file's text, its bytes, and Git.
+      const inspector = new WorkspaceInspector(workspaces.workspaces);
+      router.get('/workspaces/:id/files', guard, async (req, res) => {
+        reply(
+          res,
+          200,
+          { listing: await inspector.list(id(req), query(req, 'path')) },
+          validateWorkspaceListing,
+        );
+      });
+      router.get('/workspaces/:id/file', guard, async (req, res) => {
+        reply(
+          res,
+          200,
+          { file: await inspector.file(id(req), query(req, 'path')) },
+          validateWorkspaceFileResponse,
+        );
+      });
+      router.get('/workspaces/:id/download', guard, async (req, res) => {
+        const file = await inspector.download(id(req), query(req, 'path'));
+        // Bytes to save, never to render: no sniffing, and an attachment with a plain name.
+        res.set({
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(file.size),
+          'Content-Disposition': `attachment; filename="${file.name.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+        });
+        file.stream.on('error', () => res.destroy());
+        file.stream.pipe(res);
+      });
+      router.get('/workspaces/:id/status', guard, async (req, res) => {
+        reply(res, 200, { status: await inspector.status(id(req)) }, validateWorkspaceGitResponse);
+      });
+      router.get('/workspaces/:id/diff', guard, async (req, res) => {
+        const against = query(req, 'against') ?? 'base';
+        if (against !== 'base' && against !== 'head')
+          throw new ShiftError('INVALID_REQUEST', 'against is base or head.', 422, false, [
+            '/against',
+          ]);
+        reply(
+          res,
+          200,
+          { diff: await inspector.diff(id(req), against, query(req, 'path')) },
+          validateWorkspaceGitResponse,
+        );
+      });
     }
     const events = options.events;
     if (events) {
@@ -650,10 +712,11 @@ export function createHttpServer(options: {
           throw new ShiftError('INVALID_REQUEST', 'Invalid limit.', 422, false, ['/limit']);
         }
         const after = query(req, 'after');
+        const runId = query(req, 'runId');
         reply(
           res,
           200,
-          events.log.page(after === undefined ? 0 : events.log.parse(after), limit),
+          events.log.page(after === undefined ? 0 : events.log.parse(after), limit, runId),
           validateEventPage,
         );
       });

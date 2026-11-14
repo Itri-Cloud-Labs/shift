@@ -374,6 +374,12 @@ function upgradeSnapshot(stored: RunSnapshot | LegacySnapshot): RunSnapshot {
 
 // Synchronous repository over short transactions. Every state change made by a worker checks its
 // attempt fence in the same transaction, so a stale task can never advance a run.
+// A run the owner holds shows as HELD while it would otherwise be running or waiting; a run that
+// needs the owner or is being cancelled shows that instead, with its hold alongside.
+function shownState(state: string, hold: string | null): string {
+  return hold !== null && (state === 'RUNNING' || state === 'WAITING') ? 'HELD' : state;
+}
+
 export class RunRepository {
   constructor(
     private readonly db: Database.Database,
@@ -586,7 +592,7 @@ export class RunRepository {
     return (
       this.db
         .prepare(
-          "SELECT e.id, e.node_type, e.node_id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.state = 'PENDING' AND r.state = 'RUNNING' ORDER BY r.created_at, e.sequence",
+          "SELECT e.id, e.node_type, e.node_id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.state = 'PENDING' AND r.state = 'RUNNING' AND r.hold_json IS NULL ORDER BY r.created_at, e.sequence",
         )
         .all() as Array<{ id: string; node_type: string | null; node_id: string }>
     ).map((row) => ({ id: row.id, nodeType: row.node_type ?? row.node_id }));
@@ -596,8 +602,11 @@ export class RunRepository {
     return this.db
       .transaction(() => {
         const execution = this.db
-          .prepare("SELECT run_id FROM node_executions WHERE id = ? AND state = 'PENDING'")
+          .prepare(
+            "SELECT e.run_id FROM node_executions e JOIN runs r ON r.id = e.run_id WHERE e.id = ? AND e.state = 'PENDING' AND r.hold_json IS NULL",
+          )
           .get(executionId) as { run_id: string } | undefined;
+        // A held run starts nothing new until it is resumed.
         if (!execution) return null;
         if (!this.#acquire(executionId)) return null;
         const attemptId = randomUUID();
@@ -848,6 +857,8 @@ export class RunRepository {
   createManualGoal(
     agentSessionId: string,
     invocation: { id: string; correlationId: string; prompt: string },
+    // A held run whose session this is: its own idle steps do not count as another owner.
+    heldRunId: string | null = null,
   ): InvocationRow {
     return this.db
       .transaction(() => {
@@ -866,8 +877,17 @@ export class RunRepository {
             'The session has no confirmed conversation yet.',
             409,
           );
+        const holder = this.#heldByOther('session', agentSessionId, '');
+        const ownHeld =
+          holder !== null &&
+          heldRunId !== null &&
+          (
+            this.db.prepare('SELECT run_id FROM node_executions WHERE id = ?').get(holder) as {
+              run_id: string;
+            }
+          ).run_id === heldRunId;
         if (
-          this.#heldByOther('session', agentSessionId, '') ||
+          (holder !== null && !ownHeld) ||
           this.#manualActive(agentSessionId) ||
           this.db
             .prepare(
@@ -2796,6 +2816,194 @@ export class RunRepository {
       .immediate();
   }
 
+  // Holds a run for manual intervention (specification 6.6). The hold is recorded before any
+  // manual message; nothing new starts while it lasts, an active attempt runs on unless the owner
+  // aborts it, and a human response is still accepted. Holding a held run changes nothing.
+  hold(runId: string, actor: ControlActor, commandId: string | undefined, reason?: string): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#require(run, ['RUNNING', 'WAITING', 'NEEDS_HUMAN'], 'hold');
+        this.#notCancelling(run);
+        if (this.#holdOf(runId)) return;
+        const hold = {
+          at: this.clock.now(),
+          actor: { kind: actor.kind, id: actor.id },
+          ...(reason ? { reason } : {}),
+        };
+        this.#control(runId, 'hold', actor, commandId, null, reason ? { reason } : {});
+        this.db
+          .prepare('UPDATE runs SET hold_json = ?, revision = revision + 1 WHERE id = ?')
+          .run(JSON.stringify(hold), runId);
+        this.#event('run.held', { runId }, reason ? { reason } : {});
+      })
+      .immediate();
+  }
+
+  #holdOf(runId: string): Record<string, Json> | null {
+    const row = this.db.prepare('SELECT hold_json FROM runs WHERE id = ?').get(runId) as
+      { hold_json: string | null } | undefined;
+    return row?.hold_json ? (JSON.parse(row.hold_json) as Record<string, Json>) : null;
+  }
+
+  #requireHold(runId: string): void {
+    if (!this.#holdOf(runId))
+      throw new ShiftError('RUN_NOT_HELD', 'Hold the run before intervening.', 409);
+  }
+
+  // Asks the held run's active attempts to stop. The engine stops them and then settles.
+  requestAbort(runId: string, actor: ControlActor, commandId: string | undefined): Claim[] {
+    return this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#notCancelling(run);
+        this.#requireHold(runId);
+        const claims = this.#runningClaims(runId);
+        if (claims.length === 0)
+          throw new ShiftError('NOTHING_TO_ABORT', 'Nothing is running in this run.', 409);
+        this.#control(runId, 'abort', actor, commandId, claims[0]!.executionId, {});
+        this.#event('run.abort_requested', { runId, executionId: claims[0]!.executionId }, {});
+        return claims;
+      })
+      .immediate();
+  }
+
+  // Accounts for attempts stopped by an abort: each is interrupted, its step waits, and the run
+  // needs the owner, who can now message its session and resume. Effects the stop could not
+  // confirm stay unknown, as after a crash, and the agent is told so when the step runs again.
+  settleAbort(runId: string): void {
+    this.db
+      .transaction(() => {
+        if (this.#runState(runId) === 'CANCEL_REQUESTED' || !this.#holdOf(runId)) return;
+        const now = this.clock.now();
+        let uncertain = false;
+        let stopped = 0;
+        for (const claim of this.#runningClaims(runId)) {
+          const last = this.invocations(claim.attemptId).at(-1);
+          const submitted = this.db
+            .prepare(
+              "SELECT 1 FROM effect_operations WHERE execution_id = ? AND state = 'SUBMITTED'",
+            )
+            .get(claim.executionId);
+          uncertain ||=
+            submitted !== undefined ||
+            (last !== undefined && (activeStates.has(last.state) || last.state === 'UNKNOWN'));
+          this.#charge(runId, claim.attemptId);
+          this.db
+            .prepare("UPDATE node_attempts SET state = 'INTERRUPTED', finished_at = ? WHERE id = ?")
+            .run(now, claim.attemptId);
+          this.db
+            .prepare(
+              "UPDATE node_executions SET state = 'WAITING', revision = revision + 1 WHERE id = ?",
+            )
+            .run(claim.executionId);
+          stopped++;
+        }
+        if (stopped === 0) return;
+        const attention = {
+          code: 'INTERVENING',
+          explanation: uncertain
+            ? 'You stopped this step to intervene, and Shift could not confirm what it had done. Message its session if you like, then resume to run the step again; the agent is told earlier effects are unknown.'
+            : 'You stopped this step to intervene. Message its session if you like, then resume to run the step again in the same session.',
+        };
+        this.db
+          .prepare(
+            "UPDATE runs SET state = 'NEEDS_HUMAN', attention_json = ?, revision = revision + 1 WHERE id = ?",
+          )
+          .run(JSON.stringify(attention), runId);
+        this.#event('run.needs_human', { runId }, attention);
+      })
+      .immediate();
+  }
+
+  // The session a manual message to a held run goes to: the one named, which must belong to the
+  // run, or the run's latest. Nothing of the run may be running, so the session has one owner.
+  heldSession(runId: string, sessionId: string | undefined): string {
+    this.#requireHold(runId);
+    if (this.#runningClaims(runId).length > 0)
+      throw new ShiftError(
+        'RUN_ACTIVE',
+        'A step of this run is still running. Wait for it to finish, or abort it, before messaging its session.',
+        409,
+      );
+    const sessions = this.db
+      .prepare(
+        'SELECT agent_session_id FROM node_executions WHERE run_id = ? AND agent_session_id IS NOT NULL ORDER BY sequence DESC',
+      )
+      .all(runId) as Array<{ agent_session_id: string }>;
+    const chosen =
+      sessionId === undefined
+        ? sessions[0]?.agent_session_id
+        : sessions.find((row) => row.agent_session_id === sessionId)?.agent_session_id;
+    if (!chosen)
+      throw new ShiftError(
+        'SESSION_NOT_FOUND',
+        sessionId === undefined
+          ? 'This run has no agent session to message.'
+          : 'That session is not one of this run.',
+        404,
+      );
+    return chosen;
+  }
+
+  // Records a manual message sent to a held run's session; it never becomes the step's result.
+  recordMessage(
+    runId: string,
+    actor: ControlActor,
+    commandId: string | undefined,
+    sessionId: string,
+    invocationId: string,
+  ): void {
+    const execution = this.db
+      .prepare(
+        'SELECT id FROM node_executions WHERE run_id = ? AND agent_session_id = ? ORDER BY sequence DESC LIMIT 1',
+      )
+      .get(runId, sessionId) as { id: string } | undefined;
+    this.#control(runId, 'message', actor, commandId, execution?.id ?? null, {
+      sessionId,
+      invocationId,
+    });
+    this.#event('run.message', { runId, sessionId }, { invocationId });
+  }
+
+  // Ends a hold. A step the owner aborted runs again in the same session, told that earlier effects
+  // are unknown, like a retry; anything that finished while the run was held simply continues.
+  resumeHold(runId: string, actor: ControlActor, commandId: string | undefined): void {
+    this.db
+      .transaction(() => {
+        const run = this.#controlled(runId);
+        this.#notCancelling(run);
+        this.#requireHold(runId);
+        const intervened =
+          run.state === 'NEEDS_HUMAN' &&
+          (JSON.parse(run.attention_json ?? '{}') as { code?: string }).code === 'INTERVENING';
+        const stuck = intervened ? this.#stuck(runId) : undefined;
+        this.#control(runId, 'resume', actor, commandId, stuck?.id ?? null, {});
+        this.db
+          .prepare('UPDATE runs SET hold_json = NULL, revision = revision + 1 WHERE id = ?')
+          .run(runId);
+        if (stuck) {
+          this.db
+            .prepare(
+              "UPDATE effect_operations SET state = 'ABANDONED', resolution_json = ?, updated_at = ? WHERE execution_id = ? AND state IN ('SUBMITTED', 'UNKNOWN')",
+            )
+            .run(
+              JSON.stringify({ by: 'owner', control: 'resume', actor: { ...actor } }),
+              this.clock.now(),
+              stuck.id,
+            );
+          this.db
+            .prepare(
+              "UPDATE node_executions SET state = 'PENDING', revision = revision + 1 WHERE id = ?",
+            )
+            .run(stuck.id);
+          this.#resume(runId);
+        }
+        this.#event('run.resumed', { runId }, stuck ? { executionId: stuck.id } : {});
+      })
+      .immediate();
+  }
+
   // Reopens the stuck execution with a new attempt. The owner has confirmed that retrying is safe;
   // the agent continues in the same session and is told that earlier effects are unknown.
   retry(runId: string, actor: ControlActor, commandId: string | undefined): void {
@@ -3134,7 +3342,8 @@ export class RunRepository {
 
   #control(
     runId: string,
-    kind: 'cancel' | 'retry' | 'fail' | 'complete' | 'extend',
+    kind:
+      'cancel' | 'retry' | 'fail' | 'complete' | 'extend' | 'hold' | 'abort' | 'message' | 'resume',
     actor: ControlActor,
     commandId: string | undefined,
     executionId: string | null,
@@ -3283,12 +3492,13 @@ export class RunRepository {
   run(runId: string): Json {
     const run = this.db
       .prepare(
-        'SELECT r.id, r.state, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, r.cancel_requested_at, r.occurrence_id, (SELECT e.node_id FROM node_executions e WHERE e.run_id = r.id AND e.sequence = 1) AS entry_node_id, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
+        'SELECT r.id, r.state, r.hold_json, r.snapshot_json, r.attention_json, r.outcome_json, r.created_at, r.finished_at, r.cancel_requested_at, r.occurrence_id, (SELECT e.node_id FROM node_executions e WHERE e.run_id = r.id AND e.sequence = 1) AS entry_node_id, w.id AS workspace_id, w.path AS workspace_path, w.state AS workspace_state FROM runs r LEFT JOIN workspaces w ON w.id = r.primary_workspace_id WHERE r.id = ?',
       )
       .get(runId) as
       | {
           id: string;
           state: string;
+          hold_json: string | null;
           occurrence_id: string | null;
           entry_node_id: string | null;
           cancel_requested_at: number | null;
@@ -3363,9 +3573,16 @@ export class RunRepository {
                 }
               : { kind: 'timer', executionId: wakeup.execution_id, dueAt: wakeup.due_at };
     const snapshot = upgradeSnapshot(JSON.parse(run.snapshot_json) as RunSnapshot | LegacySnapshot);
+    const hold =
+      run.hold_json === null ? null : (JSON.parse(run.hold_json) as Record<string, Json>);
     return {
       id: run.id,
-      state: run.state,
+      state: shownState(run.state, run.hold_json),
+      // The owner's intervention hold, while the run is unfinished.
+      hold:
+        hold && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.state)
+          ? { ...hold, activeWork: this.#runningClaims(run.id).length > 0 }
+          : null,
       workflowId: snapshot.workflowId,
       versionId: snapshot.versionId,
       versionNumber: snapshot.versionNumber,
@@ -3424,18 +3641,19 @@ export class RunRepository {
     return (
       this.db
         .prepare(
-          'SELECT id, state, workflow_id, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT 100',
+          'SELECT id, state, hold_json, workflow_id, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT 100',
         )
         .all() as Array<{
         id: string;
         state: string;
+        hold_json: string | null;
         workflow_id: string | null;
         created_at: number;
         finished_at: number | null;
       }>
     ).map((run) => ({
       id: run.id,
-      state: run.state,
+      state: shownState(run.state, run.hold_json),
       workflowId: run.workflow_id,
       createdAt: run.created_at,
       finishedAt: run.finished_at,

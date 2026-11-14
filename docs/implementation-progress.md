@@ -806,3 +806,15 @@ Status: the desktop part of prompts 24, 25 and 26, which completes them, except 
   - `tools/capture.mjs` against a real server and the fake GitHub: a published workflow with all three triggers and a `queue` policy, a signed GitHub delivery that started a run and one that queued behind it, an HTTP event sent with the sender script, then Pause. The screenshots show the schedule form with its preview in Europe/Berlin time, the GitHub trigger form with its starts, the HTTP trigger's address with a newly created secret, the Paused badge with Resume new runs, and the run that says it came from `pr_opened`.
   - `pnpm smoke` passes with the new allow-lists, including a path-like trigger ID and a zero-minute interval refused at the bridge. Unit tests cover the trigger rules, schedule checks and overlap edits.
 - **Not verified:** deliveries from real GitHub (release prerequisite).
+
+## Intervention and workspace inspection (27, server)
+
+Status: prompt 27's server work for holds, manual messages and workspace inspection (M13). Attention, histories, Advanced configuration and the desktop UI follow. Date: 2026-11-14.
+
+- **Changed:** migration `0018_holds` (`runs.hold_json`; `run_controls` kinds `hold`, `abort`, `message`, `resume`). Run controls `hold`, `abort`, `resume` and `POST /runs/{id}/messages`; runs show `hold` and `HELD`. `src/workspaces/inspect.ts` with files, file, download, status and diff routes. `GET /events?runId=`. CLI `shift run hold|abort|resume|message` and `shift workspace files|file|status|diff`.
+- **Verified** (`test/runs.test.ts`, `test/workspace-inspect.test.ts`):
+  - A hold while an agent step runs lets it finish, refuses a message until then, and starts nothing more; after a restart the run is still held. A message goes to the run's session as an owner turn, a repeated command returns it, and resume runs the next step. Controls read hold, message, resume; no step's output came from the message.
+  - Abort without a hold and with nothing running is refused. A held, running agent is stopped (one harness cancel), the run waits with `INTERVENING`, a message is sent, and resume runs the step again in the same session with the effects-unknown continuation; its attempts read interrupted, completed.
+  - A held run waiting for an approval accepts the response but does not move on until resume.
+  - Inspection lists a workspace without `.git`, reads text, follows a link inside, flags binary and truncates large text without splitting a character; refuses links to `/etc`, `..`, absolute paths, `.git`, directories, a FIFO and missing files; downloads exact bytes; reports Git status and diff; and refuses a removed workspace.
+- **Not verified:** desktop UI for these (next).

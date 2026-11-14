@@ -39,6 +39,9 @@ const options = {
   before: { type: 'string' },
   'allow-overlap': { type: 'boolean' },
   cron: { type: 'string' },
+  message: { type: 'string' },
+  session: { type: 'string' },
+  against: { type: 'string' },
   timezone: { type: 'string' },
   minutes: { type: 'string' },
   count: { type: 'string' },
@@ -434,13 +437,31 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
       process.stdout.write(call.bytes ?? '');
       return;
     }
+    case 'run message': {
+      const message = need(values.message, '--message');
+      return print(
+        (
+          await send(
+            'POST',
+            `/api/v0/admin/runs/${encodeURIComponent(need(target, 'RUN_ID'))}/messages`,
+            { message, ...(values.session ? { sessionId: values.session } : {}) },
+          )
+        )['invocation'],
+      );
+    }
     case 'run cancel':
     case 'run retry':
     case 'run fail':
     case 'run complete':
-    case 'run extend': {
+    case 'run extend':
+    case 'run hold':
+    case 'run abort':
+    case 'run resume': {
       const body: Record<string, unknown> = {};
-      if (values.reason !== undefined && (action === 'cancel' || action === 'fail')) {
+      if (
+        values.reason !== undefined &&
+        (action === 'cancel' || action === 'fail' || action === 'hold')
+      ) {
         body['reason'] = values.reason;
       }
       if (action === 'complete') body['data'] = await file(values.file);
@@ -592,6 +613,19 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
           )
         )['workspaces'],
       );
+    case 'workspace files':
+    case 'workspace file':
+    case 'workspace status':
+    case 'workspace diff': {
+      const params = new URLSearchParams();
+      if (values.path) params.set('path', values.path);
+      if (action === 'diff' && values.against) params.set('against', values.against);
+      const endpoint = action === 'files' ? 'files' : action;
+      const result = await get(
+        `/api/v0/admin/workspaces/${encodeURIComponent(need(target, 'WORKSPACE_ID'))}/${endpoint}?${params}`,
+      );
+      return print(result[action === 'files' ? 'listing' : action!]);
+    }
     case 'workspace show':
       return print(
         (await get(`/api/v0/admin/workspaces/${encodeURIComponent(need(target, 'WORKSPACE_ID'))}`))[

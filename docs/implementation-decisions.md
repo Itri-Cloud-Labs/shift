@@ -693,3 +693,12 @@ Decided 2026-11-14 for M12a, following specification sections 4.4, 12.1 and 13.
 - **Dedup is by the caller's event ID.** With `X-Shift-Event-Id`, the occurrence key is `event:<id>` and the request hash is the body's SHA-256: the same body returns the original occurrence, another body is a conflict. Without an ID each request is new (`request:<uuid>`); documented, because a sender retrying a lost answer would otherwise start a run twice.
 - **Validation before capture, against the version captured.** The input is checked against the `inputSchema` of the version active in the capture transaction, so a refused event leaves no occurrence and an accepted one always fits the version it runs.
 - **A local sender script, not a CLI command,** because a sender is another system: `tools/send-trigger-event.mjs` reads the secret from the environment and signs exactly the bytes it sends.
+
+## Intervention and workspace inspection (27)
+
+Decided 2026-11-14 for M13, following specification sections 6.6, 11.2 and 13.2 and client sections 5.5 and 5.6.
+
+- **A hold is a flag on the run, not a state it is moved into.** `runs.hold_json` keeps the underlying state (`RUNNING`, `WAITING`, `NEEDS_HUMAN`) that the rest of the engine already reasons about; views show `HELD` while it would otherwise be running or waiting. Dispatch and attempt claims skip held runs, so a held run starts nothing, while human responses, timers and running attempts settle as usual and simply leave their successor pending.
+- **Abort reuses cancellation's stop, not its outcome.** The engine stops the attempts as for a cancel, then `settleAbort` interrupts them and leaves the run in `NEEDS_HUMAN` with `INTERVENING`. Resume of an aborted step is the existing retry: same session, effects unknown, earlier attempts kept. This keeps one way of running a stopped step again.
+- **Manual messages are owner goals scoped to the held run.** They use the existing manual-goal path, which already gives a session one owner at a time; a held run's own idle steps are not counted as another owner, and nothing of the run may be running. Each message is a run control with its invocation, and it never becomes a result.
+- **Workspace inspection checks through the descriptor.** `realpath` keeps a request inside the workspace, then the file is opened with `O_NOFOLLOW` and its `/proc/self/fd` link is checked again, so a link swapped in between cannot redirect the read; downloads stream from that same descriptor. Linux only, as the server is. No library: Node's file system API covers it.
