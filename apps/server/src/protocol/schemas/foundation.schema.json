@@ -16,6 +16,9 @@
       "$ref": "#/$defs/ShutdownAcknowledgement"
     },
     {
+      "$ref": "#/$defs/UpgradeQuiesce"
+    },
+    {
       "$ref": "#/$defs/ServerIdentity"
     },
     {
@@ -423,6 +426,27 @@
         },
         "accepted": {
           "const": true
+        }
+      }
+    },
+    "UpgradeQuiesce": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "active", "until"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "until": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

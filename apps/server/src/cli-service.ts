@@ -31,6 +31,8 @@ const options = {
   follow: { type: 'boolean', short: 'f' },
   sums: { type: 'string' },
   'allow-active': { type: 'boolean' },
+  'database-only': { type: 'boolean' },
+  resume: { type: 'boolean' },
   timeout: { type: 'string' },
 } as const;
 
@@ -333,6 +335,13 @@ export interface UpgradeCheck {
 // Run by the release being installed, against the current data, before anything is switched. It
 // opens the database read-only and asks the running server, if any, about active work.
 async function upgradeCheck(values: Values, stateDirectory: string): Promise<void> {
+  if (values.resume) {
+    await administrativeCall(stateDirectory, {
+      method: 'POST',
+      path: '/api/v0/admin/upgrade/resume',
+    }).catch(() => undefined);
+    return;
+  }
   const migrations = readMigrationFiles({ migrationsFolder: migrationsDirectory });
   const result: UpgradeCheck = {
     compatible: true,
@@ -376,22 +385,32 @@ async function upgradeCheck(values: Values, stateDirectory: string): Promise<voi
       db.close();
     }
   }
-  if (result.compatible) {
+  if (result.compatible && !values['database-only']) {
+    // Pauses the running server's dispatch and counts its running steps in one request, so no step
+    // starts between this check and the installer's stop. A refusal hands dispatch back.
+    let quiesce: { status: number; payload: unknown } | null = null;
     try {
-      const { status, payload } = await administrativeCall(stateDirectory, {
-        method: 'GET',
-        path: '/api/v0/admin/runs',
+      quiesce = await administrativeCall(stateDirectory, {
+        method: 'POST',
+        path: '/api/v0/admin/upgrade/quiesce',
+        body: { holdSeconds: 120 },
       });
-      if (status === 200)
-        result.running = ((payload as { runs?: Array<{ state: string }> }).runs ?? []).filter(
-          (run) => run.state === 'RUNNING',
-        ).length;
     } catch {
       // No running server: nothing is in flight.
     }
+    if (quiesce?.status === 200) result.running = (quiesce.payload as { active: number }).active;
+    else if (quiesce)
+      throw new ShiftError(
+        'UPGRADE_CHECK_FAILED',
+        'The running server cannot pause for an upgrade. Stop it first: shift service stop',
+      );
     if (result.running > 0 && !values['allow-active']) {
+      await administrativeCall(stateDirectory, {
+        method: 'POST',
+        path: '/api/v0/admin/upgrade/resume',
+      }).catch(() => undefined);
       result.compatible = false;
-      result.problem = `${result.running} run${result.running === 1 ? ' is' : 's are'} executing a step. Upgrading stops ${result.running === 1 ? 'it' : 'them'}, and recovery continues on the new version. Wait for them, hold them, or pass --allow-active.`;
+      result.problem = `${result.running} step${result.running === 1 ? ' is' : 's are'} running. Upgrading stops ${result.running === 1 ? 'it' : 'them'}, and recovery continues on the new version. Wait, hold the run, or pass --allow-active.`;
     }
   }
   write(JSON.stringify(result));

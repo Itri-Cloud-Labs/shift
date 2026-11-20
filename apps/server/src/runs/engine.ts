@@ -192,6 +192,9 @@ export class RunEngine {
   #wakeTimer: NodeJS.Timeout | undefined;
   #stopping = false;
   #pumping = false;
+  // Dispatch is paused until then (wall-clock milliseconds), while an upgrade stops the server.
+  #quiescedUntil = 0;
+  #quiesceTimer: NodeJS.Timeout | undefined;
 
   constructor(options: RunEngineOptions) {
     this.#options = options;
@@ -657,8 +660,31 @@ export class RunEngine {
     this.#cancellations.add(done);
   }
 
+  // Pauses dispatch for `holdMs` and reports the steps running now. Running steps continue; no
+  // new one starts until resume() or the hold expires, which an abandoned upgrade relies on.
+  quiesce(holdMs: number): { active: number; until: number } {
+    this.#quiescedUntil = Date.now() + holdMs;
+    clearTimeout(this.#quiesceTimer);
+    this.#quiesceTimer = setTimeout(() => this.resume(), holdMs);
+    this.#quiesceTimer.unref();
+    return { active: this.#tasks.size, until: this.#quiescedUntil };
+  }
+
+  resume(): void {
+    clearTimeout(this.#quiesceTimer);
+    this.#quiescedUntil = 0;
+    if (this.#stopping) return;
+    // Owner goals asked for during the pause were left waiting; they start now.
+    for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
+    this.#pump();
+  }
+
+  #quiesced(): boolean {
+    return Date.now() < this.#quiescedUntil;
+  }
+
   #pump(): void {
-    if (this.#stopping || this.#pumping) return;
+    if (this.#stopping || this.#pumping || this.#quiesced()) return;
     this.#pumping = true;
     try {
       // Due wake-ups reopen their executions first, so they are admitted in this pass.
@@ -1008,7 +1034,7 @@ export class RunEngine {
 
   #launchManual(goal: InvocationRow): void {
     const key = `manual:${goal.id}`;
-    if (this.#tasks.has(key)) return;
+    if (this.#tasks.has(key) || this.#quiesced()) return;
     const controller = new AbortController();
     const done = this.agents
       .driveManual(goal, controller.signal)
@@ -1069,6 +1095,7 @@ export class RunEngine {
   // inspection reconciles whatever was left.
   async stop(timeoutMs: number): Promise<void> {
     this.#stopping = true;
+    clearTimeout(this.#quiesceTimer);
     clearInterval(this.#timer);
     clearTimeout(this.#wakeTimer);
     const tasks = [...this.#tasks.values()];

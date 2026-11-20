@@ -8,6 +8,7 @@ set -euo pipefail
 dir=$(readlink -f -- "${1:?give the directory with the release archive}")
 case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) exit 1 ;; esac
 archive=$(ls "$dir"/shift-*-linux-$arch.tar.gz)
+[ "$(printf '%s\n' "$archive" | wc -l)" = 1 ] || { echo "expected one archive in $dir" >&2; exit 1; }
 data=${XDG_DATA_HOME:-$HOME/.local/share}/shift
 state=${XDG_STATE_HOME:-$HOME/.local/state}/shift
 shift_bin=$HOME/.local/bin/shift

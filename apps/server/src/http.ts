@@ -11,6 +11,7 @@ import {
   validateServerHealth,
   validateProtocolError,
   validateShutdownAcknowledgement,
+  validateUpgradeQuiesce,
   validatePairResponse,
   validatePairingIssued,
   validateDeviceList,
@@ -788,6 +789,52 @@ export function createHttpServer(options: {
       res.once('finish', options.stop);
       res.status(202).json(payload);
     });
+    // An upgrade pauses dispatch and counts running steps in one step, so no step can start
+    // between its check and the stop. The pause expires by itself if the upgrade goes no further.
+    const engine = options.engine;
+    if (engine) {
+      const small = express.json({ limit: '16kb', strict: true });
+      app.post('/api/v0/admin/upgrade/quiesce', small, (req, res) => {
+        if (req.headers.origin !== undefined)
+          throw new ShiftError(
+            'INVALID_REQUEST',
+            'Browser-origin administration is unavailable.',
+            403,
+          );
+        const seconds = (req.body as { holdSeconds?: unknown } | undefined)?.holdSeconds ?? 120;
+        if (!Number.isInteger(seconds) || (seconds as number) < 1 || (seconds as number) > 600)
+          throw new ShiftError('INVALID_REQUEST', 'holdSeconds must be 1 to 600.', 422, false, [
+            '/holdSeconds',
+          ]);
+        const quiesced = engine.quiesce((seconds as number) * 1000);
+        const payload = {
+          schemaVersion: 1,
+          requestId: res.locals['requestId'] as string,
+          ...quiesced,
+        };
+        if (!validateUpgradeQuiesce(payload))
+          throw new ShiftError('INTERNAL_ERROR', 'Invalid administrative response.');
+        res.status(200).json(payload);
+      });
+      app.post('/api/v0/admin/upgrade/resume', (req, res) => {
+        if (req.headers.origin !== undefined)
+          throw new ShiftError(
+            'INVALID_REQUEST',
+            'Browser-origin administration is unavailable.',
+            403,
+          );
+        engine.resume();
+        const payload = {
+          schemaVersion: 1,
+          requestId: res.locals['requestId'] as string,
+          active: 0,
+          until: 0,
+        };
+        if (!validateUpgradeQuiesce(payload))
+          throw new ShiftError('INTERNAL_ERROR', 'Invalid administrative response.');
+        res.status(200).json(payload);
+      });
+    }
   }
   // Paired devices (specification 13.1). Every TCP route but pairing itself needs a bearer token.
   const devices = options.devices;

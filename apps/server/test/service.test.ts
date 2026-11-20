@@ -22,7 +22,9 @@ import { doctor } from '../src/service/doctor.js';
 import { parseEnvironment, resolveStateDirectory, servicePaths } from '../src/service/paths.js';
 import type { Execute } from '../src/service/systemd.js';
 import { managedMarker, renderEnvironment, renderUnit } from '../src/service/unit.js';
-import { cli, FakeClock, runCli, temporaryState, workspace } from './helpers.js';
+import { administrativeCall } from '../src/admin-client.js';
+import { startServer } from '../src/server.js';
+import { cli, configFor, FakeClock, runCli, temporaryState, workspace } from './helpers.js';
 
 const run = promisify(execFile);
 const installer = join(workspace, 'packaging', 'install.sh');
@@ -307,12 +309,62 @@ test('the installer verifies the archive and machine before it changes anything'
     assert.equal((await install(owner.path, '--archive', next.archive, ...allowRoot)).code, 0);
     assert.equal(await readlink(current), 'versions/1.1.0');
     assert.equal(await readlink(join(owner.path, '.local/share/shift/previous')), 'versions/1.0.0');
+    // The version in use is never replaced in place.
+    const again = await fakeRelease(join(owner.path, 'r7'), '1.1.0');
+    const reinstall = await install(owner.path, '--archive', again.archive, ...allowRoot);
+    assert.notEqual(reinstall.code, 0);
+    assert.match(reinstall.stderr, /already installed and in use; nothing was changed/);
+    assert.equal(await readlink(current), 'versions/1.1.0');
+    await lstat(join(owner.path, '.local/share/shift/versions/1.1.0/bin/shift'));
+
+    // A stopped server's database is checked too: one migrated by another build is refused.
+    const stateDirectory = join(owner.path, '.local/state/shift');
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    const store = await openStore({ stateDirectory, clock: new FakeClock() });
+    store.close();
+    const db = new Database(join(stateDirectory, 'shift.db'));
+    db.prepare(
+      "UPDATE __drizzle_migrations SET hash = 'other' WHERE created_at = (SELECT max(created_at) FROM __drizzle_migrations)",
+    ).run();
+    db.close();
+    const older = await fakeRelease(join(owner.path, 'r8'), '0.9.0');
+    const refused = await install(owner.path, '--archive', older.archive, ...allowRoot);
+    assert.notEqual(refused.code, 0);
+    assert.match(refused.stderr, /migrated by a newer or different Shift build/);
+    assert.equal(await readlink(current), 'versions/1.1.0');
+    await assert.rejects(lstat(join(owner.path, '.local/share/shift/versions/0.9.0')));
+    await rm(join(owner.path, '.local/state'), { recursive: true });
+
     // Repositories and anything else in the home directory stay as they were.
     assert.deepEqual(
       (await run('ls', ['-A', owner.path])).stdout.split('\n').filter(Boolean).sort(),
-      ['.local', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6'],
+      ['.local', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8'],
     );
   } finally {
     await owner.remove();
+  }
+});
+
+test('the upgrade check pauses a running server, and resume hands dispatch back', async () => {
+  const state = await temporaryState();
+  const running = await startServer(configFor(state.path));
+  try {
+    const checked = await runCli(['upgrade-check', '--state-dir', state.path]);
+    assert.equal(checked.code, 0, checked.errors);
+    assert.deepEqual(
+      (({ compatible, running }) => ({ compatible, running }))(JSON.parse(checked.output)),
+      { compatible: true, running: 0 },
+    );
+    const bad = await administrativeCall(state.path, {
+      method: 'POST',
+      path: '/api/v0/admin/upgrade/quiesce',
+      body: { holdSeconds: 0 },
+    });
+    assert.equal(bad.status, 422);
+    const resumed = await runCli(['upgrade-check', '--resume', '--state-dir', state.path]);
+    assert.equal(resumed.code, 0, resumed.errors);
+  } finally {
+    await running.stop();
+    await state.remove();
   }
 });

@@ -118,26 +118,40 @@ service_active=0
 if command -v systemctl >/dev/null && systemctl --user is-active --quiet shift.service 2>/dev/null; then
   service_active=1
 fi
-if [ "$service_active" = 1 ] && [ "$previous" != "versions/$version" ]; then
-  [ "$upgrade" = 1 ] || fail "the Shift service is running $(basename -- "${previous:-unknown}"); pass --upgrade to replace it"
-  checks=()
-  [ "$allow_active" = 1 ] && checks+=(--allow-active)
-  # The new release checks the current database and the running server before anything moves.
-  "$staged/bin/shift" upgrade-check ${checks[@]+"${checks[@]}"} >"$work/check.json" || {
-    cat "$work/check.json" >&2
-    fail 'the upgrade check refused; nothing was changed'
-  }
+# The version in use is never replaced in place: no sequence of renames swaps a directory that
+# `current` points at without a moment where it is missing.
+if [ "$previous" = "versions/$version" ]; then
+  fail "Shift $version is already installed and in use; nothing was changed"
 fi
+if [ "$service_active" = 1 ]; then
+  [ "$upgrade" = 1 ] || fail "the Shift service is running $(basename -- "${previous:-unknown}"); pass --upgrade to replace it"
+fi
+# The new release checks the database before anything moves, whether or not the service runs.
+# With the service running it also pauses the server's dispatch and counts running steps in the
+# same request, so no step starts between this check and the stop below.
+checks=()
+[ "$allow_active" = 1 ] && checks+=(--allow-active)
+[ "$service_active" = 1 ] || checks+=(--database-only)
+new_shift=$staged/bin/shift
+if ! "$new_shift" upgrade-check ${checks[@]+"${checks[@]}"} >"$work/check.json"; then
+  cat "$work/check.json" >&2
+  fail 'the upgrade check refused; nothing was changed'
+fi
+quiesced=$service_active
+# Until the service is stopped, any failure hands dispatch back to the running server.
+resume() {
+  if [ "$quiesced" = 1 ]; then "$new_shift" upgrade-check --resume >/dev/null 2>&1 || true; fi
+  rm -rf "$work"
+}
+trap resume EXIT
 
 if [ -e "$target" ]; then
-  if [ "$previous" = "versions/$version" ] && [ "$service_active" = 1 ]; then
-    fail "$version is already installed and running"
-  fi
-  # Same version again: replace the files only when it is not the running one.
+  # A version that is not in use, installed again: `current` never points at it meanwhile.
   rm -rf "$target.replaced"
   mv -- "$target" "$target.replaced"
 fi
 mv -- "$staged" "$target"
+new_shift=$target/bin/shift
 rm -rf "$target.replaced"
 
 link_bin() {
@@ -155,9 +169,10 @@ switch_to() {
   mv -Tf -- "$data/.current.tmp" "$data/current"
 }
 
-if [ "$service_active" = 1 ] && [ "$previous" != "versions/$version" ]; then
+if [ "$service_active" = 1 ]; then
   say "Stopping the service on ${previous#versions/}"
   systemctl --user stop shift.service
+  quiesced=0
   switch_to "versions/$version"
   [ -n "$previous" ] && ln -sfn -- "$previous" "$data/previous"
   link_bin
@@ -171,7 +186,7 @@ if [ "$service_active" = 1 ] && [ "$previous" != "versions/$version" ]; then
 fi
 
 switch_to "versions/$version"
-[ -n "$previous" ] && [ "$previous" != "versions/$version" ] && ln -sfn -- "$previous" "$data/previous"
+[ -n "$previous" ] && ln -sfn -- "$previous" "$data/previous"
 link_bin
 say "Installed Shift $version in $target"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) say "Add $bin_dir to your PATH to run shift." ;; esac
