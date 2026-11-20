@@ -104,7 +104,9 @@ for _ in $(seq 1 60); do
   [ "$state_after" != RUNNING ] && break
   sleep 1
 done
-[ "$state_after" != RUNNING ] || fail 'the run is still RUNNING after a restart'
+[ "$state_after" = NEEDS_HUMAN ] || fail "after a stop the run is $state_after"
+"$shift_bin" run show "$run" | json .attention.explanation | grep -q 'server was shut down' ||
+  fail 'recovery does not say the shutdown stopped the step'
 printf 'after a stop: %s\n' "$state_after"
 run=$("$shift_bin" run start --workflow "$workflow" --allow-overlap | json .id)
 lines=$(wc -l <"$marker")

@@ -25,6 +25,7 @@ import { ActionService } from '../actions/service.js';
 import { AgentService } from './agent-service.js';
 import { envelope, renderTemplate, renderText, resolveBindings } from './bindings.js';
 import { checkValue } from './envelope.js';
+import { PersistenceGuard } from '../lifecycle/persistence.js';
 import {
   RunRepository,
   StaleClaim,
@@ -57,6 +58,8 @@ export interface RunEngineOptions {
   github?: GitHubIntegration;
   maxActiveAgents?: number;
   pollIntervalMs?: number;
+  // Fails the server when storage fails; dispatch then stops and no new effect is submitted.
+  persistence?: PersistenceGuard;
 }
 
 const commandId = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,100}$' };
@@ -177,6 +180,7 @@ const failure = (error: unknown) =>
 // nodes run as tasks under the agent concurrency limit.
 export class RunEngine {
   readonly repository: RunRepository;
+  readonly persistence: PersistenceGuard;
   readonly agents: AgentService;
   readonly actions: ActionService;
   readonly effects: EffectStore;
@@ -198,6 +202,11 @@ export class RunEngine {
 
   constructor(options: RunEngineOptions) {
     this.#options = options;
+    this.persistence = options.persistence ?? new PersistenceGuard();
+    this.persistence.onFailure(() => {
+      clearInterval(this.#timer);
+      clearTimeout(this.#wakeTimer);
+    });
     this.repository = new RunRepository(options.store.db, options.clock);
     this.blobs = options.blobs ?? new BlobStore(join(dirname(options.artifactRoot), 'blobs'));
     this.agents = new AgentService({
@@ -207,9 +216,10 @@ export class RunEngine {
       blobs: this.blobs,
       logger: options.logger,
       workspaces: options.workspaces,
+      persistence: this.persistence,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
     });
-    this.effects = new EffectStore(options.store.db, options.clock);
+    this.effects = new EffectStore(options.store.db, options.clock, this.persistence);
     this.actions = new ActionService({
       db: options.store.db,
       repository: this.repository,
@@ -260,7 +270,8 @@ export class RunEngine {
     let exhausted: Array<{ runId: string; claims: Claim[] }>;
     try {
       exhausted = this.repository.checkpointActiveTime();
-    } catch {
+    } catch (error) {
+      this.persistence.report(error);
       this.#options.logger.error('Checkpointing active time failed.');
       return;
     }
@@ -673,7 +684,7 @@ export class RunEngine {
   resume(): void {
     clearTimeout(this.#quiesceTimer);
     this.#quiescedUntil = 0;
-    if (this.#stopping) return;
+    if (this.#stopping || this.persistence.failed) return;
     // Owner goals asked for during the pause were left waiting; they start now.
     for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
     this.#pump();
@@ -684,7 +695,7 @@ export class RunEngine {
   }
 
   #pump(): void {
-    if (this.#stopping || this.#pumping || this.#quiesced()) return;
+    if (this.#stopping || this.#pumping || this.persistence.failed || this.#quiesced()) return;
     this.#pumping = true;
     try {
       // Due wake-ups reopen their executions first, so they are admitted in this pass.
@@ -705,6 +716,10 @@ export class RunEngine {
           if (this.#dispatch(claim)) progressed = true;
         }
       }
+    } catch (error) {
+      // A storage failure stops dispatch for good; anything else is a defect and still throws.
+      if (!this.persistence.report(error)) throw error;
+      return;
     } finally {
       this.#pumping = false;
     }
@@ -716,7 +731,7 @@ export class RunEngine {
   #armWake(): void {
     clearTimeout(this.#wakeTimer);
     this.#wakeTimer = undefined;
-    if (this.#stopping) return;
+    if (this.#stopping || this.persistence.failed) return;
     const due = this.repository.nextWakeup();
     if (due === null) return;
     const delay = Math.min(Math.max(due - this.#options.clock.now(), 0), 2_147_483_647);
@@ -1039,6 +1054,7 @@ export class RunEngine {
     const done = this.agents
       .driveManual(goal, controller.signal)
       .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error(
           { invocationId: goal.id, code: (error as { code?: string }).code },
           'An owner goal failed.',
@@ -1047,7 +1063,7 @@ export class RunEngine {
       .finally(() => {
         this.#tasks.delete(key);
         // A driver that failed unexpectedly leaves its goal active; another takes it up.
-        if (!this.#stopping && !controller.signal.aborted) {
+        if (!this.#stopping && !this.persistence.failed && !controller.signal.aborted) {
           const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
           if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
         }
@@ -1062,6 +1078,7 @@ export class RunEngine {
     const done = this.actions
       .run(claim, controller.signal)
       .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error(
           { runId: claim.runId, code: (error as { code?: string }).code },
           'An action task failed.',
@@ -1080,7 +1097,8 @@ export class RunEngine {
     const controller = new AbortController();
     const done = this.agents
       .run(claim, controller.signal)
-      .catch(() => {
+      .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error({ runId: claim.runId }, 'An agent task failed.');
       })
       .finally(() => {

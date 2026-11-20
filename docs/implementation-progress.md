@@ -851,3 +851,16 @@ Status: the release bundle, installer and service commands. Shutdown accounting 
   - Sol review: the database check now runs for every install, the version in use is never replaced, and the upgrade check quiesces the running server (`POST /api/v0/admin/upgrade/quiesce` and `/resume`) so no step starts between the check and the stop.
   - `test/service.test.ts`: the unit and settings rendering, state-directory precedence, doctor statuses and redaction, the upgrade check against a database migrated by another build, the installer's refusals (checksum, missing checksum, architecture, glibc, root, reinstalling the version in use, and a stopped server's database migrated by another build) and install and upgrade links, without a user manager, and the quiesce routes. `test/actions.test.ts`: a quiesced engine starts no step until it resumes.
 - **Not verified:** arm64 installation outside CI; distributions other than Ubuntu 22.04; a real OpenCode under the service (CI has none, so `doctor` reports it missing there).
+
+## Linux service: shutdown and storage failure (28, part 2)
+
+Status: the service's stop and storage-failure behavior. The desktop status view and operator guide follow. Date: 2026-11-20.
+
+- **Changed:**
+  - `lifecycle/persistence.ts`: a storage failure anywhere (HTTP handlers, the dispatch loop, action and agent tasks, trigger ticks and admission) fails readiness with `PERSISTENCE_UNAVAILABLE`, refuses every change but shutdown with a retryable 503, stops dispatch and admission, and refuses new effect and prompt submission, until the server restarts.
+  - Recovery explains a step stopped by a shutdown as such.
+  - `packaging/storage-failure.sh` fills a small file system under a running server; CI runs it on a 64 MiB tmpfs after the service acceptance.
+- **Verified:**
+  - `storage-failure.sh` in the Ubuntu 22.04 systemd container on a 64 MiB tmpfs: with the disk full, approving a pending approval is refused with `PERSISTENCE_UNAVAILABLE`, readiness fails, a run start is refused even after space is freed, and the approved command never runs; after a restart the approval is still pending, and approving it runs the command once.
+  - `test/persistence.test.ts`: error classification; an operation intended when storage fails is not submitted and the next start performs it once; the HTTP refusals and readiness after a failure; a graceful stop during a command records `stoppedBy: shutdown`, kills the command, and recovery says so. `service-acceptance.sh` now checks that explanation after `service stop`.
+- **Not verified:** a failing (rather than full) disk; storage failure during an agent turn with a real OpenCode.

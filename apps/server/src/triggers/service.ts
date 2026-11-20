@@ -1,3 +1,4 @@
+import type { PersistenceGuard } from '../lifecycle/persistence.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
@@ -119,6 +120,7 @@ export class TriggerService {
   #admitAgain = false;
   #timer: NodeJS.Timeout | undefined;
   #stopping = false;
+  readonly #persistence: PersistenceGuard | undefined;
 
   constructor(options: {
     db: Database.Database;
@@ -126,7 +128,14 @@ export class TriggerService {
     definitions: DefinitionRepository;
     resolveBase: BaseResolver;
     logger: Logger;
+    // A storage failure stops admission for good, like a shutdown.
+    persistence?: PersistenceGuard;
   }) {
+    this.#persistence = options.persistence;
+    options.persistence?.onFailure(() => {
+      this.#stopping = true;
+      clearInterval(this.#timer);
+    });
     this.#db = options.db;
     this.#clock = options.clock;
     this.#definitions = options.definitions;
@@ -512,9 +521,10 @@ export class TriggerService {
       } while (this.#admitAgain && !this.#stopping);
       if (admitted) this.#engine?.wake();
     })()
-      .catch((error: unknown) =>
-        this.#logger.error({ err: error }, 'Admitting occurrences failed.'),
-      )
+      .catch((error: unknown) => {
+        this.#persistence?.report(error);
+        this.#logger.error({ err: error }, 'Admitting occurrences failed.');
+      })
       .finally(() => {
         this.#admitting = null;
       });
@@ -557,11 +567,15 @@ export class TriggerService {
   async tick(): Promise<void> {
     for (const tick of this.#ticks) {
       if (this.#stopping) return;
-      await tick().catch((error: unknown) =>
-        this.#logger.error({ err: error }, 'A trigger tick failed.'),
-      );
+      await tick().catch((error: unknown) => {
+        this.#persistence?.report(error);
+        this.#logger.error({ err: error }, 'A trigger tick failed.');
+      });
     }
-    await this.drain();
+    await this.drain().catch((error: unknown) => {
+      this.#persistence?.report(error);
+      this.#logger.error({ err: error }, 'Draining queued occurrences failed.');
+    });
   }
 
   start(intervalMs = 1_000): void {

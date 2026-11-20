@@ -62,6 +62,11 @@ import {
 } from './protocol/index.js';
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
+import {
+  isPersistenceFailure,
+  persistenceUnavailable,
+  type PersistenceGuard,
+} from './lifecycle/persistence.js';
 import type { Actor, CommandReceipts, CommandResponse } from './persistence/receipts.js';
 import type { DeviceService } from './devices/service.js';
 import type { EventLog } from './events/log.js';
@@ -101,6 +106,7 @@ export function createHttpServer(options: {
   devices?: DeviceService;
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
+  persistence?: PersistenceGuard;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -135,12 +141,26 @@ export function createHttpServer(options: {
     }
     next();
   });
+  // Once storage has failed nothing more is changed or acknowledged; reads and shutdown still work.
+  app.use((req, _res, next) => {
+    if (
+      options.persistence?.failed &&
+      req.method !== 'GET' &&
+      req.method !== 'HEAD' &&
+      req.path !== `${admin}/shutdown`
+    ) {
+      next(persistenceUnavailable());
+      return;
+    }
+    next();
+  });
   const health = (requestId: string): ServerHealth => {
     if (options.readiness.snapshot().ready) {
       try {
         options.store.check();
       } catch {
         options.readiness.persistenceFailed();
+        options.persistence?.fail();
       }
     }
     const epochMs = options.clock.now();
@@ -963,8 +983,11 @@ export function createHttpServer(options: {
   app.use((_req, _res, next) => next(new ShiftError('NOT_FOUND', 'Endpoint not found.', 404)));
   const errorHandler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     const bodyError = (error as { type?: unknown } | null)?.type;
-    const safe =
-      bodyError === 'entity.too.large'
+    // A failed write was never committed, so it is answered as unavailable, never as done.
+    const storage = options.persistence?.report(error) || isPersistenceFailure(error);
+    const safe = storage
+      ? persistenceUnavailable()
+      : bodyError === 'entity.too.large'
         ? new ShiftError('REQUEST_TOO_LARGE', 'The request body is too large.', 413)
         : bodyError === 'entity.parse.failed'
           ? new ShiftError('INVALID_REQUEST', 'The request body is not valid JSON.', 400)

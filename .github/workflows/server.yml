@@ -81,6 +81,12 @@ jobs:
       # The runner is disposable: this installs the release as the runner account's own service.
       - name: Install and operate the service
         run: bash apps/server/packaging/service-acceptance.sh apps/server/build/packages
+      # A server on its own 64 MiB file system, which is then filled.
+      - name: Fill the disk under a running server
+        run: |
+          small=$(mktemp -d)
+          sudo mount -t tmpfs -o "size=64m,mode=700,uid=$(id -u),gid=$(id -g)" tmpfs "$small"
+          SHIFT="$HOME/.local/bin/shift" bash apps/server/packaging/storage-failure.sh "$small"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: shift-server-linux-${{ matrix.arch }}

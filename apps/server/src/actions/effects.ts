@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { PersistenceGuard } from '../lifecycle/persistence.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Clock } from '../domain/clock.js';
 import type { Json } from '../harness/types.js';
@@ -105,6 +106,7 @@ export class EffectStore {
   constructor(
     private readonly db: Database.Database,
     private readonly clock: Clock,
+    private readonly persistence?: PersistenceGuard,
   ) {}
 
   #fenced(claim: Claim): void {
@@ -192,7 +194,9 @@ export class EffectStore {
 
   // Marks the operation SUBMITTED right before its external call. Refused once the run stopped
   // accepting effects, so a cancelled or stale attempt never starts one.
+  // Refused too once storage has failed: the operation stays INTENDED for the next start.
   submit(claim: Claim, id: string, evidence: Record<string, Json> = {}): Operation {
+    this.persistence?.ensure();
     return this.#update(claim, id, { state: 'SUBMITTED', evidence }, true);
   }
 

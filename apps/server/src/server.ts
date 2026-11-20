@@ -10,6 +10,7 @@ import { createLogger } from './logging.js';
 import { prepareStateDirectory, inspectOwnedFile } from './lifecycle/state-directory.js';
 import { acquireInstanceLock } from './lifecycle/instance-lock.js';
 import { ReadinessState } from './lifecycle/readiness.js';
+import { PersistenceGuard } from './lifecycle/persistence.js';
 import { openStore, type Store } from './persistence/store.js';
 import { createHttpServer } from './http.js';
 import { Credentials } from './actions/credentials.js';
@@ -84,7 +85,7 @@ export interface RunningServer {
 
 export async function startServer(
   input: ServerConfig,
-  dependencies: { clock?: Clock; logger?: Logger } = {},
+  dependencies: { clock?: Clock; logger?: Logger; persistence?: PersistenceGuard } = {},
 ): Promise<RunningServer> {
   if (process.platform !== 'linux' || !process.getuid)
     throw new ShiftError('UNSUPPORTED_PLATFORM', 'The Shift server requires Linux.');
@@ -94,6 +95,15 @@ export async function startServer(
   const state = await prepareStateDirectory(config.stateDirectory);
   const releaseLock = await acquireInstanceLock(state);
   const readiness = new ReadinessState();
+  // Storage failure fails readiness and stops dispatch, admission and new effects until restart.
+  const persistence = dependencies.persistence ?? new PersistenceGuard();
+  persistence.onFailure(() => {
+    readiness.persistenceFailed();
+    logger.error(
+      { event: 'persistence.failed' },
+      'Storage failed. The server accepts no changes until it restarts with storage fixed.',
+    );
+  });
   let store: Store | undefined;
   let runtime: OpenCodeRuntime | undefined;
   let engine: RunEngine | undefined;
@@ -256,6 +266,7 @@ export async function startServer(
       credentials,
       github,
       runner,
+      persistence,
       ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     handleResult = engine.agents.handleResult;
@@ -264,6 +275,7 @@ export async function startServer(
       clock,
       definitions,
       logger,
+      persistence,
       resolveBase: async (projectId) => {
         const project = definitions.project(projectId);
         return workspaces.resolveBase(project.repositoryPath, project.baseRef);
@@ -307,6 +319,7 @@ export async function startServer(
       devices,
       receipts,
       events,
+      persistence,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
@@ -328,6 +341,7 @@ export async function startServer(
       triggers: triggerService,
       httpTriggers,
       webhooks,
+      persistence,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {
