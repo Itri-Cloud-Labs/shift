@@ -71,7 +71,7 @@ export function defaultStateDirectory(env: NodeJS.ProcessEnv = process.env): str
   if (base !== undefined && !isAbsolute(base)) {
     throw new ShiftError('INVALID_CONFIGURATION', 'XDG_STATE_HOME must be an absolute path.', 422);
   }
-  return join(base ?? join(homedir(), '.local', 'state'), 'shift');
+  return join(base || join(env['HOME'] || homedir(), '.local', 'state'), 'shift');
 }
 
 export function validateConfig(input: unknown): ServerConfig {

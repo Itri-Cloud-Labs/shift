@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs Shift with the Node runtime shipped beside it, never the system's.
+set -eu
+self=$(readlink -f -- "$0")
+root=${self%/bin/shift}
+exec "$root/node/bin/node" "$root/app/dist/cli.js" "$@"
