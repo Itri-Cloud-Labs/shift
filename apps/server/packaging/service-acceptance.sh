@@ -78,6 +78,9 @@ step 'Pair over HTTP'
 body=$("$data/current/node/bin/node" -e 'process.stdout.write(JSON.stringify({phrase:process.argv[1],deviceName:"acceptance",commandId:crypto.randomUUID()}))' "$phrase")
 token=$(curl -fsS -H 'content-type: application/json' -d "$body" http://127.0.0.1:4317/api/v0/pair | json .token)
 curl -fsS -H "authorization: Bearer $token" http://127.0.0.1:4317/api/v0/devices >/dev/null || fail 'the paired token was refused'
+diagnostics=$(curl -fsS -H "authorization: Bearer $token" http://127.0.0.1:4317/api/v0/diagnostics)
+[ "$(printf '%s' "$diagnostics" | json .service)" = systemd ] || fail "diagnostics: $diagnostics"
+[ "$(printf '%s' "$diagnostics" | json .release)" = true ] || fail 'diagnostics does not see the release'
 
 step 'A run survives a service stop and a crash'
 repo=$work/repo
