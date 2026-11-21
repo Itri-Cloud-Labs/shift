@@ -1,4 +1,4 @@
-import { chmod, mkdir, unlink } from 'node:fs/promises';
+import { chmod, mkdir, readFile, statfs, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -37,7 +37,8 @@ import { DefinitionRepository } from './workflows/repository.js';
 import { WorkspaceService } from './workspaces/service.js';
 import { Workspaces } from './workspaces/workspaces.js';
 import { DefinitionService } from './workflows/service.js';
-import type { ServerIdentity } from './protocol/index.js';
+import { serverVersion, type ServerIdentity } from './protocol/index.js';
+import { installedRelease } from './release.js';
 
 async function listen(
   server: Server,
@@ -316,7 +317,33 @@ export async function startServer(
     });
     // Only the proven instance-lock owner may remove a crash-left socket. Never delete a file/symlink.
     if (await inspectOwnedFile(state.adminSocket, 'socket')) await unlink(state.adminSocket);
+    const release = await installedRelease();
+    const version = release?.manifest.version ?? serverVersion;
+    const startedAt = Date.now();
+    const serverId = store.identity.serverId;
+    const sqlite = store.runtime.version;
+    // The Shift unit's own cgroup, rather than INVOCATION_ID, which any process started from
+    // another systemd service inherits.
+    const cgroup = await readFile('/proc/self/cgroup', 'utf8').catch(() => '');
+    const service = /\/shift\.service$/m.test(cgroup) ? ('systemd' as const) : ('manual' as const);
+    const diagnostics = async () => {
+      const stats = await statfs(state.path).catch(() => null);
+      return {
+        serverId,
+        version,
+        release: release !== null,
+        node: process.version,
+        sqlite,
+        arch: process.arch,
+        startedAt,
+        service,
+        storage: stats
+          ? { freeBytes: stats.bavail * stats.bsize, totalBytes: stats.blocks * stats.bsize }
+          : null,
+      };
+    };
     admin = createHttpServer({
+      version,
       store,
       clock,
       readiness,
@@ -338,6 +365,8 @@ export async function startServer(
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
     tcp = createHttpServer({
+      version,
+      diagnostics,
       store,
       clock,
       readiness,

@@ -5,6 +5,7 @@ import type {
   ProtocolError,
   ShutdownAcknowledgement,
   UpgradeQuiesce,
+  ServerDiagnostics,
   ServerIdentity,
   Device,
   PairRequest,
@@ -71,6 +72,7 @@ export const validateServerHealth: Validator<ServerHealth>;
 export const validateProtocolError: Validator<ProtocolError>;
 export const validateShutdownAcknowledgement: Validator<ShutdownAcknowledgement>;
 export const validateUpgradeQuiesce: Validator<UpgradeQuiesce>;
+export const validateServerDiagnostics: Validator<ServerDiagnostics>;
 export const validateServerIdentity: Validator<ServerIdentity>;
 export const validateDevice: Validator<Device>;
 export const validatePairRequest: Validator<PairRequest>;

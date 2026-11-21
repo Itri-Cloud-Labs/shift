@@ -12,6 +12,8 @@ import {
   validateProtocolError,
   validateShutdownAcknowledgement,
   validateUpgradeQuiesce,
+  validateServerDiagnostics,
+  type ServerDiagnostics,
   validatePairResponse,
   validatePairingIssued,
   validateDeviceList,
@@ -107,6 +109,10 @@ export function createHttpServer(options: {
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
   persistence?: PersistenceGuard;
+  // The installed release's version, which info reports; the build's version otherwise.
+  version?: string;
+  // Nonsecret facts about this server for paired devices' settings (specification 14).
+  diagnostics?: () => Promise<Omit<ServerDiagnostics, 'schemaVersion' | 'requestId' | 'readiness'>>;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -188,7 +194,7 @@ export function createHttpServer(options: {
       schemaVersion: 1,
       requestId: observedHealth.requestId,
       ...options.store.identity,
-      serverVersion,
+      serverVersion: options.version ?? serverVersion,
       protocol: protocolRange,
       readiness: observedHealth.readiness,
       time: observedHealth.time,
@@ -958,6 +964,16 @@ export function createHttpServer(options: {
         );
       const deviceResources = resources(authenticated, caller, true);
       if (deviceResources) app.use('/api/v0', deviceResources);
+      const diagnostics = options.diagnostics;
+      if (diagnostics)
+        app.get('/api/v0/diagnostics', authenticated, async (_req, res) => {
+          send(
+            res,
+            200,
+            { ...(await diagnostics()), readiness: options.readiness.snapshot() },
+            validateServerDiagnostics,
+          );
+        });
       app.get('/api/v0/devices', authenticated, (_req, res) => {
         send(
           res,

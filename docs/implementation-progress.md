@@ -864,3 +864,14 @@ Status: the service's stop and storage-failure behavior. The desktop status view
   - `storage-failure.sh` in the Ubuntu 22.04 systemd container on a 64 MiB tmpfs: with the disk full, approving a pending approval is refused with `PERSISTENCE_UNAVAILABLE`, readiness fails, a run start is refused even after space is freed, and the approved command never runs; after a restart the approval is still pending, and approving it runs the command once.
   - `test/persistence.test.ts`: error classification; an operation intended when storage fails is not submitted and the next start performs it once; the HTTP refusals and readiness after a failure; a graceful stop during a command records `stoppedBy: shutdown`, kills the command, and recovery says so. `service-acceptance.sh` now checks that explanation after `service stop`.
 - **Not verified:** a failing (rather than full) disk; storage failure during an agent turn with a real OpenCode.
+
+## Linux service: status in the desktop app and the operator guide (28, part 3)
+
+Status: completes the Linux service. Date: 2026-11-21.
+
+- **Changed:**
+  - `GET /api/v0/diagnostics` for paired devices: version, release or development build, Node and SQLite, architecture, start time, `systemd` or `manual`, free and total space on the state disk, and readiness. `info` now reports the installed release's version instead of `0.0.0`.
+  - Settings → Server in the desktop app: those facts, a warning when storage failed or space is low, and the server commands (`shift`, `shift doctor`, `shift service logs|restart`, `shift upgrade`), which the app shows and never runs. The bridge's `queryServer` accepts `diagnostics`.
+  - [Running Shift on a Linux server](linux-service.md): prerequisites, install, settings, pairing, HTTPS reverse proxies (Caddy and nginx) with the event stream's buffering and timeout needs, operating, stop, crash and storage-failure behavior, upgrades, rollback, uninstall, and diagnostics and secrets. The server API documents diagnostics, the quiesce routes and `PERSISTENCE_UNAVAILABLE`.
+- **Verified:** a device-API test (a device token is required; the answer validates and contains no token or path); the client validates diagnostics answers; `pnpm smoke` with `diagnostics` refused while disconnected; `tools/capture.mjs` against a real server shows Settings → Server.
+- **Not verified:** the reverse proxy examples against real Caddy and nginx with TLS; the `systemd` label in a packaged desktop session against an installed service (the container acceptance checks the service, not the app).

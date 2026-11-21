@@ -17,7 +17,7 @@ export const ANSWER_LIMIT = 64 * 1024;
 export const RESPONSE_LIMIT = 256 * 1024;
 // Workflow documents and runs with their executions can be larger than other answers.
 export const RESOURCE_LIMIT = 8 * 1024 * 1024;
-export const querySchema = v.picklist(['info', 'health', 'ready']);
+export const querySchema = v.picklist(['info', 'health', 'ready', 'diagnostics']);
 export type FoundationQuery = v.InferOutput<typeof querySchema>;
 const profileId = v.pipe(v.string(), v.regex(/^[0-9a-f-]{36}$/));
 const actionPermission = v.picklist(['command', 'http', 'script', 'git', 'git_push', 'github']);

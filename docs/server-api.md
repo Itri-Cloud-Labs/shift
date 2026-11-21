@@ -61,6 +61,7 @@ Without a `commandId`, a lost response cannot be told apart from a command that 
 | Method and path                                          | CLI                         | Purpose                                           |
 | -------------------------------------------------------- | --------------------------- | ------------------------------------------------- |
 | `GET /api/v0/info`                                       | `shift info`                | Server identity, protocol range and capabilities  |
+| `GET /api/v0/diagnostics`                                | none                        | Version, runtime, service and storage (TCP)       |
 | `GET /api/v0/health`                                     | `shift health`              | Liveness and readiness                            |
 | `GET /api/v0/ready`                                      | `shift ready`               | Readiness; `503` when not ready                   |
 | `POST /api/v0/admin/shutdown`                            | `shift stop`                | Graceful shutdown                                 |
@@ -147,6 +148,12 @@ The CLI prints the resource from each response as one JSON line: the `project`, 
 `GET /api/v0/health` returns the same identity with `liveness: "alive"` and `readiness`, always with status `200` while the process answers. `GET /api/v0/ready` returns the same body with status `503` unless `readiness.ready` is true. `phase` is `starting` until the database is open and migrated, `ready`, `stopping` during shutdown, or `failed` after a persistence failure (`reason: PERSISTENCE_UNAVAILABLE`).
 
 `POST /api/v0/admin/shutdown` takes no body and answers `202 {"accepted": true}`. The server then stops within its shutdown deadline (`--shutdown-timeout-ms`). Running agent turns are cancelled through the harness so the next start can continue them.
+
+`serverVersion` is the installed release's version (`shift version`), or the build's for a development build. A `failed` phase lasts until the server restarts: while it lasts, every request that would change something, except shutdown, is answered `503 PERSISTENCE_UNAVAILABLE` (retryable) and nothing is acknowledged that was not stored; reads still answer.
+
+`GET /api/v0/diagnostics` (TCP, device token) describes the server for a device's settings, without secrets or paths: `serverId`, `version`, `release` (false for a development build), `node`, `sqlite`, `arch`, `startedAt`, `service` (`systemd` when the `shift.service` unit runs it, otherwise `manual`), `storage` (`freeBytes` and `totalBytes` of the state directory's file system, or null) and `readiness`.
+
+`POST /api/v0/admin/upgrade/quiesce` with optional `holdSeconds` (1 to 600, default 120) pauses dispatch: running steps continue, no new one starts. It answers `200` with `active`, the steps running at that moment, and `until`, when the pause ends by itself. `POST /api/v0/admin/upgrade/resume` ends it. `shift upgrade` uses both; see [Running Shift on a Linux server](linux-service.md#upgrade).
 
 ### Projects
 
@@ -612,7 +619,7 @@ HTTP errors returned by the endpoints above:
 | 422    | `INVALID_REQUEST` (fails the request schema; see `diagnostics`), `INVALID_RESULT`, `INVALID_RESPONSE`, `INVALID_WORKFLOW`, `INVALID_INPUT`, `INVALID_BASE_REF`, `NOT_A_REPOSITORY`, `GITHUB_INVALID_IDENTITY`, `GITHUB_UNKNOWN_INSTALLATION`                                                                                                                                                                                 |
 | 429    | `RATE_LIMITED`: too many pairing attempts; retry after a minute                                                                                                                                                                                                                                                                                                                                                              |
 | 500    | `INTERNAL_ERROR`. Details are only in the server log, under the same `requestId`.                                                                                                                                                                                                                                                                                                                                            |
-| 503    | `SERVER_STOPPING`                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 503    | `SERVER_STOPPING`, `PERSISTENCE_UNAVAILABLE` (storage failed; retry after the server restarts)                                                                                                                                                                                                                                                                                                                               |
 
 The CLI adds errors of its own: `ADMIN_UNAVAILABLE` (no server is listening on the socket), `UNSAFE_STATE_DIRECTORY`, `ADMIN_INVALID_RESPONSE` and `INVALID_CONFIGURATION` (bad options). `shift serve` itself can fail at startup with `INSTANCE_ALREADY_RUNNING`, `INVALID_CONFIGURATION`, `SQLITE_*`, `MIGRATION_*` or `UNSAFE_STATE_*` codes.
 
