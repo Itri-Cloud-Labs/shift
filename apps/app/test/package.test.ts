@@ -95,7 +95,10 @@ test('a link in the archive is refused rather than skipped', () => {
 test('only the archive and platform assets may sit beside it', () => {
   const resources = resourceProblems as (platform: string, names: string[]) => string[];
   assert.deepEqual(resources('linux', ['app.asar', 'apparmor-profile']), []);
-  assert.deepEqual(resources('darwin', ['app.asar', 'icon.icns', 'en.lproj', 'pt_BR.lproj']), []);
+  assert.deepEqual(
+    resources('darwin', ['app.asar', 'icon.icns', 'en.lproj', 'pt_BR.lproj', 'es_419.lproj']),
+    [],
+  );
   assert.deepEqual(resources('linux', ['app.asar', '.env', 'app.asar.unpacked']), [
     'unexpected resource .env beside app.asar',
     'unexpected resource app.asar.unpacked beside app.asar',

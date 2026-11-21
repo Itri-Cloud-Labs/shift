@@ -75,7 +75,7 @@ export function resourceProblems(platform, names) {
   const allowed = {
     linux: [/^app\.asar$/, /^apparmor-profile$/],
     win32: [/^app\.asar$/, /^elevate\.exe$/],
-    darwin: [/^app\.asar$/, /^icon\.icns$/, /^[A-Za-z_]+\.lproj$/],
+    darwin: [/^app\.asar$/, /^icon\.icns$/, /^[A-Za-z0-9_-]+\.lproj$/],
   }[platform];
   return names
     .filter((name) => !allowed.some((pattern) => pattern.test(name)))
