@@ -56,7 +56,6 @@
     "mac": {
       "target": "dir",
       "category": "public.app-category.developer-tools",
-      "identity": null,
       "executableName": "Shift",
       "icon": "resources/icon.icns"
     },

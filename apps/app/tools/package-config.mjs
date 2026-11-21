@@ -2,9 +2,10 @@
 // platform's build is signed (`null` on Linux, whose packages are not signed).
 export function builderConfig(base, signed) {
   const suffix = signed === false ? '-unsigned' : '';
-  // The base disables signing (`identity: null`); a signed build removes that override so
-  // electron-builder signs with the certificate from CSC_LINK, then notarizes.
-  const { identity: _identity, ...mac } = base.mac;
+  // electron-builder deep-merges this over package.json, so the base must not disable signing
+  // itself: only an unsigned build sets `identity: null`. A signed one signs with the certificate
+  // from CSC_LINK, then notarizes.
+  const mac = base.mac;
   return {
     ...base,
     artifactName: `Shift-\${version}-\${os}-\${arch}${suffix}.\${ext}`,

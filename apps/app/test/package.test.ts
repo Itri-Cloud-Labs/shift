@@ -115,6 +115,8 @@ test('a signed build drops the base identity override and notarizes; unsigned on
     base: unknown,
     signed: boolean | null,
   ) => { artifactName: string; mac: Record<string, unknown>; win: Record<string, unknown> };
+  // electron-builder merges the override over package.json, so the base itself must not disable it.
+  assert.equal('identity' in base['mac']!, false, 'package.json must not set mac.identity');
   const signed = config(base, true);
   assert.equal(
     'identity' in signed.mac,

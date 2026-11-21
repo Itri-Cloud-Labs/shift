@@ -60,7 +60,12 @@ if (signed && process.platform === 'darwin') {
   verify('xcrun', ['stapler', 'validate', app]);
 }
 if (signed && process.platform === 'win32') {
-  for (const exe of [join(output, 'win-unpacked', 'Shift.exe')]) {
+  // The application and the installer users download, which electron-builder signs separately.
+  const installers = (await readdir(output))
+    .filter((name) => /^Shift-.*\.exe$/.test(name))
+    .map((name) => join(output, name));
+  if (!dirOnly && installers.length === 0) throw new Error('No Windows installer was produced.');
+  for (const exe of [join(output, 'win-unpacked', 'Shift.exe'), ...installers]) {
     const status = verify('powershell', [
       '-NoProfile',
       '-Command',
