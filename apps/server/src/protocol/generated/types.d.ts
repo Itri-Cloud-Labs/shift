@@ -5,6 +5,7 @@ export type FoundationPayload =
   | ServerHealth
   | ProtocolError
   | ShutdownAcknowledgement
+  | UpgradeQuiesce
   | ServerIdentity
   | Device
   | PairRequest
@@ -137,6 +138,12 @@ export interface ShutdownAcknowledgement {
   schemaVersion: 1;
   requestId: Uuid;
   accepted: true;
+}
+export interface UpgradeQuiesce {
+  schemaVersion: 1;
+  requestId: Uuid;
+  active: number;
+  until: number;
 }
 export interface ServerIdentity {
   serverId: Uuid;

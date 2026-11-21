@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { administrativeCall } from './admin-client.js';
-import { defaultStateDirectory } from './config.js';
+import { resolveStateDirectory } from './service/paths.js';
 import { ShiftError } from './domain/errors.js';
 
 const options = {
@@ -125,9 +125,7 @@ export async function adminCommand(group: string, args: string[]): Promise<void>
   const values = parsed.values as Values;
   const [action, target, ...extra] = parsed.positionals;
   if (extra.length > 0) throw invalid('Too many arguments. Run shift help.');
-  const stateDirectory = resolve(
-    values['state-dir'] ?? process.env['SHIFT_STATE_DIR'] ?? defaultStateDirectory(),
-  );
+  const stateDirectory = resolveStateDirectory(values['state-dir']);
   const get = async (path: string) =>
     payloadOf(await administrativeCall(stateDirectory, { method: 'GET', path }));
   const send = async (method: 'POST' | 'PUT', path: string, body: Record<string, unknown>) => {

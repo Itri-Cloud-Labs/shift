@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { defaultStateDirectory, validateConfig } from './config.js';
+import { validateConfig } from './config.js';
+import { resolveStateDirectory } from './service/paths.js';
 import { publicError, ShiftError } from './domain/errors.js';
 import { administrativeRequest } from './admin-client.js';
 import {
@@ -14,6 +14,13 @@ import {
 
 const usage = `Shift server
 
+shift [status] [--json]          service, readiness, address and pairing status
+shift version [--json]
+shift doctor [--json]            check this installation without changing it
+shift service install [--start] [--force]
+shift service start|stop|restart|status|uninstall
+shift service logs [-n LINES] [-f]
+shift upgrade ARCHIVE [--sums SHA256SUMS] [--allow-active]
 shift serve [--state-dir PATH] [--host 127.0.0.1] [--port 4317] [--public]
             [--shutdown-timeout-ms 5000] [--log-level info]
             [--sqlite-native-binding PATH] [--opencode-model PROVIDER/MODEL]
@@ -123,6 +130,17 @@ or allow. pause stops every start, manual or automatic, until unpause; runs
 already started continue. A manual start of a busy workflow needs
 --allow-overlap. occurrence list shows what each trigger received and decided.
 
+An installed release runs as a systemd user service of your own account, so agents
+use your OpenCode install, git identity and repositories. service install writes
+the unit and, once, the settings file ~/.config/shift/server.env, which holds the
+PATH, address and environment the service runs with. Lingering keeps it running
+after logout and starts it at boot: sudo loginctl enable-linger USER. doctor checks
+permissions, disk space, systemd, the tools agents need and readiness, and prints
+no secrets. upgrade verifies a release archive against SHA256SUMS, refuses while
+a run executes a step unless --allow-active, and switches versions; nothing
+upgrades by itself. Commands find the server through --state-dir, SHIFT_STATE_DIR
+or the service settings.
+
 device pair prints a single-use, eight-word phrase that pairs one desktop client
 within ten minutes; revoke cuts a device off without stopping runs it started.
 
@@ -152,10 +170,14 @@ function integer(value: string | undefined, fallback: number): number {
 async function main(): Promise<void> {
   process.umask(0o077);
   const args = process.argv.slice(2);
-  const command = args[0] ?? 'serve';
+  const command = args[0] ?? 'status';
   if (['help', '--help', '-h'].includes(command)) {
     process.stdout.write(usage);
     return;
+  }
+  if (['status', 'version', 'doctor', 'upgrade', 'upgrade-check', 'service'].includes(command)) {
+    const { serviceCommand } = await import('./cli-service.js');
+    return serviceCommand(command, args.slice(1));
   }
   if (
     [
@@ -207,9 +229,7 @@ async function main(): Promise<void> {
   } catch {
     throw new ShiftError('INVALID_CONFIGURATION', 'Invalid command options. Run shift help.', 422);
   }
-  const stateDirectory = resolve(
-    values['state-dir'] ?? process.env['SHIFT_STATE_DIR'] ?? defaultStateDirectory(),
-  );
+  const stateDirectory = resolveStateDirectory(values['state-dir']);
   if (command !== 'serve') {
     if (Object.keys(values).some((key) => key !== 'state-dir'))
       throw new ShiftError(
@@ -257,7 +277,7 @@ async function main(): Promise<void> {
     stateDirectory,
     host: values.host ?? process.env['SHIFT_HOST'] ?? '127.0.0.1',
     port: integer(values.port ?? process.env['SHIFT_PORT'], 4317),
-    publicAccess: values.public ?? false,
+    publicAccess: values.public ?? process.env['SHIFT_PUBLIC'] === '1',
     shutdownTimeoutMs: integer(
       values['shutdown-timeout-ms'] ?? process.env['SHIFT_SHUTDOWN_TIMEOUT_MS'],
       5000,
