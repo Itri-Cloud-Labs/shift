@@ -854,7 +854,9 @@ export class ActionService {
     let cwd: string;
     try {
       cwd = await realpath(resolve(root, config.cwd));
-    } catch {
+    } catch (error) {
+      // A failing disk is not a missing directory: the engine trips the guard instead.
+      if (isPersistenceFailure(error)) throw error;
       throw new ShiftError('INVALID_DIRECTORY', `The directory ${config.cwd} does not exist.`, 422);
     }
     if (cwd !== root && !cwd.startsWith(root + sep))
