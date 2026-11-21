@@ -388,7 +388,9 @@ async function upgradeCheck(values: Values, stateDirectory: string): Promise<voi
   if (result.compatible && !values['database-only']) {
     // Pauses the running server's dispatch and counts its running steps in one request, so no step
     // starts between this check and the installer's stop. A refusal hands dispatch back.
-    let quiesce: { status: number; payload: unknown } | null = null;
+    // The installer asks for this only while the service is active, so any failure to pause it
+    // refuses the upgrade rather than passing for an idle server.
+    let quiesce: { status: number; payload: unknown };
     try {
       quiesce = await administrativeCall(stateDirectory, {
         method: 'POST',
@@ -396,14 +398,18 @@ async function upgradeCheck(values: Values, stateDirectory: string): Promise<voi
         body: { holdSeconds: 120 },
       });
     } catch {
-      // No running server: nothing is in flight.
+      throw new ShiftError(
+        'UPGRADE_CHECK_FAILED',
+        'The running server did not answer the upgrade check. Try again, or stop it first: shift service stop',
+      );
     }
-    if (quiesce?.status === 200) result.running = (quiesce.payload as { active: number }).active;
-    else if (quiesce)
+    const active = (quiesce.payload as { active?: unknown } | null)?.active;
+    if (quiesce.status !== 200 || !Number.isInteger(active))
       throw new ShiftError(
         'UPGRADE_CHECK_FAILED',
         'The running server cannot pause for an upgrade. Stop it first: shift service stop',
       );
+    result.running = active as number;
     if (result.running > 0 && !values['allow-active']) {
       await administrativeCall(stateDirectory, {
         method: 'POST',

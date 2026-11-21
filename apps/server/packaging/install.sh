@@ -170,6 +170,12 @@ switch_to() {
 }
 
 if [ "$service_active" = 1 ]; then
+  # Moving files may have outlasted the pause: renew it and count running steps again, so the
+  # stop below interrupts nothing the check did not see.
+  if ! "$new_shift" upgrade-check ${checks[@]+"${checks[@]}"} >"$work/check.json"; then
+    cat "$work/check.json" >&2
+    fail 'the upgrade check refused before stopping the service; the running version is unchanged'
+  fi
   say "Stopping the service on ${previous#versions/}"
   systemctl --user stop shift.service
   quiesced=0

@@ -176,7 +176,11 @@ test('the upgrade check refuses a database migrated by another build', async () 
   try {
     const store = await openStore({ stateDirectory: state.path, clock: new FakeClock() });
     store.close();
-    const ok = await runCli(['upgrade-check', '--state-dir', state.path]);
+    // With the service active, a server that cannot be paused refuses rather than passing as idle.
+    const unanswered = await runCli(['upgrade-check', '--state-dir', state.path]);
+    assert.equal(unanswered.code, 1);
+    assert.match(unanswered.errors, /UPGRADE_CHECK_FAILED/);
+    const ok = await runCli(['upgrade-check', '--database-only', '--state-dir', state.path]);
     assert.equal(ok.code, 0, ok.errors);
     const report = JSON.parse(ok.output) as { compatible: boolean; pending: number };
     assert.deepEqual([report.compatible, report.pending], [true, 0]);
@@ -185,7 +189,7 @@ test('the upgrade check refuses a database migrated by another build', async () 
       "UPDATE __drizzle_migrations SET hash = 'other' WHERE created_at = (SELECT max(created_at) FROM __drizzle_migrations)",
     ).run();
     db.close();
-    const refused = await runCli(['upgrade-check', '--state-dir', state.path]);
+    const refused = await runCli(['upgrade-check', '--database-only', '--state-dir', state.path]);
     assert.equal(refused.code, 1);
     assert.match(refused.output, /migrated by a newer or different Shift build/);
   } finally {
