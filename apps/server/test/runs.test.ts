@@ -4359,3 +4359,36 @@ test('resume waits until an abort has stopped its step', async () => {
     await harnessed.close();
   }
 });
+
+test('a storage failure before an agent prompt leaves the attempt unfailed for the next start', async () => {
+  const first = await engineFor(complete({ count: 3 }));
+  const { state, fake } = first;
+  let restarted: Harnessed | undefined;
+  try {
+    // Storage fails after the session exists and before the prompt is submitted.
+    const create = fake.createSession.bind(fake);
+    fake.createSession = async (request) => {
+      const handle = await create(request);
+      first.engine.persistence.fail();
+      return handle;
+    };
+    const id = await start(first);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.deepEqual(fake.submits, [], 'no prompt was submitted');
+    const run = first.engine.repository.run(id) as unknown as RunView;
+    assert.equal(run.state, 'RUNNING');
+    assert.notEqual(
+      run.executions.find((execution) => execution.node === 'agent')?.state,
+      'FAILED',
+      'the storage failure did not fail the node',
+    );
+    await first.close();
+    fake.createSession = create;
+    restarted = await engineFor(complete({ count: 3 }), { state, fake });
+    const done = await settled(restarted, id);
+    assert.equal(done.state, 'COMPLETED');
+    assert.equal(fake.submits.length, 1, 'the prompt was submitted once, after the restart');
+  } finally {
+    await (restarted ?? first).close().catch(() => undefined);
+  }
+});

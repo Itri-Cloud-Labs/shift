@@ -246,13 +246,22 @@ export async function startServer(
     const workspaceService = new WorkspaceService(workspaces, receipts);
     const eventLog = new EventLog(store.db, store.identity.eventEpoch);
     streams = new EventStreams(eventLog, logger, {
+      onError: (error) => persistence.report(error),
       ...(config.eventKeepaliveMs === undefined ? {} : { keepaliveMs: config.eventKeepaliveMs }),
     });
     const events = { log: eventLog, streams };
     registry.onRevoked((deviceId) => streams?.closeDevice(deviceId));
     // Enrollment delivery copies are cleared once their phrase's original expiry passes.
     registry.sweep();
-    sweeper = setInterval(() => registry.sweep(), 60_000);
+    // A timer's exception would end the process; a storage failure trips the guard instead.
+    sweeper = setInterval(() => {
+      try {
+        registry.sweep();
+      } catch (error) {
+        if (!persistence.report(error))
+          logger.error({ code: publicError(error).code }, 'Clearing pairing copies failed.');
+      }
+    }, 60_000);
     sweeper.unref();
     engine = new RunEngine({
       definitions,

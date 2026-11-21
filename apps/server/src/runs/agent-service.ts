@@ -1,4 +1,4 @@
-import type { PersistenceGuard } from '../lifecycle/persistence.js';
+import { isPersistenceFailure, type PersistenceGuard } from '../lifecycle/persistence.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -139,6 +139,12 @@ export class AgentService {
       await this.#drive(claim, signal);
     } catch (error) {
       if (error instanceof StaleClaim || signal.aborted) return;
+      // Storage failed, or refused a new prompt because it had: nothing more can be recorded, so
+      // the node is not failed here. The next start recovers the attempt.
+      if (isPersistenceFailure(error)) {
+        this.#options.persistence?.report(error);
+        throw error;
+      }
       const safe =
         error instanceof ShiftError
           ? error
@@ -730,6 +736,11 @@ export class AgentService {
           break;
         }
       } catch (error) {
+        // A storage failure ends the driver instead of retrying; the next start recovers the goal.
+        if (isPersistenceFailure(error)) {
+          this.#options.persistence?.report(error);
+          throw error;
+        }
         logger.warn(
           { invocationId: invocation.id, code: (error as { code?: string }).code },
           'An owner goal could not reach the harness; trying again.',
@@ -747,6 +758,8 @@ export class AgentService {
     try {
       repository.recordTranscript(handle.shiftSessionId, await adapter.transcript(handle));
     } catch (error) {
+      // A failed write still trips the guard; the transcript itself stays optional.
+      this.#options.persistence?.report(error);
       logger.warn(
         { sessionId: handle.shiftSessionId, code: (error as { code?: string }).code },
         'The session transcript could not be read.',

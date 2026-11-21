@@ -716,14 +716,14 @@ export class RunEngine {
           if (this.#dispatch(claim)) progressed = true;
         }
       }
+      // Reads the next wake-up from the database, so it is covered by the same handler.
+      this.#armWake();
     } catch (error) {
       // A storage failure stops dispatch for good; anything else is a defect and still throws.
       if (!this.persistence.report(error)) throw error;
-      return;
     } finally {
       this.#pumping = false;
     }
-    this.#armWake();
   }
 
   // One timer for the earliest durable wake-up. Deadlines live in the database, so a restart

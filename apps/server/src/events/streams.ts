@@ -14,6 +14,8 @@ export interface StreamOptions {
   pollMs: number;
   maxPendingBytes: number;
   batch: number;
+  // Hears a failure of the stream's loop, such as a database read, before the stream closes.
+  onError?: (error: unknown) => void;
 }
 
 const defaults: StreamOptions = {
@@ -98,7 +100,10 @@ export class EventStreams {
         }
         await delay(pollMs, undefined, { signal: controller.signal }).catch(() => undefined);
       }
-    })().catch(() => stream.close('error'));
+    })().catch((error: unknown) => {
+      this.#options.onError?.(error);
+      stream.close('error');
+    });
   }
 
   // A revoked device loses its streams at once.
