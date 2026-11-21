@@ -40,7 +40,8 @@
     "appId": "labs.itri.shift",
     "productName": "Shift",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "files": [
       "dist/**/*",
@@ -54,17 +55,20 @@
       "target": "dir",
       "category": "public.app-category.developer-tools",
       "identity": null,
-      "executableName": "Shift"
+      "executableName": "Shift",
+      "icon": "resources/icon.icns"
     },
     "win": {
       "target": "dir",
       "signAndEditExecutable": false,
-      "executableName": "Shift"
+      "executableName": "Shift",
+      "icon": "resources/icon.ico"
     },
     "linux": {
       "target": "dir",
       "category": "Development",
-      "executableName": "shift"
+      "executableName": "shift",
+      "icon": "resources/icons"
     }
   }
 }
