@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   validateArtifactList,
+  validateServerDiagnostics,
   validateCommandReceiptResponse,
   validateInteractionList,
   validateProtocolError,
@@ -223,4 +224,28 @@ test('a paired device drives runs and answers approvals with its own command rec
   const local = await runCli(['run', 'list', '--state-dir', state.path]);
   assert.equal(local.code, 0, local.errors);
   assert.equal((JSON.parse(local.output) as unknown[]).length, 1);
+});
+
+test('paired devices read server diagnostics, which say nothing secret', async (t) => {
+  const state = await temporaryState();
+  t.after(() => state.remove());
+  const server = await startChild(state.path);
+  t.after(() => server.terminate());
+  const anonymous = await fetch(`${server.url}/api/v0/diagnostics`);
+  assert.equal(anonymous.status, 401);
+  const token = await pairDevice(server.url, state.path, 'laptop');
+  const response = await fetch(`${server.url}/api/v0/diagnostics`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as Record<string, any>;
+  assert.equal(validateServerDiagnostics(body), true);
+  assert.equal(body['release'], false);
+  assert.equal(body['node'], process.version);
+  assert.equal(body['readiness'].ready, true);
+  assert.ok(
+    body['storage'].freeBytes > 0 && body['storage'].totalBytes >= body['storage'].freeBytes,
+  );
+  assert.equal(JSON.stringify(body).includes(token), false);
+  assert.equal(JSON.stringify(body).includes(state.path), false, 'no local paths');
 });

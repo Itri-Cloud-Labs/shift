@@ -34,6 +34,7 @@ const names = [
   'ProtocolError',
   'ShutdownAcknowledgement',
   'UpgradeQuiesce',
+  'ServerDiagnostics',
   'ServerIdentity',
   'Device',
   'PairRequest',

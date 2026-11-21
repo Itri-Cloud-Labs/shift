@@ -27,12 +27,18 @@ import {
   validateSessionList,
   validateSessionResponse,
   validateTranscriptPage,
+  validateServerDiagnostics,
   validateServerHealth,
   validateServerInfo,
   validateWorkflowResponse,
   validateWorkflowVersionResponse,
 } from '../protocol/generated/validators.js';
-import type { Interaction, ServerInfo, ServerHealth } from '../protocol/generated/types.js';
+import type {
+  Interaction,
+  ServerDiagnostics,
+  ServerInfo,
+  ServerHealth,
+} from '../protocol/generated/types.js';
 import { supportedProtocol, type ConnectionRuntime } from './connection.js';
 import { TransportFailure, type ServerHttp } from './http.js';
 import { MemorySyncStore, type SyncStore } from './projection.js';
@@ -88,6 +94,7 @@ const cacheLimit = 50;
 export function validFoundationResponse(operation: FoundationQuery, value: unknown): boolean {
   if (!withinLimit(value, RESPONSE_LIMIT)) return false;
   if (operation === 'info') return validateServerInfo(value);
+  if (operation === 'diagnostics') return validateServerDiagnostics(value);
   return (operation === 'health' || operation === 'ready') && validateServerHealth(value);
 }
 
@@ -255,7 +262,7 @@ export class ClientCore {
     this.#samples = enabled;
     return this.shell();
   }
-  async query(operation: FoundationQuery): Promise<ServerInfo | ServerHealth> {
+  async query(operation: FoundationQuery): Promise<ServerInfo | ServerHealth | ServerDiagnostics> {
     const target = await this.connection.authenticated();
     const profileId = this.connection.state.profileId;
     if (!target) throw new ClientFailure('DISCONNECTED');
@@ -275,7 +282,7 @@ export class ClientCore {
     if (target.signal.aborted || this.connection.state.profileId !== profileId)
       throw new ClientFailure('DISCONNECTED');
     if (!validFoundationResponse(operation, body)) throw new ClientFailure('INVALID_RESPONSE');
-    const response = body as ServerInfo | ServerHealth;
+    const response = body as ServerInfo | ServerHealth | ServerDiagnostics;
     const profiles = await this.connection.profiles();
     if (response.serverId !== profiles.find((profile) => profile.active)?.serverId)
       throw new ClientFailure('INVALID_RESPONSE');

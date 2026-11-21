@@ -1,6 +1,6 @@
 import { CircleAlert, LoaderCircle, RefreshCw, X } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import type { DeviceList, ServerInfo } from '../protocol/generated/types.js';
+import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import type { DeviceList, ServerDiagnostics, ServerInfo } from '../protocol/generated/types.js';
 import type {
   ConnectionView,
   DesktopResponse,
@@ -13,10 +13,11 @@ import { ask, bridge, useLive } from './bridge.js';
 import { problems } from './Pairing.js';
 import { relativeTime } from './time.js';
 
-export type SettingsSection = 'connection' | 'projects' | 'devices' | 'appearance';
+export type SettingsSection = 'connection' | 'server' | 'projects' | 'devices' | 'appearance';
 
 const sections: { id: SettingsSection; label: string }[] = [
   { id: 'connection', label: 'Connection' },
+  { id: 'server', label: 'Server' },
   { id: 'projects', label: 'Projects' },
   { id: 'devices', label: 'Devices' },
   { id: 'appearance', label: 'Appearance' },
@@ -127,6 +128,7 @@ export function Settings({
             <X />
           </button>
           {section === 'connection' && <ConnectionSection connection={connection} sync={sync} />}
+          {section === 'server' && <ServerSection />}
           {section === 'projects' && (
             <ProjectsSection
               sync={sync}
@@ -284,6 +286,97 @@ function ConnectionSection({ connection, sync }: { connection: ConnectionView; s
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+const bytes = (value: number) =>
+  value >= 1024 ** 3
+    ? `${(value / 1024 ** 3).toFixed(1)} GB`
+    : `${Math.round(value / 1024 ** 2)} MB`;
+
+// Commands run on the server itself. The app shows them and never runs them: administering or
+// upgrading the server stays with its owner (specification 14).
+const serverCommands: Array<[string, string]> = [
+  ['shift', 'Service, readiness, address and pairing status'],
+  ['shift doctor', 'Check the installation, without changing it'],
+  ['shift service logs', 'The service log'],
+  ['shift service restart', 'Restart the service'],
+  ['shift upgrade ARCHIVE', 'Install a new release you downloaded'],
+];
+
+// What the server reports about itself: version, how it runs and its storage. Read-only.
+function ServerSection() {
+  const [reload, setReload] = useState(0);
+  const diagnostics = useLive<ServerDiagnostics | null>(async () => {
+    const answer = await ask(bridge().queryServer('diagnostics'));
+    return answer.kind === 'server' ? (answer.value as ServerDiagnostics) : null;
+  }, [reload]);
+  const low = diagnostics?.storage && diagnostics.storage.freeBytes < 2 * 1024 ** 3;
+  return (
+    <>
+      <h3>Server</h3>
+      {diagnostics === undefined ? (
+        <p className="note">Asking the server…</p>
+      ) : diagnostics === null ? (
+        <p className="note">Not known while disconnected.</p>
+      ) : (
+        <>
+          {diagnostics.readiness.phase === 'failed' && (
+            <p className="settings-warning" role="alert">
+              <CircleAlert aria-hidden="true" />
+              The server's storage failed, so it accepts no changes. On the server, free space or
+              fix the disk, then run <code>shift service restart</code>.
+            </p>
+          )}
+          <dl className="settings-facts">
+            <dt>Status</dt>
+            <dd>{readiness[diagnostics.readiness.phase]}</dd>
+            <dt>Version</dt>
+            <dd>
+              Shift {diagnostics.version}
+              {diagnostics.release ? '' : ', a development build'}
+            </dd>
+            <dt>Runs as</dt>
+            <dd>
+              {diagnostics.service === 'systemd'
+                ? 'A systemd service, restarted if it stops'
+                : 'A process started by hand, not a service'}
+            </dd>
+            <dt>Running since</dt>
+            <dd>{relativeTime(diagnostics.startedAt)}</dd>
+            <dt>Storage</dt>
+            <dd className={low ? 'settings-low' : undefined}>
+              {diagnostics.storage
+                ? `${bytes(diagnostics.storage.freeBytes)} free of ${bytes(diagnostics.storage.totalBytes)}${low ? '. The server stops accepting work when it runs out.' : ''}`
+                : 'Not known'}
+            </dd>
+            <dt>Runtime</dt>
+            <dd className="mono">
+              Node {diagnostics.node}, SQLite {diagnostics.sqlite}, linux-{diagnostics.arch}
+            </dd>
+          </dl>
+        </>
+      )}
+      <div className="settings-actions">
+        <button className="button" onClick={() => setReload((value) => value + 1)}>
+          <RefreshCw aria-hidden="true" />
+          Refresh
+        </button>
+      </div>
+      <h3>On the server</h3>
+      <p className="note">
+        This app never changes or upgrades the server. Run these in a terminal on it, as the account
+        the service runs as:
+      </p>
+      <dl className="settings-facts settings-commands">
+        {serverCommands.map(([command, purpose]) => (
+          <Fragment key={command}>
+            <dt className="mono">{command}</dt>
+            <dd>{purpose}</dd>
+          </Fragment>
+        ))}
+      </dl>
     </>
   );
 }

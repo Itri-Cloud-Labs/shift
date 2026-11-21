@@ -19,6 +19,9 @@
       "$ref": "#/$defs/UpgradeQuiesce"
     },
     {
+      "$ref": "#/$defs/ServerDiagnostics"
+    },
+    {
       "$ref": "#/$defs/ServerIdentity"
     },
     {
@@ -447,6 +450,87 @@
         "until": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "ServerDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "serverId",
+        "version",
+        "release",
+        "node",
+        "sqlite",
+        "arch",
+        "startedAt",
+        "service",
+        "storage",
+        "readiness"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "requestId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "serverId": {
+          "$ref": "#/$defs/Uuid"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "release": {
+          "type": "boolean"
+        },
+        "node": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "sqlite": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "arch": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "startedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "service": {
+          "enum": ["systemd", "manual"]
+        },
+        "storage": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["freeBytes", "totalBytes"],
+              "properties": {
+                "freeBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "totalBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "readiness": {
+          "$ref": "#/$defs/Readiness"
         }
       }
     },
