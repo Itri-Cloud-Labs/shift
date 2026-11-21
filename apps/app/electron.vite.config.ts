@@ -29,9 +29,14 @@ function boundary(area: 'main' | 'preload' | 'renderer'): Plugin {
     },
   };
 }
+// The packaged-app live test (tools/live-smoke.mjs) is compiled in only when this is set at build
+// time; every other build drops it, and tools/check-package.mjs refuses a package that has it.
+const liveSmoke = process.env['SHIFT_BUILD_LIVE_SMOKE'] === '1';
+
 export default defineConfig({
   main: {
     plugins: [boundary('main')],
+    define: { __SHIFT_LIVE_SMOKE__: JSON.stringify(liveSmoke) },
     build: {
       externalizeDeps: false,
       outDir: 'dist/main',

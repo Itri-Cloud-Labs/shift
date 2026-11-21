@@ -78,3 +78,33 @@ jobs:
             apps/app/release/release.json
           if-no-files-found: error
           retention-days: 14
+
+  service:
+    name: Desktop against the Linux service
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnome-keyring dbus xvfb
+      - name: Start a systemd user manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          runtime_dir="/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            [ -S "$runtime_dir/bus" ] && break
+            sleep 1
+          done
+      - name: Build the server release and the packaged app
+        run: |
+          pnpm --filter @shift/server package:linux
+          SHIFT_BUILD_LIVE_SMOKE=1 pnpm --filter @shift/app package:dir
+      # The runner is disposable: the server is installed as its account's service, behind Caddy.
+      - name: Pair, quit and reopen the packaged app against the installed service
+        run: bash apps/app/tools/live-service.sh apps/server/build/packages

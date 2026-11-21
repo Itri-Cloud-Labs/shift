@@ -889,3 +889,17 @@ Status: installers and package checks. Packaged tests against the Linux service,
   - Linux x64 locally: AppImage and `.deb` built, the package check passes, the packaged smoke passes. The `.deb` installs on a clean Ubuntu 22.04 container with `/usr/bin/shift-desktop`, a menu entry and the icon.
   - `test/package.test.ts`: the archive reader, a clean package, and refusal of server code, native modules, key material, tokens, development addresses, source maps, unexpected files and a main process without its navigation lock.
 - **Not verified:** signed and notarized builds (no identities yet); macOS and Windows installers outside CI.
+
+## Desktop app against the Linux service (31, part 2)
+
+Status: the packaged app tested against the installed server, and accessibility checks. Update notices, compatibility and install docs follow. Date: 2026-11-21.
+
+- **Changed:**
+  - `src/main/live-smoke.ts`, `tools/live-smoke.mjs` and `tools/live-service.sh`: the packaged Linux app against the server installed as a service, behind Caddy over HTTPS, with a GNOME keyring. Smoke mode starts sync and the saved connection when live.
+  - The smoke test checks the pairing view at 150% zoom and that reduced motion collapses transitions.
+  - CI job "Desktop against the Linux service".
+  - The operator guide asks for a publicly trusted certificate.
+- **Verified:**
+  - `live-service.sh` in the Ubuntu 22.04 systemd container as an unprivileged account: pairing over HTTPS through Caddy with a persistent device key in the keyring, a run started and the app closed, then reopened without pairing, reconnected, and the run found `COMPLETED`.
+  - `pnpm app:smoke` with the zoom and reduced-motion checks.
+- **Not verified:** notifications in a real desktop session; macOS and Windows against a live server (their packaged smoke checks keychain storage without a server).

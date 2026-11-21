@@ -25,7 +25,8 @@ function readArchive(buffer) {
 }
 
 // Problems with an archive's files, by path; `null` bytes mean the file was unpacked.
-export function packageProblems(files) {
+// `liveSmoke` allows the live test's automation, which only its unpacked test build may carry.
+export function packageProblems(files, { liveSmoke = false } = {}) {
   const problems = [];
   const allowed = /^(package\.json|dist\/renderer-assets\.json|dist\/(main|preload|renderer)\/.+)$/;
   const forbiddenContent = [
@@ -36,6 +37,7 @@ export function packageProblems(files) {
     [/\bgh[pousr]_[A-Za-z0-9]{30,}/, 'a GitHub token'],
     [/\bsk-[A-Za-z0-9_-]{32,}/, 'an API key'],
     [/localhost:5173|ELECTRON_RENDERER_URL/, 'a development server address'],
+    ...(liveSmoke ? [] : [[/SHIFT_SMOKE_LIVE|SHIFT_LIVE /, 'the live test automation']]),
   ];
   for (const [path, bytes] of files) {
     if (!allowed.test(path)) problems.push(`unexpected file ${path}`);

@@ -17,6 +17,9 @@ const output = join(root, 'release');
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 const env = process.env;
 const dirOnly = process.argv.includes('--dir');
+// The live test build carries automation that a distributed app must not; it is never installable.
+if (env['SHIFT_BUILD_LIVE_SMOKE'] === '1' && !dirOnly)
+  throw new Error('A live test build (SHIFT_BUILD_LIVE_SMOKE=1) packages only with --dir.');
 const arch = process.arch === 'arm64' ? Arch.arm64 : Arch.x64;
 
 // macOS needs a Developer ID certificate and notarization credentials together: a signed but
