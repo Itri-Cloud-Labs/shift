@@ -137,3 +137,17 @@ test(
     }
   },
 );
+
+test('a storage failure when a quiesce pause ends trips the guard instead of throwing', async () => {
+  const env = await setup();
+  try {
+    env.engine.quiesce(60_000);
+    env.engine.repository.activeManualGoals = () => {
+      throw new Database.SqliteError('disk I/O error', 'SQLITE_IOERR');
+    };
+    assert.doesNotThrow(() => env.engine.resume());
+    assert.equal(env.engine.persistence.failed, true);
+  } finally {
+    await env.close();
+  }
+});

@@ -686,8 +686,21 @@ export class RunEngine {
     this.#quiescedUntil = 0;
     if (this.#stopping || this.persistence.failed) return;
     // Owner goals asked for during the pause were left waiting; they start now.
-    for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
+    this.#guarded('Resuming owner goals failed.', () => {
+      for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
+    });
     this.#pump();
+  }
+
+  // Database work in timers and promise finalizers, where an exception would end the process:
+  // a storage failure trips the guard, and anything else is logged.
+  #guarded(message: string, work: () => void): void {
+    try {
+      work();
+    } catch (error) {
+      if (!this.persistence.report(error))
+        this.#options.logger.error({ code: (error as { code?: string }).code }, message);
+    }
   }
 
   #quiesced(): boolean {
@@ -1064,8 +1077,10 @@ export class RunEngine {
         this.#tasks.delete(key);
         // A driver that failed unexpectedly leaves its goal active; another takes it up.
         if (!this.#stopping && !this.persistence.failed && !controller.signal.aborted) {
-          const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
-          if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
+          this.#guarded('Checking an owner goal failed.', () => {
+            const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
+            if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
+          });
         }
         this.#pump();
       });
