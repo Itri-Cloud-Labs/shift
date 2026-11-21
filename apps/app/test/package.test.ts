@@ -5,7 +5,7 @@ import { builderConfig } from '../tools/package-config.mjs';
 import { readFileSync } from 'node:fs';
 
 type Files = Map<string, Buffer | null | 'link'>;
-const check = packageProblems as (files: Files) => string[];
+const check = packageProblems as (files: Files, options?: { liveSmoke?: boolean }) => string[];
 
 // The asar layout: a size prefix, a JSON index with offsets into the data that follows.
 function archive(entries: Record<string, string>, links: Record<string, string> = {}): Buffer {
@@ -133,4 +133,12 @@ test('a signed build drops the base identity override and notarizes; unsigned on
   assert.equal(unsigned.mac['identity'], null);
   assert.match(unsigned.artifactName, /-unsigned\.\$\{ext\}$/);
   assert.doesNotMatch(config(base, null).artifactName, /unsigned/, 'Linux packages carry no label');
+});
+
+test('the live test automation is refused in any package but its own test build', () => {
+  const files = readArchive(
+    archive({ ...clean, 'dist/main/chunks/live.js': 'process.env.SHIFT_SMOKE_LIVE' }),
+  ) as Files;
+  assert.ok(check(files).includes('dist/main/chunks/live.js contains the live test automation'));
+  assert.deepEqual(check(files, { liveSmoke: true }), []);
 });

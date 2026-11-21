@@ -202,10 +202,11 @@ async function createWindow(): Promise<void> {
     return;
   }
   if (smoke) {
-    const { liveSmokeFromEnvironment, runLiveSmoke } = await import('./live-smoke.js');
-    const live = liveSmokeFromEnvironment();
-    if (live) await runLiveSmoke(window, live);
-    else {
+    // Compiled in only for the live test build; a shipped app cannot pair or start runs from it.
+    if (__SHIFT_LIVE_SMOKE__ && process.env['SHIFT_SMOKE_LIVE']) {
+      const { liveSmokeFromEnvironment, runLiveSmoke } = await import('./live-smoke.js');
+      await runLiveSmoke(window, liveSmokeFromEnvironment()!);
+    } else {
       const { runSmoke } = await import('./smoke.js');
       await runSmoke(window, core);
     }
@@ -235,7 +236,7 @@ void app
     });
     await core.preferences.load();
     // The smoke test starts without any saved connection; its live mode starts as a person would.
-    if (!smoke || process.env['SHIFT_SMOKE_LIVE']) {
+    if (!smoke || (__SHIFT_LIVE_SMOKE__ && process.env['SHIFT_SMOKE_LIVE'])) {
       core.sync.start();
       void core.connection.start().catch(() => undefined);
     }

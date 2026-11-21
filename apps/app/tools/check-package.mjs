@@ -19,7 +19,9 @@ async function resourcesDirectory() {
 const resources = await resourcesDirectory();
 const problems = resourceProblems(process.platform, await readdir(resources));
 const files = readArchive(await readFile(join(resources, 'app.asar')));
-problems.push(...packageProblems(files));
+problems.push(
+  ...packageProblems(files, { liveSmoke: process.env['SHIFT_BUILD_LIVE_SMOKE'] === '1' }),
+);
 
 if (problems.length) {
   console.error(problems.map((problem) => `✗ ${problem}`).join('\n'));

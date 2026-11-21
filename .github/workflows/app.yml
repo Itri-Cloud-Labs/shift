@@ -104,7 +104,7 @@ jobs:
       - name: Build the server release and the packaged app
         run: |
           pnpm --filter @shift/server package:linux
-          pnpm --filter @shift/app package:dir
+          SHIFT_BUILD_LIVE_SMOKE=1 pnpm --filter @shift/app package:dir
       # The runner is disposable: the server is installed as its account's service, behind Caddy.
       - name: Pair, quit and reopen the packaged app against the installed service
         run: bash apps/app/tools/live-service.sh apps/server/build/packages

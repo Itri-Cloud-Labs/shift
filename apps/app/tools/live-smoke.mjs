@@ -11,7 +11,6 @@ import { execFileSync, spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { stageElectron } from './stage.mjs';
@@ -31,7 +30,9 @@ if (process.platform !== 'linux') throw new Error('The live smoke runs the Linux
 const shift = (...args) => JSON.parse(execFileSync(values.shift, args, { encoding: 'utf8' }));
 const work = await mkdtemp(join(tmpdir(), 'shift-live-'));
 try {
-  // A workflow whose only step outlasts the first launch, so it finishes while the app is closed.
+  // A workflow whose only step waits for a barrier the test releases after the first launch has
+  // exited, so the run can only finish while the app is closed.
+  const barrier = join(work, 'release-the-run');
   const repository = join(work, 'repo');
   await mkdir(repository);
   const git = (...args) => execFileSync('git', args, { cwd: repository, stdio: 'ignore' });
@@ -54,7 +55,11 @@ try {
     JSON.stringify({
       nodes: [
         { id: 'start', type: 'manual_trigger' },
-        { id: 'wait', type: 'command', config: { mode: 'shell', script: 'sleep 10' } },
+        {
+          id: 'wait',
+          type: 'command',
+          config: { mode: 'shell', script: `while [ ! -e '${barrier}' ]; do sleep 0.2; done` },
+        },
         { id: 'end', type: 'end' },
       ],
       connections: [
@@ -125,9 +130,14 @@ try {
     }
   };
 
+  // `launch` returns once the app's process has exited.
   const first = await launch({ phase: 'pair', phrase, workflowId: workflow.id });
-  // The step sleeps 10 seconds; the app stays closed meanwhile.
-  await delay(15_000);
+  const blocked = shift('run', 'show', first.runId);
+  if (blocked.state !== 'RUNNING')
+    throw new Error(`With the app closed the run should still wait, but it is ${blocked.state}.`);
+  await writeFile(barrier, '');
+  const finished = shift('run', 'show', first.runId, '--wait');
+  if (finished.state !== 'COMPLETED') throw new Error(`The run ended ${finished.state}.`);
   const second = await launch({ phase: 'resume', runId: first.runId });
   console.log(
     JSON.stringify({

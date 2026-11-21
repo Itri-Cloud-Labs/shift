@@ -6,7 +6,8 @@
 #
 #   live-service.sh SERVER_RELEASE_DIRECTORY   (holding shift-*-linux-x64.tar.gz and SHA256SUMS)
 #
-# Needs: the packaged app in apps/app/release/linux-unpacked, Xvfb, dbus-run-session,
+# Needs: the live test build of the app (SHIFT_BUILD_LIVE_SMOKE=1 pnpm --filter @shift/app
+# package:dir) in apps/app/release/linux-unpacked, Xvfb, dbus-run-session,
 # gnome-keyring, curl and a systemd user manager.
 set -euo pipefail
 release=$(readlink -f -- "${1:?give the server release directory}")
