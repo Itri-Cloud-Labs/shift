@@ -151,3 +151,35 @@ test('a storage failure when a quiesce pause ends trips the guard instead of thr
     await env.close();
   }
 });
+
+test(
+  'a storage failure while preparing a step stops dispatch without failing the step',
+  { skip, timeout: 60_000 },
+  async () => {
+    let env = await setup();
+    const state = env.state;
+    try {
+      const marker = join(state, 'prepared.txt');
+      const variables = env.engine.repository.variables.bind(env.engine.repository);
+      env.engine.repository.variables = () => {
+        throw new Database.SqliteError('disk I/O error', 'SQLITE_IOERR');
+      };
+      const id = await run(
+        env,
+        actionWorkflow('command', { mode: 'shell', script: `echo once >> ${marker}` }),
+      );
+      await eventually(() => (env.engine.persistence.failed ? true : undefined));
+      const step = action(view(env, id));
+      assert.notEqual(step?.state, 'FAILED', 'the storage failure did not fail the step');
+      assert.equal(view(env, id).state, 'RUNNING');
+      env.engine.repository.variables = variables;
+      await env.close();
+      env = await setup(state);
+      const done = await settled(env, id);
+      assert.equal(done.state, 'COMPLETED', JSON.stringify(done.attention));
+      assert.equal(await readFile(marker, 'utf8'), 'once\n');
+    } finally {
+      await env.close();
+    }
+  },
+);

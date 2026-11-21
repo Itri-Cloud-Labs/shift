@@ -1,4 +1,4 @@
-import { isPersistenceFailure } from '../lifecycle/persistence.js';
+import { isPersistenceFailure, type PersistenceGuard } from '../lifecycle/persistence.js';
 import type Database from 'better-sqlite3';
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -87,6 +87,7 @@ export interface ActionServiceOptions {
   fetch?: typeof fetch;
   github?: GitHubIntegration;
   clock?: { now(): number };
+  persistence?: PersistenceGuard;
 }
 
 // The parts of the server's environment a command inherits: enough to find the owner's tools and
@@ -791,8 +792,10 @@ export class ActionService {
     const started = (pid: number) => {
       try {
         this.#options.effects.observe(claim, operation.id, { pid });
-      } catch {
-        // The attempt lost its claim; the process is stopped by whoever holds it now.
+      } catch (error) {
+        // The attempt lost its claim; the process is stopped by whoever holds it now. A storage
+        // failure still trips the guard.
+        this.#options.persistence?.report(error);
       }
     };
     if (config.action === 'command') {

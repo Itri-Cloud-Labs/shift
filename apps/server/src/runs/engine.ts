@@ -25,7 +25,7 @@ import { ActionService } from '../actions/service.js';
 import { AgentService } from './agent-service.js';
 import { envelope, renderTemplate, renderText, resolveBindings } from './bindings.js';
 import { checkValue } from './envelope.js';
-import { PersistenceGuard } from '../lifecycle/persistence.js';
+import { isPersistenceFailure, PersistenceGuard } from '../lifecycle/persistence.js';
 import {
   RunRepository,
   StaleClaim,
@@ -230,6 +230,7 @@ export class RunEngine {
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.github ? { github: options.github } : {}),
+      persistence: this.persistence,
       clock: options.clock,
     });
   }
@@ -654,18 +655,20 @@ export class RunEngine {
         }
         await this.agents.cancel(claim).catch((error: unknown) => {
           if (!(error instanceof StaleClaim)) {
+            this.persistence.report(error);
             this.#options.logger.error({ runId }, 'Stopping an agent failed.');
           }
         });
       }
       settle();
     })()
-      .catch(() => {
+      .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error({ runId }, 'Settling stopped attempts failed.');
       })
       .finally(() => {
         this.#cancellations.delete(done);
-        after();
+        this.#guarded('Finishing a stop failed.', after);
         this.#pump();
       });
     this.#cancellations.add(done);
@@ -759,6 +762,8 @@ export class RunEngine {
       context = this.#prepare(claim);
     } catch (error) {
       if (error instanceof StaleClaim) return false;
+      // Storage failed: the step is not failed for it. The pump reports it and stops.
+      if (isPersistenceFailure(error)) throw error;
       this.#fail(claim, error);
       return true;
     }
@@ -846,6 +851,8 @@ export class RunEngine {
       }
     } catch (error) {
       if (error instanceof StaleClaim) return false;
+      // Storage failed: the step is not failed for it. The pump reports it and stops.
+      if (isPersistenceFailure(error)) throw error;
       this.#fail(claim, error);
     }
     return true;
@@ -1022,7 +1029,8 @@ export class RunEngine {
         handoffs: receivedHandoffs(context, authored.handoffs ?? {}, (artifactId) => {
           try {
             return this.repository.artifact(artifactId);
-          } catch {
+          } catch (error) {
+            if (isPersistenceFailure(error)) throw error;
             return null;
           }
         }),

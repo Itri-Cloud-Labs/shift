@@ -198,7 +198,12 @@ export async function startServer(
       stateDirectory: state.path,
       scopes: new SystemdScopes(harness.systemdManager ?? 'user'),
       logger,
-      resultHandler: (submission) => handleResult(submission),
+      // A result that could not be stored is refused to the agent and trips the guard.
+      resultHandler: (submission) =>
+        handleResult(submission).catch((error: unknown) => {
+          persistence.report(error);
+          throw error;
+        }),
       stopTimeoutMs: config.shutdownTimeoutMs,
       // An unused runtime stops after this long; conversations survive in OpenCode's store.
       ...((harness.idleMs ?? 600_000) > 0 ? { idleStopMs: harness.idleMs ?? 600_000 } : {}),

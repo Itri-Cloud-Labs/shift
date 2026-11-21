@@ -601,8 +601,9 @@ export class AgentService {
           error: { code: 'SHIFT_STOPPED', message: 'Shift stopped while the turn was running.' },
         });
       }
-    } catch {
-      // Startup inspection decides what happened.
+    } catch (error) {
+      // Startup inspection decides what happened; a storage failure still trips the guard.
+      this.#options.persistence?.report(error);
     }
   }
 
