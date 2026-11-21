@@ -1,10 +1,10 @@
 // Inspects the packaged app as users receive it, after electron-builder: the archive must hold only
 // the built client, with no server code, native modules, secrets or development endpoints, and the
 // window's navigation lock must be in the shipped main process.
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { packageProblems, readArchive } from './package-checks.mjs';
+import { packageProblems, readArchive, resourceProblems } from './package-checks.mjs';
 
 const release = fileURLToPath(new URL('../release/', import.meta.url));
 
@@ -17,10 +17,7 @@ async function resourcesDirectory() {
 }
 
 const resources = await resourcesDirectory();
-const problems = [];
-for (const extra of ['app', 'app.asar.unpacked'])
-  if (await stat(join(resources, extra)).catch(() => null))
-    problems.push(`resources/${extra} exists; the app must ship only app.asar`);
+const problems = resourceProblems(process.platform, await readdir(resources));
 const files = readArchive(await readFile(join(resources, 'app.asar')));
 problems.push(...packageProblems(files));
 

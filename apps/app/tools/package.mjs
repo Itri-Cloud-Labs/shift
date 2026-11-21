@@ -3,12 +3,14 @@
 // built and named unsigned, never presented as a signed distribution.
 // Usage: node tools/package.mjs [--dir]   (--dir: the unpacked app only, for smoke tests)
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { Arch, Platform, build } from 'electron-builder';
+import { builderConfig } from './package-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = join(root, 'release');
@@ -34,16 +36,7 @@ const signed =
     : process.platform === 'win32'
       ? windowsCertificate
       : null;
-const suffix = signed === false ? '-unsigned' : '';
-const config = {
-  ...manifest.build,
-  artifactName: `Shift-\${version}-\${os}-\${arch}${suffix}.\${ext}`,
-  mac: {
-    ...manifest.build.mac,
-    ...(signed ? { notarize: true, hardenedRuntime: true } : { identity: null }),
-  },
-  win: { ...manifest.build.win, signAndEditExecutable: Boolean(signed) },
-};
+const config = builderConfig(manifest.build, signed);
 const targets =
   process.platform === 'darwin'
     ? Platform.MAC.createTarget(dirOnly ? ['dir'] : ['dmg', 'zip'], arch)
@@ -53,6 +46,29 @@ const targets =
 
 await rm(output, { recursive: true, force: true });
 await build({ targets, config, publish: 'never' });
+
+// A build named signed must verify as signed: the operating system's own tools have the last word.
+function verify(command, args) {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.status !== 0)
+    throw new Error(`${command} ${args.join(' ')} failed:\n${result.stderr || result.stdout}`);
+  return result.stdout;
+}
+if (signed && process.platform === 'darwin') {
+  const app = join(output, process.arch === 'arm64' ? 'mac-arm64' : 'mac', 'Shift.app');
+  verify('codesign', ['--verify', '--deep', '--strict', app]);
+  verify('xcrun', ['stapler', 'validate', app]);
+}
+if (signed && process.platform === 'win32') {
+  for (const exe of [join(output, 'win-unpacked', 'Shift.exe')]) {
+    const status = verify('powershell', [
+      '-NoProfile',
+      '-Command',
+      `(Get-AuthenticodeSignature -LiteralPath '${exe}').Status`,
+    ]).trim();
+    if (status !== 'Valid') throw new Error(`${exe} is not validly signed: ${status}`);
+  }
+}
 if (dirOnly) process.exit(0);
 
 async function sha256(path) {

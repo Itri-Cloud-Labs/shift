@@ -12,7 +12,9 @@ function readArchive(buffer) {
       const path = prefix ? `${prefix}/${name}` : name;
       if (entry.files) walk(entry, path);
       else if (entry.unpacked) files.set(path, null);
-      else if (entry.link === undefined) {
+      // A link is recorded with a sentinel, so the path rules still see it and refuse it.
+      else if (entry.link !== undefined) files.set(path, 'link');
+      else {
         const start = base + Number(entry.offset);
         files.set(path, buffer.subarray(start, start + entry.size));
       }
@@ -39,6 +41,10 @@ export function packageProblems(files) {
     if (!allowed.test(path)) problems.push(`unexpected file ${path}`);
     if (/\.node$|node_modules|\.env(\.|$)|\.map$/.test(path))
       problems.push(`forbidden file ${path}`);
+    if (bytes === 'link') {
+      problems.push(`${path} is a symbolic link`);
+      continue;
+    }
     if (bytes === null) {
       problems.push(`${path} is unpacked outside the archive`);
       continue;
@@ -61,4 +67,17 @@ export function packageProblems(files) {
     if (!main.includes(lock)) problems.push(`the main process lacks ${lock}`);
   if (!files.has('dist/renderer/index.html')) problems.push('the renderer entry is missing');
   return problems;
+}
+
+// What may sit beside app.asar in the packaged resources, per platform: anything else would ship
+// unchecked. macOS adds its icon and localization folders, Linux an AppArmor profile for the .deb.
+export function resourceProblems(platform, names) {
+  const allowed = {
+    linux: [/^app\.asar$/, /^apparmor-profile$/],
+    win32: [/^app\.asar$/, /^elevate\.exe$/],
+    darwin: [/^app\.asar$/, /^icon\.icns$/, /^[A-Za-z_]+\.lproj$/],
+  }[platform];
+  return names
+    .filter((name) => !allowed.some((pattern) => pattern.test(name)))
+    .map((name) => `unexpected resource ${name} beside app.asar`);
 }

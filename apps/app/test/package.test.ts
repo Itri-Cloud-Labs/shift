@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { packageProblems, readArchive } from '../tools/package-checks.mjs';
+import { packageProblems, readArchive, resourceProblems } from '../tools/package-checks.mjs';
+import { builderConfig } from '../tools/package-config.mjs';
+import { readFileSync } from 'node:fs';
 
-type Files = Map<string, Buffer | null>;
+type Files = Map<string, Buffer | null | 'link'>;
 const check = packageProblems as (files: Files) => string[];
 
 // The asar layout: a size prefix, a JSON index with offsets into the data that follows.
-function archive(entries: Record<string, string>): Buffer {
+function archive(entries: Record<string, string>, links: Record<string, string> = {}): Buffer {
   const files: Record<string, unknown> = {};
   const chunks: Buffer[] = [];
   let offset = 0;
@@ -22,6 +24,7 @@ function archive(entries: Record<string, string>): Buffer {
     chunks.push(bytes);
     offset += bytes.length;
   }
+  for (const [path, target] of Object.entries(links)) files[path] = { link: target };
   const json = Buffer.from(JSON.stringify({ files }));
   const padded = Math.ceil(json.length / 4) * 4;
   const header = Buffer.alloc(16 + padded);
@@ -82,4 +85,47 @@ test('a main process without its navigation lock is refused', () => {
   const problems = check(readArchive(archive({ ...clean, 'dist/main/index.js': 'app' })) as Files);
   assert.ok(problems.includes('the main process lacks will-navigate'));
   assert.ok(problems.includes('the main process lacks setWindowOpenHandler'));
+});
+
+test('a link in the archive is refused rather than skipped', () => {
+  const problems = check(readArchive(archive(clean, { '.env': 'dist/main/index.js' })) as Files);
+  assert.ok(problems.includes('.env is a symbolic link'), problems.join('; '));
+});
+
+test('only the archive and platform assets may sit beside it', () => {
+  const resources = resourceProblems as (platform: string, names: string[]) => string[];
+  assert.deepEqual(resources('linux', ['app.asar', 'apparmor-profile']), []);
+  assert.deepEqual(resources('darwin', ['app.asar', 'icon.icns', 'en.lproj', 'pt_BR.lproj']), []);
+  assert.deepEqual(resources('linux', ['app.asar', '.env', 'app.asar.unpacked']), [
+    'unexpected resource .env beside app.asar',
+    'unexpected resource app.asar.unpacked beside app.asar',
+  ]);
+  assert.deepEqual(resources('win32', ['app.asar', 'server']), [
+    'unexpected resource server beside app.asar',
+  ]);
+});
+
+test('a signed build drops the base identity override and notarizes; unsigned ones say so', () => {
+  const base = (
+    JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      build: Record<string, Record<string, unknown>>;
+    }
+  ).build;
+  const config = builderConfig as (
+    base: unknown,
+    signed: boolean | null,
+  ) => { artifactName: string; mac: Record<string, unknown>; win: Record<string, unknown> };
+  const signed = config(base, true);
+  assert.equal(
+    'identity' in signed.mac,
+    false,
+    'electron-builder skips signing when identity is null',
+  );
+  assert.equal(signed.mac['notarize'], true);
+  assert.equal(signed.win['signAndEditExecutable'], true);
+  assert.doesNotMatch(signed.artifactName, /unsigned/);
+  const unsigned = config(base, false);
+  assert.equal(unsigned.mac['identity'], null);
+  assert.match(unsigned.artifactName, /-unsigned\.\$\{ext\}$/);
+  assert.doesNotMatch(config(base, null).artifactName, /unsigned/, 'Linux packages carry no label');
 });
