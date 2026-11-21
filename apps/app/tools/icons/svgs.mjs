@@ -109,8 +109,10 @@ write('docs/brand/shift-lockup.svg', lockup(colors.darkInk, colors.darkGreen));
 write('docs/brand/shift-lockup-on-light.svg', lockup(colors.lightInk, colors.lightGreen));
 
 // App icon tiles on a 1024 canvas. The mark sits on its own dark tile so it shows on light docks
-// and taskbars too.
-function tile({ inset, radius, markScale, small = false, shadow = false }) {
+// and taskbars too. It takes the same share of the tile at every size, so the icons match from
+// 16 px to 1024 px (review: 35% larger than the first version's 0.56).
+const markScale = 0.76;
+function tile({ inset, radius, small = false, shadow = false }) {
   const size = 1024 - inset * 2;
   const markPx = size * markScale;
   const at = inset + (size - markPx) / 2;
@@ -128,14 +130,14 @@ function tile({ inset, radius, markScale, small = false, shadow = false }) {
 // macOS: Apple's grid, an 824 body inset 100 with a drop shadow.
 write(
   'apps/app/resources/icon-mac.svg',
-  tile({ inset: 100, radius: 185, markScale: 0.56, shadow: true }),
+  tile({ inset: 100, radius: 185, shadow: true }),
 );
 // Windows and Linux: nearly full-bleed.
-write('apps/app/resources/icon.svg', tile({ inset: 24, radius: 220, markScale: 0.56 }));
-// 16 to 32 px: the mark fills more of the tile and uses the wider gap.
+write('apps/app/resources/icon.svg', tile({ inset: 24, radius: 220 }));
+// 16 to 32 px: a full-bleed tile and a wider gap, so the two squares stay apart.
 write(
   'apps/app/resources/icon-small.svg',
-  tile({ inset: 0, radius: 200, markScale: 0.74, small: true }),
+  tile({ inset: 0, radius: 200, small: true }),
 );
 
 // Tray: macOS template (black, the system tints it) and light/dark variants elsewhere.
