@@ -68,7 +68,7 @@ Requirements for the proxy:
 - **Allow request bodies up to 2 MiB.** GitHub deliveries can be that large.
 - **Expose the whole `/api/v0/` path.** GitHub deliveries (`/api/v0/github/apps/ID/webhook`) and webhook triggers (`/api/v0/triggers/ID/events`) arrive there, authenticated by their signatures or secrets. The administrative socket is never exposed: it is a Unix socket under the state directory.
 
-Caddy obtains and renews a certificate by itself:
+Use a certificate from a public authority, such as Let's Encrypt. The desktop app trusts the same public authorities as Node.js, not a private or self-signed one, so `tls internal` or a home-made CA will not pair. Caddy obtains and renews a public certificate by itself for a hostname that resolves to the machine:
 
 ```caddyfile
 shift.example.com {

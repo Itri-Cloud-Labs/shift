@@ -119,5 +119,39 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
   );
   if (overflow) throw new Error('The window overflows at its minimum size');
   window.setSize(1280, 800);
+  // Larger text: at 150% zoom the pairing form still fits the width and keeps its labels.
+  window.webContents.setZoomFactor(1.5);
+  const zoomed = await window.webContents.executeJavaScript(`(async () => {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const submit = document.querySelector('.pairing button[type=submit]');
+    const box = submit.getBoundingClientRect();
+    return {
+      overflow: document.documentElement.scrollWidth > window.innerWidth,
+      submitVisible: box.right <= window.innerWidth && box.width > 0,
+      labelled: [...document.querySelectorAll('.pairing input')].every(input => document.querySelector('label[for="' + input.id + '"]')),
+    };
+  })()`);
+  window.webContents.setZoomFactor(1);
+  if (zoomed.overflow || !zoomed.submitVisible || !zoomed.labelled)
+    throw new Error(`The pairing view breaks at 150% zoom: ${JSON.stringify(zoomed)}`);
+  // Reduced motion: with the preference set, transitions and animations collapse to nothing.
+  const devtools = window.webContents.debugger;
+  devtools.attach('1.3');
+  try {
+    const motion = async (value: string) => {
+      await devtools.sendCommand('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-motion', value }],
+      });
+      return (await window.webContents.executeJavaScript(
+        "parseFloat(getComputedStyle(document.querySelector('.pairing button[type=submit]')).transitionDuration)",
+      )) as number;
+    };
+    const normal = await motion('no-preference');
+    const reduced = await motion('reduce');
+    if (!(normal > 0.01) || !(reduced < 0.001))
+      throw new Error(`Reduced motion is not honoured: ${normal}s, then ${reduced}s`);
+  } finally {
+    devtools.detach();
+  }
   console.log(JSON.stringify(report));
 }
