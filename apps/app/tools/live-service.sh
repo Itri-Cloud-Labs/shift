@@ -43,6 +43,8 @@ cat >"$work/Caddyfile" <<'EOF'
 {
 	skip_install_trust
 	admin off
+	# No HTTP-to-HTTPS redirect on port 80, which an unprivileged account cannot bind.
+	auto_https disable_redirects
 }
 https://127.0.0.1:8443 {
 	tls internal
