@@ -45,12 +45,14 @@ Cleanup attempts both listeners, SQLite and the instance lock even when an earli
 
 ## Configuration and exposure
 
+To run an installed release as your account's systemd service, with HTTPS in front of it, follow [Running Shift on a Linux server](../../docs/linux-service.md). This section covers `shift serve` itself.
+
 | Option                    | Environment equivalent        | Default                                                   |
 | ------------------------- | ----------------------------- | --------------------------------------------------------- |
 | `--state-dir`             | `SHIFT_STATE_DIR`             | `$XDG_STATE_HOME/shift`, or `~/.local/state/shift`        |
 | `--host`                  | `SHIFT_HOST`                  | `127.0.0.1`                                               |
 | `--port`                  | `SHIFT_PORT`                  | `4317`; `0` selects an ephemeral port                     |
-| `--public`                | none                          | false; required for an IP other than `127.0.0.1` or `::1` |
+| `--public`                | `SHIFT_PUBLIC=1`              | false; required for an IP other than `127.0.0.1` or `::1` |
 | `--shutdown-timeout-ms`   | `SHIFT_SHUTDOWN_TIMEOUT_MS`   | `5000`                                                    |
 | `--log-level`             | `SHIFT_LOG_LEVEL`             | `info`; also debug/warn/error/silent                      |
 | `--sqlite-native-binding` | `SHIFT_SQLITE_NATIVE_BINDING` | bundled platform prebuild                                 |

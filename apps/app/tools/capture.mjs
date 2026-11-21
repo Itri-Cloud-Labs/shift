@@ -1449,6 +1449,13 @@ try {
       wait: 1500,
     },
     {
+      name: '24b-settings-server',
+      script: "document.querySelector('#settings-tab-server').click()",
+      wait: 1500,
+      expect:
+        "document.querySelector('.settings-panel')?.textContent.includes('shift doctor') && document.querySelector('.settings-panel')?.textContent.includes('free of')",
+    },
+    {
       name: '25-settings-devices',
       script: "document.querySelector('#settings-tab-devices').click()",
       wait: 1200,

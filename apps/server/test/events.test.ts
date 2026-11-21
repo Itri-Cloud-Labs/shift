@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -329,4 +330,23 @@ test('through a proxy with an idle timeout, events arrive at once and keepalives
       ),
   );
   assert.ok(Date.now() - sent < 1500, 'delivered promptly');
+});
+
+test('a stream whose database read fails reports the failure before closing', async () => {
+  const failure = new Database.SqliteError('disk I/O error', 'SQLITE_IOERR');
+  const failing = {
+    after: () => {
+      throw failure;
+    },
+  } as unknown as EventLog;
+  const reported: unknown[] = [];
+  const streams = new EventStreams(failing, createLogger('silent'), {
+    pollMs: 10,
+    onError: (error) => reported.push(error),
+  });
+  const response = new StalledResponse();
+  streams.open(response as unknown as Response, 0, null);
+  await until(() => response.ended);
+  assert.deepEqual(reported, [failure]);
+  assert.equal(streams.size, 0);
 });

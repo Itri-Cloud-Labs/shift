@@ -810,3 +810,31 @@ test('publication refuses malformed action nodes', async () => {
     await state.remove();
   }
 });
+
+test(
+  'a quiesced engine starts no new step until it resumes, and counts the running ones',
+  { skip, timeout: 60_000 },
+  async () => {
+    const env = await setup();
+    try {
+      const first = join(env.state, 'first.txt');
+      const second = join(env.state, 'second.txt');
+      await run(
+        env,
+        actionWorkflow('command', { mode: 'shell', script: `echo go > ${first}; sleep 30` }),
+      );
+      await eventually(() => (existsSync(first) ? true : undefined));
+      assert.equal(env.engine.quiesce(60_000).active, 1);
+      const waiting = await run(
+        env,
+        actionWorkflow('command', { mode: 'shell', script: `echo go > ${second}` }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 2_500));
+      assert.equal(existsSync(second), false, 'no step started while quiesced');
+      env.engine.resume();
+      assert.equal((await settled(env, waiting)).state, 'COMPLETED');
+    } finally {
+      await env.close();
+    }
+  },
+);

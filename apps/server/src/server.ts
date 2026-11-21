@@ -1,4 +1,4 @@
-import { chmod, mkdir, unlink } from 'node:fs/promises';
+import { chmod, mkdir, readFile, statfs, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -10,6 +10,7 @@ import { createLogger } from './logging.js';
 import { prepareStateDirectory, inspectOwnedFile } from './lifecycle/state-directory.js';
 import { acquireInstanceLock } from './lifecycle/instance-lock.js';
 import { ReadinessState } from './lifecycle/readiness.js';
+import { PersistenceGuard } from './lifecycle/persistence.js';
 import { openStore, type Store } from './persistence/store.js';
 import { createHttpServer } from './http.js';
 import { Credentials } from './actions/credentials.js';
@@ -36,7 +37,8 @@ import { DefinitionRepository } from './workflows/repository.js';
 import { WorkspaceService } from './workspaces/service.js';
 import { Workspaces } from './workspaces/workspaces.js';
 import { DefinitionService } from './workflows/service.js';
-import type { ServerIdentity } from './protocol/index.js';
+import { serverVersion, type ServerIdentity } from './protocol/index.js';
+import { installedRelease } from './release.js';
 
 async function listen(
   server: Server,
@@ -84,7 +86,7 @@ export interface RunningServer {
 
 export async function startServer(
   input: ServerConfig,
-  dependencies: { clock?: Clock; logger?: Logger } = {},
+  dependencies: { clock?: Clock; logger?: Logger; persistence?: PersistenceGuard } = {},
 ): Promise<RunningServer> {
   if (process.platform !== 'linux' || !process.getuid)
     throw new ShiftError('UNSUPPORTED_PLATFORM', 'The Shift server requires Linux.');
@@ -94,6 +96,15 @@ export async function startServer(
   const state = await prepareStateDirectory(config.stateDirectory);
   const releaseLock = await acquireInstanceLock(state);
   const readiness = new ReadinessState();
+  // Storage failure fails readiness and stops dispatch, admission and new effects until restart.
+  const persistence = dependencies.persistence ?? new PersistenceGuard();
+  persistence.onFailure(() => {
+    readiness.persistenceFailed();
+    logger.error(
+      { event: 'persistence.failed' },
+      'Storage failed. The server accepts no changes until it restarts with storage fixed.',
+    );
+  });
   let store: Store | undefined;
   let runtime: OpenCodeRuntime | undefined;
   let engine: RunEngine | undefined;
@@ -188,7 +199,12 @@ export async function startServer(
       stateDirectory: state.path,
       scopes: new SystemdScopes(harness.systemdManager ?? 'user'),
       logger,
-      resultHandler: (submission) => handleResult(submission),
+      // A result that could not be stored is refused to the agent and trips the guard.
+      resultHandler: (submission) =>
+        handleResult(submission).catch((error: unknown) => {
+          persistence.report(error);
+          throw error;
+        }),
       stopTimeoutMs: config.shutdownTimeoutMs,
       // An unused runtime stops after this long; conversations survive in OpenCode's store.
       ...((harness.idleMs ?? 600_000) > 0 ? { idleStopMs: harness.idleMs ?? 600_000 } : {}),
@@ -236,13 +252,22 @@ export async function startServer(
     const workspaceService = new WorkspaceService(workspaces, receipts);
     const eventLog = new EventLog(store.db, store.identity.eventEpoch);
     streams = new EventStreams(eventLog, logger, {
+      onError: (error) => persistence.report(error),
       ...(config.eventKeepaliveMs === undefined ? {} : { keepaliveMs: config.eventKeepaliveMs }),
     });
     const events = { log: eventLog, streams };
     registry.onRevoked((deviceId) => streams?.closeDevice(deviceId));
     // Enrollment delivery copies are cleared once their phrase's original expiry passes.
     registry.sweep();
-    sweeper = setInterval(() => registry.sweep(), 60_000);
+    // A timer's exception would end the process; a storage failure trips the guard instead.
+    sweeper = setInterval(() => {
+      try {
+        registry.sweep();
+      } catch (error) {
+        if (!persistence.report(error))
+          logger.error({ code: publicError(error).code }, 'Clearing pairing copies failed.');
+      }
+    }, 60_000);
     sweeper.unref();
     engine = new RunEngine({
       definitions,
@@ -256,6 +281,7 @@ export async function startServer(
       credentials,
       github,
       runner,
+      persistence,
       ...(defaultModel === undefined ? {} : { defaultModel }),
     });
     handleResult = engine.agents.handleResult;
@@ -264,6 +290,7 @@ export async function startServer(
       clock,
       definitions,
       logger,
+      persistence,
       resolveBase: async (projectId) => {
         const project = definitions.project(projectId);
         return workspaces.resolveBase(project.repositoryPath, project.baseRef);
@@ -290,7 +317,33 @@ export async function startServer(
     });
     // Only the proven instance-lock owner may remove a crash-left socket. Never delete a file/symlink.
     if (await inspectOwnedFile(state.adminSocket, 'socket')) await unlink(state.adminSocket);
+    const release = await installedRelease();
+    const version = release?.manifest.version ?? serverVersion;
+    const startedAt = Date.now();
+    const serverId = store.identity.serverId;
+    const sqlite = store.runtime.version;
+    // The Shift unit's own cgroup, rather than INVOCATION_ID, which any process started from
+    // another systemd service inherits.
+    const cgroup = await readFile('/proc/self/cgroup', 'utf8').catch(() => '');
+    const service = /\/shift\.service$/m.test(cgroup) ? ('systemd' as const) : ('manual' as const);
+    const diagnostics = async () => {
+      const stats = await statfs(state.path).catch(() => null);
+      return {
+        serverId,
+        version,
+        release: release !== null,
+        node: process.version,
+        sqlite,
+        arch: process.arch,
+        startedAt,
+        service,
+        storage: stats
+          ? { freeBytes: stats.bavail * stats.bsize, totalBytes: stats.blocks * stats.bsize }
+          : null,
+      };
+    };
     admin = createHttpServer({
+      version,
       store,
       clock,
       readiness,
@@ -307,10 +360,13 @@ export async function startServer(
       devices,
       receipts,
       events,
+      persistence,
     });
     await listen(admin, { path: state.adminSocket });
     await chmod(state.adminSocket, 0o600);
     tcp = createHttpServer({
+      version,
+      diagnostics,
       store,
       clock,
       readiness,
@@ -328,6 +384,7 @@ export async function startServer(
       triggers: triggerService,
       httpTriggers,
       webhooks,
+      persistence,
     });
     await listen(tcp, { host: config.host, port: config.port });
     for (const listener of [tcp, admin]) {

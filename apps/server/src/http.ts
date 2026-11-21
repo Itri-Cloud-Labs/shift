@@ -11,6 +11,9 @@ import {
   validateServerHealth,
   validateProtocolError,
   validateShutdownAcknowledgement,
+  validateUpgradeQuiesce,
+  validateServerDiagnostics,
+  type ServerDiagnostics,
   validatePairResponse,
   validatePairingIssued,
   validateDeviceList,
@@ -61,6 +64,11 @@ import {
 } from './protocol/index.js';
 import type { Store } from './persistence/store.js';
 import type { ReadinessState } from './lifecycle/readiness.js';
+import {
+  isPersistenceFailure,
+  persistenceUnavailable,
+  type PersistenceGuard,
+} from './lifecycle/persistence.js';
 import type { Actor, CommandReceipts, CommandResponse } from './persistence/receipts.js';
 import type { DeviceService } from './devices/service.js';
 import type { EventLog } from './events/log.js';
@@ -100,6 +108,11 @@ export function createHttpServer(options: {
   devices?: DeviceService;
   receipts?: CommandReceipts;
   events?: { log: EventLog; streams: EventStreams };
+  persistence?: PersistenceGuard;
+  // The installed release's version, which info reports; the build's version otherwise.
+  version?: string;
+  // Nonsecret facts about this server for paired devices' settings (specification 14).
+  diagnostics?: () => Promise<Omit<ServerDiagnostics, 'schemaVersion' | 'requestId' | 'readiness'>>;
 }): Server {
   const app = express();
   app.disable('x-powered-by');
@@ -134,12 +147,26 @@ export function createHttpServer(options: {
     }
     next();
   });
+  // Once storage has failed nothing more is changed or acknowledged; reads and shutdown still work.
+  app.use((req, _res, next) => {
+    if (
+      options.persistence?.failed &&
+      req.method !== 'GET' &&
+      req.method !== 'HEAD' &&
+      req.path !== `${admin}/shutdown`
+    ) {
+      next(persistenceUnavailable());
+      return;
+    }
+    next();
+  });
   const health = (requestId: string): ServerHealth => {
     if (options.readiness.snapshot().ready) {
       try {
         options.store.check();
       } catch {
         options.readiness.persistenceFailed();
+        options.persistence?.fail();
       }
     }
     const epochMs = options.clock.now();
@@ -167,7 +194,7 @@ export function createHttpServer(options: {
       schemaVersion: 1,
       requestId: observedHealth.requestId,
       ...options.store.identity,
-      serverVersion,
+      serverVersion: options.version ?? serverVersion,
       protocol: protocolRange,
       readiness: observedHealth.readiness,
       time: observedHealth.time,
@@ -788,6 +815,52 @@ export function createHttpServer(options: {
       res.once('finish', options.stop);
       res.status(202).json(payload);
     });
+    // An upgrade pauses dispatch and counts running steps in one step, so no step can start
+    // between its check and the stop. The pause expires by itself if the upgrade goes no further.
+    const engine = options.engine;
+    if (engine) {
+      const small = express.json({ limit: '16kb', strict: true });
+      app.post('/api/v0/admin/upgrade/quiesce', small, (req, res) => {
+        if (req.headers.origin !== undefined)
+          throw new ShiftError(
+            'INVALID_REQUEST',
+            'Browser-origin administration is unavailable.',
+            403,
+          );
+        const seconds = (req.body as { holdSeconds?: unknown } | undefined)?.holdSeconds ?? 120;
+        if (!Number.isInteger(seconds) || (seconds as number) < 1 || (seconds as number) > 600)
+          throw new ShiftError('INVALID_REQUEST', 'holdSeconds must be 1 to 600.', 422, false, [
+            '/holdSeconds',
+          ]);
+        const quiesced = engine.quiesce((seconds as number) * 1000);
+        const payload = {
+          schemaVersion: 1,
+          requestId: res.locals['requestId'] as string,
+          ...quiesced,
+        };
+        if (!validateUpgradeQuiesce(payload))
+          throw new ShiftError('INTERNAL_ERROR', 'Invalid administrative response.');
+        res.status(200).json(payload);
+      });
+      app.post('/api/v0/admin/upgrade/resume', (req, res) => {
+        if (req.headers.origin !== undefined)
+          throw new ShiftError(
+            'INVALID_REQUEST',
+            'Browser-origin administration is unavailable.',
+            403,
+          );
+        engine.resume();
+        const payload = {
+          schemaVersion: 1,
+          requestId: res.locals['requestId'] as string,
+          active: 0,
+          until: 0,
+        };
+        if (!validateUpgradeQuiesce(payload))
+          throw new ShiftError('INTERNAL_ERROR', 'Invalid administrative response.');
+        res.status(200).json(payload);
+      });
+    }
   }
   // Paired devices (specification 13.1). Every TCP route but pairing itself needs a bearer token.
   const devices = options.devices;
@@ -891,6 +964,16 @@ export function createHttpServer(options: {
         );
       const deviceResources = resources(authenticated, caller, true);
       if (deviceResources) app.use('/api/v0', deviceResources);
+      const diagnostics = options.diagnostics;
+      if (diagnostics)
+        app.get('/api/v0/diagnostics', authenticated, async (_req, res) => {
+          send(
+            res,
+            200,
+            { ...(await diagnostics()), readiness: options.readiness.snapshot() },
+            validateServerDiagnostics,
+          );
+        });
       app.get('/api/v0/devices', authenticated, (_req, res) => {
         send(
           res,
@@ -916,8 +999,11 @@ export function createHttpServer(options: {
   app.use((_req, _res, next) => next(new ShiftError('NOT_FOUND', 'Endpoint not found.', 404)));
   const errorHandler: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     const bodyError = (error as { type?: unknown } | null)?.type;
-    const safe =
-      bodyError === 'entity.too.large'
+    // A failed write was never committed, so it is answered as unavailable, never as done.
+    const storage = options.persistence?.report(error) || isPersistenceFailure(error);
+    const safe = storage
+      ? persistenceUnavailable()
+      : bodyError === 'entity.too.large'
         ? new ShiftError('REQUEST_TOO_LARGE', 'The request body is too large.', 413)
         : bodyError === 'entity.parse.failed'
           ? new ShiftError('INVALID_REQUEST', 'The request body is not valid JSON.', 400)

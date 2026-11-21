@@ -5,6 +5,8 @@ export type FoundationPayload =
   | ServerHealth
   | ProtocolError
   | ShutdownAcknowledgement
+  | UpgradeQuiesce
+  | ServerDiagnostics
   | ServerIdentity
   | Device
   | PairRequest
@@ -137,6 +139,29 @@ export interface ShutdownAcknowledgement {
   schemaVersion: 1;
   requestId: Uuid;
   accepted: true;
+}
+export interface UpgradeQuiesce {
+  schemaVersion: 1;
+  requestId: Uuid;
+  active: number;
+  until: number;
+}
+export interface ServerDiagnostics {
+  schemaVersion: 1;
+  requestId: Uuid;
+  serverId: Uuid;
+  version: string;
+  release: boolean;
+  node: string;
+  sqlite: string;
+  arch: string;
+  startedAt: number;
+  service: 'systemd' | 'manual';
+  storage: null | {
+    freeBytes: number;
+    totalBytes: number;
+  };
+  readiness: Readiness;
 }
 export interface ServerIdentity {
   serverId: Uuid;

@@ -4,6 +4,7 @@
 
 - [Workflows and runs](workflows.md): the workflow document, node types, bindings, agent results, workspaces, run states and crash recovery.
 - [Server API](server-api.md): the HTTP endpoints, request and response shapes, command IDs, the matching CLI commands and every error code.
+- [Running Shift on a Linux server](linux-service.md): installing the server as your account's systemd service, pairing, HTTPS reverse proxies, operating, upgrading and diagnostics.
 - [Server README](../apps/server/README.md): building, running and configuring `shift serve`, and the OpenCode harness.
 - [Example workflow](examples/count-words.json).
 

@@ -1,3 +1,4 @@
+import { isPersistenceFailure, type PersistenceGuard } from '../lifecycle/persistence.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -60,6 +61,8 @@ export interface AgentServiceOptions {
   queuedResubmitMs?: number;
   // Consecutive failed inspections tolerated while the harness runtime restarts.
   inspectionFailures?: number;
+  // Refuses new prompts once storage has failed; the invocation stays SUBMITTING for recovery.
+  persistence?: PersistenceGuard;
 }
 
 const active: readonly InvocationState[] = ['PREPARING', 'SUBMITTING', 'RUNNING', 'UNCERTAIN'];
@@ -109,8 +112,8 @@ export type Collected = Partial<
 // Owns goal construction, session binding, correction, continuation and result validation for
 // agent node executions (specification 9). Workflow routing stays in the run repository.
 export class AgentService {
-  readonly #options: Required<Omit<AgentServiceOptions, 'workspaces'>> &
-    Pick<AgentServiceOptions, 'workspaces'>;
+  readonly #options: Required<Omit<AgentServiceOptions, 'workspaces' | 'persistence'>> &
+    Pick<AgentServiceOptions, 'workspaces' | 'persistence'>;
 
   constructor(options: AgentServiceOptions) {
     this.#options = {
@@ -135,6 +138,12 @@ export class AgentService {
     try {
       await this.#drive(claim, signal);
     } catch (error) {
+      // Storage failed, or refused a new prompt because it had: nothing more can be recorded, so
+      // the node is not failed here, even while it is being stopped. The next start recovers it.
+      if (isPersistenceFailure(error)) {
+        this.#options.persistence?.report(error);
+        throw error;
+      }
       if (error instanceof StaleClaim || signal.aborted) return;
       const safe =
         error instanceof ShiftError
@@ -480,6 +489,7 @@ export class AgentService {
     let submittedAt = 0;
     const submit = async () => {
       await mkdir(this.#artifactDirectory(claim, invocation.id), { recursive: true, mode: 0o700 });
+      this.#options.persistence?.ensure();
       const receipt = await adapter.submit(handle, {
         invocationId: invocation.id,
         goal: invocation.prompt,
@@ -591,8 +601,9 @@ export class AgentService {
           error: { code: 'SHIFT_STOPPED', message: 'Shift stopped while the turn was running.' },
         });
       }
-    } catch {
-      // Startup inspection decides what happened.
+    } catch (error) {
+      // Startup inspection decides what happened; a storage failure still trips the guard.
+      this.#options.persistence?.report(error);
     }
   }
 
@@ -661,6 +672,7 @@ export class AgentService {
     let submittedAt = Date.now();
     const submit = async () => {
       await mkdir(directory, { recursive: true, mode: 0o700 });
+      this.#options.persistence?.ensure();
       const receipt = await adapter.submit(handle, {
         invocationId: invocation.id,
         goal: invocation.prompt,
@@ -725,6 +737,11 @@ export class AgentService {
           break;
         }
       } catch (error) {
+        // A storage failure ends the driver instead of retrying; the next start recovers the goal.
+        if (isPersistenceFailure(error)) {
+          this.#options.persistence?.report(error);
+          throw error;
+        }
         logger.warn(
           { invocationId: invocation.id, code: (error as { code?: string }).code },
           'An owner goal could not reach the harness; trying again.',
@@ -742,6 +759,8 @@ export class AgentService {
     try {
       repository.recordTranscript(handle.shiftSessionId, await adapter.transcript(handle));
     } catch (error) {
+      // A failed write still trips the guard; the transcript itself stays optional.
+      this.#options.persistence?.report(error);
       logger.warn(
         { sessionId: handle.shiftSessionId, code: (error as { code?: string }).code },
         'The session transcript could not be read.',

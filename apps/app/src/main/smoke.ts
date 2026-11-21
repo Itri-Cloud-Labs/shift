@@ -75,6 +75,7 @@ export async function runSmoke(window: BrowserWindow, core: ClientCore): Promise
     assert((await window.shift.connection.connect('../../etc/passwd')).code === 'INVALID_REQUEST', 'Profile path accepted');
     assert(!/bearer|credentialHandle|authorization|accessToken|token/i.test(JSON.stringify(connection)), 'Credential leaked');
     assert((await window.shift.queryServer('info')).code === 'DISCONNECTED', 'Unexpected live transport');
+    assert((await window.shift.queryServer('diagnostics')).code === 'DISCONNECTED', 'Unexpected live diagnostics');
     const sync = await window.shift.sync.read();
     assert(sync.kind === 'sync' && sync.sync.status === 'stopped' && sync.sync.cached === null, 'Unexpected sync state');
     assert((await window.shift.queryServer('admin/shutdown')).code === 'INVALID_REQUEST', 'Operation accepted');
