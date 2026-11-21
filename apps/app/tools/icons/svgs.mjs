@@ -128,17 +128,11 @@ function tile({ inset, radius, small = false, shadow = false }) {
   );
 }
 // macOS: Apple's grid, an 824 body inset 100 with a drop shadow.
-write(
-  'apps/app/resources/icon-mac.svg',
-  tile({ inset: 100, radius: 185, shadow: true }),
-);
+write('apps/app/resources/icon-mac.svg', tile({ inset: 100, radius: 185, shadow: true }));
 // Windows and Linux: nearly full-bleed.
 write('apps/app/resources/icon.svg', tile({ inset: 24, radius: 220 }));
 // 16 to 32 px: a full-bleed tile and a wider gap, so the two squares stay apart.
-write(
-  'apps/app/resources/icon-small.svg',
-  tile({ inset: 0, radius: 200, small: true }),
-);
+write('apps/app/resources/icon-small.svg', tile({ inset: 0, radius: 200, small: true }));
 
 // Tray: macOS template (black, the system tints it) and light/dark variants elsewhere.
 const trayMark = (color) => svg('6 6 52 52', mark({ ink: color, green: color, small: true }));
