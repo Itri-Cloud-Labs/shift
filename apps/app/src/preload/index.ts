@@ -36,6 +36,7 @@ import {
   validateSessionList,
   validateSessionResponse,
   validateTranscriptPage,
+  validateServerDiagnostics,
   validateServerHealth,
   validateServerInfo,
   validateWorkflowResponse,
@@ -73,7 +74,9 @@ async function invoke(request: DesktopRequest): Promise<DesktopResponse> {
     (response.kind === 'server' &&
       !(response.operation === 'info'
         ? validateServerInfo(response.value)
-        : validateServerHealth(response.value))) ||
+        : response.operation === 'diagnostics'
+          ? validateServerDiagnostics(response.value)
+          : validateServerHealth(response.value))) ||
     (response.kind === 'resource' && !resourceValidators[response.resource](response.value)) ||
     (response.kind === 'interactions' && !validInteractions(response.value)) ||
     (response.kind === 'devices' && !validateDeviceList(response.value)) ||

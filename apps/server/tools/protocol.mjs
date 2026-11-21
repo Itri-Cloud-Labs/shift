@@ -33,6 +33,8 @@ const names = [
   'ServerHealth',
   'ProtocolError',
   'ShutdownAcknowledgement',
+  'UpgradeQuiesce',
+  'ServerDiagnostics',
   'ServerIdentity',
   'Device',
   'PairRequest',

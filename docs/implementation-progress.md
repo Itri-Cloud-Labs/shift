@@ -836,3 +836,42 @@ Status: the desktop part of prompt 27, which completes it. Date: 2026-11-14.
   - `pnpm smoke` with the new allow-lists, including a path-like workspace ID, an empty download path and an empty message refused at the bridge. Unit tests cover the held reason, intervening decisions and notification targets.
 - **Not done:** a run's event timeline in the app (the server pages it with `GET /events?runId=`); the inspector's pass picker and execution pages from prompt 12 cover per-step history.
 - **Not verified:** OS notification clicks under a real desktop session (CI has none); real OpenCode under a hold (the server tests use the scripted harness).
+
+## Linux service: install, run and upgrade (28, part 1)
+
+Status: the release bundle, installer and service commands. Shutdown accounting and storage failures, and the desktop status view and operator guide, follow. Date: 2026-11-20.
+
+- **Changed:**
+  - `packaging/bundle.mjs` builds `shift-VERSION-linux-ARCH.tar.gz`: the compiled server and production dependencies, the pinned Node runtime, a `bin/shift` wrapper, `install.sh` and a manifest, plus `SHA256SUMS`. `pnpm --filter @shift/server package:linux` runs it.
+  - `install.sh` verifies the checksum, architecture, glibc and that the bundle runs, then installs under the XDG data directory without root and links `~/.local/bin/shift`. With `--upgrade` it replaces the version a running service uses.
+  - `shift service install|start|stop|restart|status|uninstall|logs`, `shift` (status), `shift doctor`, `shift version` and `shift upgrade`. Commands find the state directory through `--state-dir`, `SHIFT_STATE_DIR` or the service settings. `serve` reads `SHIFT_PUBLIC=1`.
+  - CI job "Linux service" builds the bundle on x64 and arm64, installs it as the runner account's service with `packaging/service-acceptance.sh`, and keeps the archives as build artifacts for 14 days. Nothing is published.
+- **Verified:**
+  - `service-acceptance.sh` in a clean Ubuntu 22.04 systemd container as an unprivileged account with lingering: a tampered archive and one for another architecture are refused with nothing installed; install; `service install --start` prints a pairing phrase that never reaches the journal; the state directory is 0700 and the master key, socket and settings 0600; `doctor` shows no settings value, phrase or key; HTTP pairing with the phrase; a run whose command step is interrupted by `service stop`, and another by SIGKILL of the server, are restarted by systemd and end in `NEEDS_HUMAN` rather than staying `RUNNING`; an upgrade is refused while a step runs and succeeds after; uninstall keeps the data.
+  - Sol review: the database check now runs for every install, the version in use is never replaced, and the upgrade check quiesces the running server (`POST /api/v0/admin/upgrade/quiesce` and `/resume`) so no step starts between the check and the stop.
+  - `test/service.test.ts`: the unit and settings rendering, state-directory precedence, doctor statuses and redaction, the upgrade check against a database migrated by another build, the installer's refusals (checksum, missing checksum, architecture, glibc, root, reinstalling the version in use, and a stopped server's database migrated by another build) and install and upgrade links, without a user manager, and the quiesce routes. `test/actions.test.ts`: a quiesced engine starts no step until it resumes.
+- **Not verified:** arm64 installation outside CI; distributions other than Ubuntu 22.04; a real OpenCode under the service (CI has none, so `doctor` reports it missing there).
+
+## Linux service: shutdown and storage failure (28, part 2)
+
+Status: the service's stop and storage-failure behavior. The desktop status view and operator guide follow. Date: 2026-11-20.
+
+- **Changed:**
+  - `lifecycle/persistence.ts`: a storage failure anywhere (HTTP handlers, the dispatch loop, action and agent tasks, trigger ticks and admission) fails readiness with `PERSISTENCE_UNAVAILABLE`, refuses every change but shutdown with a retryable 503, stops dispatch and admission, and refuses new effect and prompt submission, until the server restarts.
+  - Recovery explains a step stopped by a shutdown as such.
+  - `packaging/storage-failure.sh` fills a small file system under a running server; CI runs it on a 64 MiB tmpfs after the service acceptance.
+- **Verified:**
+  - `storage-failure.sh` in the Ubuntu 22.04 systemd container on a 64 MiB tmpfs: with the disk full, approving a pending approval is refused with `PERSISTENCE_UNAVAILABLE`, readiness fails, a run start is refused even after space is freed, and the approved command never runs; after a restart the approval is still pending, and approving it runs the command once.
+  - `test/persistence.test.ts`: error classification; an operation intended when storage fails is not submitted and the next start performs it once; the HTTP refusals and readiness after a failure; a graceful stop during a command records `stoppedBy: shutdown`, kills the command, and recovery says so. `service-acceptance.sh` now checks that explanation after `service stop`.
+- **Not verified:** a failing (rather than full) disk; storage failure during an agent turn with a real OpenCode.
+
+## Linux service: status in the desktop app and the operator guide (28, part 3)
+
+Status: completes the Linux service. Date: 2026-11-21.
+
+- **Changed:**
+  - `GET /api/v0/diagnostics` for paired devices: version, release or development build, Node and SQLite, architecture, start time, `systemd` or `manual`, free and total space on the state disk, and readiness. `info` now reports the installed release's version instead of `0.0.0`.
+  - Settings → Server in the desktop app: those facts, a warning when storage failed or space is low, and the server commands (`shift`, `shift doctor`, `shift service logs|restart`, `shift upgrade`), which the app shows and never runs. The bridge's `queryServer` accepts `diagnostics`.
+  - [Running Shift on a Linux server](linux-service.md): prerequisites, install, settings, pairing, HTTPS reverse proxies (Caddy and nginx) with the event stream's buffering and timeout needs, operating, stop, crash and storage-failure behavior, upgrades, rollback, uninstall, and diagnostics and secrets. The server API documents diagnostics, the quiesce routes and `PERSISTENCE_UNAVAILABLE`.
+- **Verified:** a device-API test (a device token is required; the answer validates and contains no token or path); the client validates diagnostics answers; `pnpm smoke` with `diagnostics` refused while disconnected; `tools/capture.mjs` against a real server shows Settings → Server.
+- **Not verified:** the reverse proxy examples against real Caddy and nginx with TLS; the `systemd` label in a packaged desktop session against an installed service (the container acceptance checks the service, not the app).

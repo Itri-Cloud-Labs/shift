@@ -1,3 +1,4 @@
+import { isPersistenceFailure, type PersistenceGuard } from '../lifecycle/persistence.js';
 import type Database from 'better-sqlite3';
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -86,6 +87,7 @@ export interface ActionServiceOptions {
   fetch?: typeof fetch;
   github?: GitHubIntegration;
   clock?: { now(): number };
+  persistence?: PersistenceGuard;
 }
 
 // The parts of the server's environment a command inherits: enough to find the owner's tools and
@@ -235,7 +237,12 @@ export class ActionService {
     try {
       outcome = await this.#perform(claim, operation, config, projectId, authority, signal);
     } catch (error) {
-      if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+      if (
+        error instanceof StaleClaim ||
+        error instanceof RunNotActive ||
+        isPersistenceFailure(error)
+      )
+        throw error;
       // Failing before submission changed nothing; after it, the outcome is unknown.
       const current = effects.get(operation.id);
       if (current.state === 'INTENDED') {
@@ -318,7 +325,12 @@ export class ActionService {
       try {
         return await work();
       } catch (error) {
-        if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+        if (
+          error instanceof StaleClaim ||
+          error instanceof RunNotActive ||
+          isPersistenceFailure(error)
+        )
+          throw error;
         if (error instanceof ShiftError)
           return { kind: 'failed', error: actionError(error.code, error.message, 'external') };
         throw error;
@@ -427,7 +439,12 @@ export class ActionService {
     try {
       outcome = await steps.perform(submitted);
     } catch (error) {
-      if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+      if (
+        error instanceof StaleClaim ||
+        error instanceof RunNotActive ||
+        isPersistenceFailure(error)
+      )
+        throw error;
       this.#options.logger.error(
         { runId: claim.runId, code: (error as { code?: string }).code },
         'A mutation failed after it was submitted.',
@@ -478,7 +495,12 @@ export class ActionService {
       try {
         return await work();
       } catch (error) {
-        if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+        if (
+          error instanceof StaleClaim ||
+          error instanceof RunNotActive ||
+          isPersistenceFailure(error)
+        )
+          throw error;
         if (error instanceof GitHubError) return githubFailure(error);
         if (error instanceof ShiftError)
           return {
@@ -573,7 +595,12 @@ export class ActionService {
     try {
       summary = await readChecks(target, repo, commit, config.checks);
     } catch (error) {
-      if (error instanceof StaleClaim || error instanceof RunNotActive) throw error;
+      if (
+        error instanceof StaleClaim ||
+        error instanceof RunNotActive ||
+        isPersistenceFailure(error)
+      )
+        throw error;
       if (!(error instanceof GitHubError)) throw error;
       if (error.providerStatus !== null && error.providerStatus < 500) {
         const failed = githubFailure(error);
@@ -648,9 +675,14 @@ export class ActionService {
       return true;
     }
     effects.settle(claim, operation.id, { state: 'UNKNOWN' });
+    // A shutdown recorded that it stopped the operation; a crash left no such record.
+    const cause =
+      operation.evidence['stoppedBy'] === 'shutdown'
+        ? `The server was shut down while the ${config.action} of operation ${operation.key} ran, and stopped it.`
+        : `The ${config.action} of operation ${operation.key} was submitted but Shift stopped before its outcome was recorded.`;
     repository.needsHuman(claim, {
       code: 'EFFECT_UNCERTAIN',
-      explanation: `The ${config.action} of operation ${operation.key} was submitted but Shift stopped before its outcome was recorded. Check what it did, then retry, complete or fail the step.`,
+      explanation: `${cause} Check what it did, then retry, complete or fail the step.`,
       executionId: claim.executionId,
     });
     return false;
@@ -760,8 +792,10 @@ export class ActionService {
     const started = (pid: number) => {
       try {
         this.#options.effects.observe(claim, operation.id, { pid });
-      } catch {
-        // The attempt lost its claim; the process is stopped by whoever holds it now.
+      } catch (error) {
+        // The attempt lost its claim; the process is stopped by whoever holds it now. A storage
+        // failure still trips the guard.
+        this.#options.persistence?.report(error);
       }
     };
     if (config.action === 'command') {
@@ -820,7 +854,9 @@ export class ActionService {
     let cwd: string;
     try {
       cwd = await realpath(resolve(root, config.cwd));
-    } catch {
+    } catch (error) {
+      // A failing disk is not a missing directory: the engine trips the guard instead.
+      if (isPersistenceFailure(error)) throw error;
       throw new ShiftError('INVALID_DIRECTORY', `The directory ${config.cwd} does not exist.`, 422);
     }
     if (cwd !== root && !cwd.startsWith(root + sep))

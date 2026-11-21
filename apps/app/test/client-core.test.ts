@@ -8,7 +8,7 @@ import {
   type CredentialStore,
 } from '../src/client-core/credentials.js';
 import { ServerHttp, type Fetch } from '../src/client-core/http.js';
-import { ClientCore, ClientFailure } from '../src/client-core/runtime.js';
+import { ClientCore, ClientFailure, validFoundationResponse } from '../src/client-core/runtime.js';
 import { normalizeServerUrl } from '../src/client-core/url.js';
 
 const fixtures = JSON.parse(
@@ -363,4 +363,26 @@ test('status queries use the active connection, validate answers and refuse othe
     (failure) => failure instanceof ClientFailure && failure.code === 'INVALID_RESPONSE',
   );
   assert.deepEqual(client.setSamples(false), { connection: 'unconfigured', samples: false });
+});
+
+test('server diagnostics are checked against the protocol and carry nothing secret', () => {
+  const diagnostics = {
+    schemaVersion: 1,
+    requestId: '00000000-0000-4000-8000-000000000001',
+    serverId,
+    version: '0.1.0',
+    release: true,
+    node: 'v24.19.0',
+    sqlite: '3.53.4',
+    arch: 'x64',
+    startedAt: 1,
+    service: 'systemd',
+    storage: { freeBytes: 10, totalBytes: 20 },
+    readiness: { ready: true, phase: 'ready', reason: 'READY' },
+  };
+  assert.equal(validFoundationResponse('diagnostics', diagnostics), true);
+  assert.equal(validFoundationResponse('diagnostics', { ...diagnostics, storage: null }), true);
+  assert.equal(validFoundationResponse('diagnostics', { ...diagnostics, token: 'x' }), false);
+  assert.equal(validFoundationResponse('diagnostics', { ...diagnostics, service: 'cron' }), false);
+  assert.equal(validFoundationResponse('info', diagnostics), false);
 });

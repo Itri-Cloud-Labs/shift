@@ -25,6 +25,7 @@ import { ActionService } from '../actions/service.js';
 import { AgentService } from './agent-service.js';
 import { envelope, renderTemplate, renderText, resolveBindings } from './bindings.js';
 import { checkValue } from './envelope.js';
+import { isPersistenceFailure, PersistenceGuard } from '../lifecycle/persistence.js';
 import {
   RunRepository,
   StaleClaim,
@@ -57,6 +58,8 @@ export interface RunEngineOptions {
   github?: GitHubIntegration;
   maxActiveAgents?: number;
   pollIntervalMs?: number;
+  // Fails the server when storage fails; dispatch then stops and no new effect is submitted.
+  persistence?: PersistenceGuard;
 }
 
 const commandId = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,100}$' };
@@ -177,6 +180,7 @@ const failure = (error: unknown) =>
 // nodes run as tasks under the agent concurrency limit.
 export class RunEngine {
   readonly repository: RunRepository;
+  readonly persistence: PersistenceGuard;
   readonly agents: AgentService;
   readonly actions: ActionService;
   readonly effects: EffectStore;
@@ -192,9 +196,17 @@ export class RunEngine {
   #wakeTimer: NodeJS.Timeout | undefined;
   #stopping = false;
   #pumping = false;
+  // Dispatch is paused until then (wall-clock milliseconds), while an upgrade stops the server.
+  #quiescedUntil = 0;
+  #quiesceTimer: NodeJS.Timeout | undefined;
 
   constructor(options: RunEngineOptions) {
     this.#options = options;
+    this.persistence = options.persistence ?? new PersistenceGuard();
+    this.persistence.onFailure(() => {
+      clearInterval(this.#timer);
+      clearTimeout(this.#wakeTimer);
+    });
     this.repository = new RunRepository(options.store.db, options.clock);
     this.blobs = options.blobs ?? new BlobStore(join(dirname(options.artifactRoot), 'blobs'));
     this.agents = new AgentService({
@@ -204,9 +216,10 @@ export class RunEngine {
       blobs: this.blobs,
       logger: options.logger,
       workspaces: options.workspaces,
+      persistence: this.persistence,
       ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
     });
-    this.effects = new EffectStore(options.store.db, options.clock);
+    this.effects = new EffectStore(options.store.db, options.clock, this.persistence);
     this.actions = new ActionService({
       db: options.store.db,
       repository: this.repository,
@@ -217,6 +230,7 @@ export class RunEngine {
       ...(options.runner ? { runner: options.runner } : {}),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       ...(options.github ? { github: options.github } : {}),
+      persistence: this.persistence,
       clock: options.clock,
     });
   }
@@ -257,7 +271,8 @@ export class RunEngine {
     let exhausted: Array<{ runId: string; claims: Claim[] }>;
     try {
       exhausted = this.repository.checkpointActiveTime();
-    } catch {
+    } catch (error) {
+      this.persistence.report(error);
       this.#options.logger.error('Checkpointing active time failed.');
       return;
     }
@@ -640,25 +655,63 @@ export class RunEngine {
         }
         await this.agents.cancel(claim).catch((error: unknown) => {
           if (!(error instanceof StaleClaim)) {
+            this.persistence.report(error);
             this.#options.logger.error({ runId }, 'Stopping an agent failed.');
           }
         });
       }
       settle();
     })()
-      .catch(() => {
+      .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error({ runId }, 'Settling stopped attempts failed.');
       })
       .finally(() => {
         this.#cancellations.delete(done);
-        after();
+        this.#guarded('Finishing a stop failed.', after);
         this.#pump();
       });
     this.#cancellations.add(done);
   }
 
+  // Pauses dispatch for `holdMs` and reports the steps running now. Running steps continue; no
+  // new one starts until resume() or the hold expires, which an abandoned upgrade relies on.
+  quiesce(holdMs: number): { active: number; until: number } {
+    this.#quiescedUntil = Date.now() + holdMs;
+    clearTimeout(this.#quiesceTimer);
+    this.#quiesceTimer = setTimeout(() => this.resume(), holdMs);
+    this.#quiesceTimer.unref();
+    return { active: this.#tasks.size, until: this.#quiescedUntil };
+  }
+
+  resume(): void {
+    clearTimeout(this.#quiesceTimer);
+    this.#quiescedUntil = 0;
+    if (this.#stopping || this.persistence.failed) return;
+    // Owner goals asked for during the pause were left waiting; they start now.
+    this.#guarded('Resuming owner goals failed.', () => {
+      for (const goal of this.repository.activeManualGoals()) this.#launchManual(goal);
+    });
+    this.#pump();
+  }
+
+  // Database work in timers and promise finalizers, where an exception would end the process:
+  // a storage failure trips the guard, and anything else is logged.
+  #guarded(message: string, work: () => void): void {
+    try {
+      work();
+    } catch (error) {
+      if (!this.persistence.report(error))
+        this.#options.logger.error({ code: (error as { code?: string }).code }, message);
+    }
+  }
+
+  #quiesced(): boolean {
+    return Date.now() < this.#quiescedUntil;
+  }
+
   #pump(): void {
-    if (this.#stopping || this.#pumping) return;
+    if (this.#stopping || this.#pumping || this.persistence.failed || this.#quiesced()) return;
     this.#pumping = true;
     try {
       // Due wake-ups reopen their executions first, so they are admitted in this pass.
@@ -679,10 +732,14 @@ export class RunEngine {
           if (this.#dispatch(claim)) progressed = true;
         }
       }
+      // Reads the next wake-up from the database, so it is covered by the same handler.
+      this.#armWake();
+    } catch (error) {
+      // A storage failure stops dispatch for good; anything else is a defect and still throws.
+      if (!this.persistence.report(error)) throw error;
     } finally {
       this.#pumping = false;
     }
-    this.#armWake();
   }
 
   // One timer for the earliest durable wake-up. Deadlines live in the database, so a restart
@@ -690,7 +747,7 @@ export class RunEngine {
   #armWake(): void {
     clearTimeout(this.#wakeTimer);
     this.#wakeTimer = undefined;
-    if (this.#stopping) return;
+    if (this.#stopping || this.persistence.failed) return;
     const due = this.repository.nextWakeup();
     if (due === null) return;
     const delay = Math.min(Math.max(due - this.#options.clock.now(), 0), 2_147_483_647);
@@ -705,6 +762,8 @@ export class RunEngine {
       context = this.#prepare(claim);
     } catch (error) {
       if (error instanceof StaleClaim) return false;
+      // Storage failed: the step is not failed for it. The pump reports it and stops.
+      if (isPersistenceFailure(error)) throw error;
       this.#fail(claim, error);
       return true;
     }
@@ -792,6 +851,8 @@ export class RunEngine {
       }
     } catch (error) {
       if (error instanceof StaleClaim) return false;
+      // Storage failed: the step is not failed for it. The pump reports it and stops.
+      if (isPersistenceFailure(error)) throw error;
       this.#fail(claim, error);
     }
     return true;
@@ -968,7 +1029,8 @@ export class RunEngine {
         handoffs: receivedHandoffs(context, authored.handoffs ?? {}, (artifactId) => {
           try {
             return this.repository.artifact(artifactId);
-          } catch {
+          } catch (error) {
+            if (isPersistenceFailure(error)) throw error;
             return null;
           }
         }),
@@ -1008,11 +1070,12 @@ export class RunEngine {
 
   #launchManual(goal: InvocationRow): void {
     const key = `manual:${goal.id}`;
-    if (this.#tasks.has(key)) return;
+    if (this.#tasks.has(key) || this.#quiesced()) return;
     const controller = new AbortController();
     const done = this.agents
       .driveManual(goal, controller.signal)
       .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error(
           { invocationId: goal.id, code: (error as { code?: string }).code },
           'An owner goal failed.',
@@ -1021,9 +1084,11 @@ export class RunEngine {
       .finally(() => {
         this.#tasks.delete(key);
         // A driver that failed unexpectedly leaves its goal active; another takes it up.
-        if (!this.#stopping && !controller.signal.aborted) {
-          const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
-          if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
+        if (!this.#stopping && !this.persistence.failed && !controller.signal.aborted) {
+          this.#guarded('Checking an owner goal failed.', () => {
+            const still = this.repository.activeManualGoals().find((item) => item.id === goal.id);
+            if (still) setTimeout(() => this.#stopping || this.#launchManual(still), 2_000).unref();
+          });
         }
         this.#pump();
       });
@@ -1036,6 +1101,7 @@ export class RunEngine {
     const done = this.actions
       .run(claim, controller.signal)
       .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error(
           { runId: claim.runId, code: (error as { code?: string }).code },
           'An action task failed.',
@@ -1054,7 +1120,8 @@ export class RunEngine {
     const controller = new AbortController();
     const done = this.agents
       .run(claim, controller.signal)
-      .catch(() => {
+      .catch((error: unknown) => {
+        this.persistence.report(error);
         this.#options.logger.error({ runId: claim.runId }, 'An agent task failed.');
       })
       .finally(() => {
@@ -1069,6 +1136,7 @@ export class RunEngine {
   // inspection reconciles whatever was left.
   async stop(timeoutMs: number): Promise<void> {
     this.#stopping = true;
+    clearTimeout(this.#quiesceTimer);
     clearInterval(this.#timer);
     clearTimeout(this.#wakeTimer);
     const tasks = [...this.#tasks.values()];
