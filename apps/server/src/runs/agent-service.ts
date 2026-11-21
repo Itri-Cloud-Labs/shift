@@ -138,13 +138,13 @@ export class AgentService {
     try {
       await this.#drive(claim, signal);
     } catch (error) {
-      if (error instanceof StaleClaim || signal.aborted) return;
       // Storage failed, or refused a new prompt because it had: nothing more can be recorded, so
-      // the node is not failed here. The next start recovers the attempt.
+      // the node is not failed here, even while it is being stopped. The next start recovers it.
       if (isPersistenceFailure(error)) {
         this.#options.persistence?.report(error);
         throw error;
       }
+      if (error instanceof StaleClaim || signal.aborted) return;
       const safe =
         error instanceof ShiftError
           ? error
