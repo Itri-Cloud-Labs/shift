@@ -89,6 +89,20 @@ Main serves only build-listed files below the renderer directory using `shift://
 
 `electron.vite.config.ts` checks the module graph before bundling. `tools/check-bundle.mjs` parses the emitted JavaScript with Acorn, checks preload imports and renderer code, rejects backend/native dependencies, and writes the asset allowlist. All JavaScript dependencies are bundled at build time, so the packaged ASAR contains `dist` and the app manifest, with no runtime node_modules. Server protocol drift checking remains mandatory.
 
+## Installers
+
+`pnpm app:package` builds this platform's installers into `apps/app/release/`: a `.dmg` and `.zip` for the Mac's own architecture, an NSIS `.exe` for Windows x64, and an AppImage and `.deb` for Linux x64. `pnpm --filter @shift/app package:dir` builds only the unpacked app, which the packaged smoke runs. Each build writes `SHA256SUMS` and `release.json` (version, platform, architecture and whether it is signed), then `tools/check-package.mjs` reads the shipped `app.asar` and refuses unexpected files, native modules, server or harness code, key material, tokens, development server addresses and a main process without its navigation lock. On Linux the command is `shift-desktop`, so it never shadows the server's `shift`.
+
+Signing identities come only from CI secrets. Without them the macOS and Windows installers are built with `-unsigned` in their names and `"signed": false`; Gatekeeper and SmartScreen warn on first open. Linux packages are not signed.
+
+| Secret                                                  | Use                                                                             |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`                  | Developer ID Application certificate (base64 `.p12`) and its password           |
+| `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | App Store Connect API key (the `.p8` text), its ID and issuer, for notarization |
+| `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`                  | Windows code-signing certificate (base64 `.pfx`) and its password               |
+
+A Mac certificate without the notarization key, or the reverse, stops the build: a signed but unnotarized app is refused by Gatekeeper like an unsigned one.
+
 ## Platform evidence
 
 Local Linux x64 build, strict type checks, tests, and actual built/packaged Electron smoke are recorded in [implementation progress](../../docs/implementation-progress.md). The [client CI workflow](../../.github/workflows/app.yml) builds and smoke-tests an unsigned unpacked application on matching runners:
@@ -98,4 +112,6 @@ Local Linux x64 build, strict type checks, tests, and actual built/packaged Elec
 - macOS x64: `macos-15-intel`, a GitHub runner; Blacksmith has no Intel Macs.
 - macOS arm64: `blacksmith-6vcpu-macos-15`.
 
-Runner labels match [Blacksmith's](https://docs.blacksmith.sh/blacksmith-runners/overview) and GitHub's published catalogs. Their availability to this repository and successful execution remain unverified until CI runs; missing runners are not skipped or treated as passing. This task did not trigger remote CI. Windows/macOS are untested locally. These unpacked packages are foundation smoke artifacts, not signed installers. Windows signing, macOS signing/notarization, Linux distribution artifacts, OS secret-service behavior, and minimum-OS validation remain release prerequisites in prompt 31.
+Each runner builds the installers, checks the package, smoke-tests the packaged app and keeps the installers with their checksums as 14-day workflow artifacts. Nothing is published.
+
+Runner labels match [Blacksmith's](https://docs.blacksmith.sh/blacksmith-runners/overview) and GitHub's published catalogs. Their availability to this repository and successful execution remain unverified until CI runs; missing runners are not skipped or treated as passing. This task did not trigger remote CI. Windows/macOS are untested locally. Until signing secrets are configured the macOS and Windows installers are unsigned. OS secret-service behavior and minimum-OS validation are covered by the packaged tests that follow.

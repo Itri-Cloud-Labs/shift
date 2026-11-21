@@ -875,3 +875,17 @@ Status: completes the Linux service. Date: 2026-11-21.
   - [Running Shift on a Linux server](linux-service.md): prerequisites, install, settings, pairing, HTTPS reverse proxies (Caddy and nginx) with the event stream's buffering and timeout needs, operating, stop, crash and storage-failure behavior, upgrades, rollback, uninstall, and diagnostics and secrets. The server API documents diagnostics, the quiesce routes and `PERSISTENCE_UNAVAILABLE`.
 - **Verified:** a device-API test (a device token is required; the answer validates and contains no token or path); the client validates diagnostics answers; `pnpm smoke` with `diagnostics` refused while disconnected; `tools/capture.mjs` against a real server shows Settings → Server.
 - **Not verified:** the reverse proxy examples against real Caddy and nginx with TLS; the `systemd` label in a packaged desktop session against an installed service (the container acceptance checks the service, not the app).
+
+## Desktop installers (31, part 1)
+
+Status: installers and package checks. Packaged tests against the Linux service, and update notices, compatibility and install docs, follow. Date: 2026-11-21.
+
+- **Changed:**
+  - `tools/package.mjs` builds this platform's installers (macOS `.dmg` and `.zip`, Windows NSIS, Linux AppImage and `.deb`), with `SHA256SUMS` and `release.json`; `--dir` builds only the unpacked app. Signing and notarization are read from CI secrets; without them macOS and Windows artifacts are named `-unsigned`.
+  - `tools/check-package.mjs` and `tools/package-checks.mjs` inspect the shipped `app.asar`.
+  - The Linux executable is `shift-desktop`.
+  - CI builds the installers on all four runners, checks and smoke-tests the package, and keeps the installers as 14-day artifacts. Nothing is published.
+- **Verified:**
+  - Linux x64 locally: AppImage and `.deb` built, the package check passes, the packaged smoke passes. The `.deb` installs on a clean Ubuntu 22.04 container with `/usr/bin/shift-desktop`, a menu entry and the icon.
+  - `test/package.test.ts`: the archive reader, a clean package, and refusal of server code, native modules, key material, tokens, development addresses, source maps, unexpected files and a main process without its navigation lock.
+- **Not verified:** signed and notarized builds (no identities yet); macOS and Windows installers outside CI.

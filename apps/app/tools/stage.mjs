@@ -19,7 +19,7 @@ export async function stageElectron({
   await chmod(state, 0o700);
   await cp(dirname(executable), join(temporaryRoot, 'runtime'), { recursive: true });
   await chmod(join(temporaryRoot, 'runtime/chrome-sandbox'), 0o4755);
-  executable = join(temporaryRoot, 'runtime', packaged ? 'shift' : 'electron');
+  executable = join(temporaryRoot, 'runtime', packaged ? 'shift-desktop' : 'electron');
   if (!packaged) {
     const stagedApp = join(temporaryRoot, 'app');
     await mkdir(stagedApp);

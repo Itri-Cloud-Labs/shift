@@ -7,14 +7,16 @@
   "main": "dist/main/index.js",
   "description": "Shift desktop client",
   "author": "Itri Cloud Labs",
+  "homepage": "https://github.com/Itri-Cloud-Labs/shift",
   "scripts": {
     "dev": "pnpm build && electron .",
     "build": "electron-vite build && node tools/check-bundle.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --import tsx --test test/boundaries.test.ts test/client-core.test.ts test/sync.test.ts test/sync-live.test.ts test/graph.test.ts test/owner.test.ts test/draft.test.ts test/config.test.ts test/recovery.test.ts test/sessions.test.ts",
-    "package": "pnpm build && electron-builder --dir --publish never",
+    "test": "node --import tsx --test test/boundaries.test.ts test/client-core.test.ts test/sync.test.ts test/sync-live.test.ts test/graph.test.ts test/owner.test.ts test/draft.test.ts test/config.test.ts test/recovery.test.ts test/sessions.test.ts test/package.test.ts",
+    "package": "pnpm build && node tools/package.mjs && node tools/check-package.mjs",
     "smoke": "node tools/smoke.mjs",
-    "smoke:packaged": "node tools/smoke.mjs --packaged"
+    "smoke:packaged": "node tools/smoke.mjs --packaged",
+    "package:dir": "pnpm build && node tools/package.mjs --dir && node tools/check-package.mjs"
   },
   "devDependencies": {
     "@dagrejs/dagre": "3.1.3",
@@ -54,7 +56,6 @@
     "mac": {
       "target": "dir",
       "category": "public.app-category.developer-tools",
-      "identity": null,
       "executableName": "Shift",
       "icon": "resources/icon.icns"
     },
@@ -67,8 +68,15 @@
     "linux": {
       "target": "dir",
       "category": "Development",
-      "executableName": "shift",
-      "icon": "resources/icons"
+      "executableName": "shift-desktop",
+      "icon": "resources/icons",
+      "maintainer": "Itri Cloud Labs",
+      "synopsis": "Desktop client for your self-hosted Shift workflow server"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

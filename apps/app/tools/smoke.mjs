@@ -11,7 +11,7 @@ const packaged = process.argv.includes('--packaged');
 let executable = packaged ? '' : require('electron');
 let args = [root, '--shift-smoke'];
 if (packaged) {
-  if (process.platform === 'linux') executable = join(root, 'release/linux-unpacked/shift');
+  if (process.platform === 'linux') executable = join(root, 'release/linux-unpacked/shift-desktop');
   else if (process.platform === 'win32') executable = join(root, 'release/win-unpacked/Shift.exe');
   else {
     const directory = (await readdir(join(root, 'release'))).find(
